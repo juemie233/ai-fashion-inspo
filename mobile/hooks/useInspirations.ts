@@ -24,6 +24,8 @@ interface InspirationState {
   /** 列表加载错误（首屏失败时页面渲染错误态；有数据时为行内提示） */
   error: string | null
   apiBaseUrl: string
+  /** 收藏变更版本号：搜索/合集详情等本地列表据此在回到页面时刷新 */
+  favoriteRevision: number
 
   /** App 启动初始化：从持久化存储恢复自定义后端地址并刷新数据 */
   init: () => Promise<void>
@@ -50,6 +52,9 @@ interface InspirationState {
 /** 列表请求序号：只有最新一次请求的响应能落地，防止快速切筛选时旧响应覆盖新列表 */
 let listRequestSeq = 0
 
+/** 收藏请求中的素材 ID：快速连点只发一次请求（2026-11-12 收藏审查 P2） */
+const pendingFavoriteIds = new Set<string>()
+
 export const useInspirationStore = create<InspirationState>((set, get) => ({
   items: [],
   total: 0,
@@ -57,6 +62,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
   loading: false,
   error: null,
   apiBaseUrl: getApiBaseUrl(),
+  favoriteRevision: 0,
   filter: {},
   sort: 'newest',
 
@@ -105,11 +111,29 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     await get().fetchInspirations()
   },
 
-  /** 批量收藏 / 取消收藏：成功后本地同步，失败抛出交给调用方提示 */
+  /** 批量收藏 / 取消收藏：按 updated 校正本地；仅收藏筛选下取消后重拉收敛 */
   batchFavorite: async (ids: string[], isFavorite: boolean) => {
-    await apiBatchFavorite(ids, isFavorite)
+    const result = await apiBatchFavorite(ids, isFavorite)
+    const updated = result.updated ?? ids.length
+    const { filter } = get()
+    // 仅收藏筛选下取消：列表必须重新收敛（分页 offset 也随之重算）
+    if (filter.is_favorite && !isFavorite) {
+      await get().fetchInspirations()
+      set((state) => ({ favoriteRevision: state.favoriteRevision + 1 }))
+      return
+    }
+    // 后端可能只更新部分（已删除/不存在），不要盲目把所有选中项改成目标值
+    if (updated !== ids.length) {
+      await get().fetchInspirations()
+      set((state) => ({ favoriteRevision: state.favoriteRevision + 1 }))
+      return
+    }
+    const idSet = new Set(ids)
     set((state) => ({
-      items: state.items.map((i) => (ids.includes(i.id) ? { ...i, is_favorite: isFavorite } : i)),
+      items: state.items.map((i) =>
+        idSet.has(i.id) ? { ...i, is_favorite: isFavorite } : i
+      ),
+      favoriteRevision: state.favoriteRevision + 1,
     }))
   },
 
@@ -170,15 +194,31 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     set((state) => ({ items: [item, ...state.items], total: state.total + 1 }))
   },
 
-  /** 切换收藏：显式传入目标状态，素材不在列表（详情页）时同样生效 */
+  /** 切换收藏：显式传入目标状态；仅收藏筛选下取消立即移除并修正 total；防连点 */
   toggleFavorite: async (id: string, desiredState: boolean) => {
-    await apiClient.patch(`/inspirations/${id}`, { is_favorite: desiredState })
+    if (pendingFavoriteIds.has(id)) return
+    pendingFavoriteIds.add(id)
+    try {
+      await apiClient.patch(`/inspirations/${id}`, { is_favorite: desiredState })
 
-    set((state) => ({
-      items: state.items.map((i) =>
-        i.id === id ? { ...i, is_favorite: desiredState } : i
-      ),
-    }))
+      const { filter } = get()
+      if (filter.is_favorite && !desiredState) {
+        set((state) => ({
+          items: state.items.filter((i) => i.id !== id),
+          total: Math.max(0, state.total - 1),
+          favoriteRevision: state.favoriteRevision + 1,
+        }))
+        return
+      }
+      set((state) => ({
+        items: state.items.map((i) =>
+          i.id === id ? { ...i, is_favorite: desiredState } : i
+        ),
+        favoriteRevision: state.favoriteRevision + 1,
+      }))
+    } finally {
+      pendingFavoriteIds.delete(id)
+    }
   },
 }))
 

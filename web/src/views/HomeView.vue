@@ -322,6 +322,7 @@ loadPage(currentPage.value)
       :show-view-button="batchMode"
       :show-actions="!batchMode"
       :show-rating="!batchMode"
+      :pending-favorite-ids="store.pendingFavoriteIds"
       :focused-ids="focusedIds"
       @delete="handleDelete"
       @toggle-favorite="handleToggleFavorite"

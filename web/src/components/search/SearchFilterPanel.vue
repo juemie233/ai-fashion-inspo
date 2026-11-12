@@ -25,6 +25,8 @@ const props = defineProps<{
   dateTo: string
   /** 评分筛选值（rating >= 指定值，空串表示不限） */
   ratingFilter: string
+  /** 仅收藏筛选 */
+  favoriteOnly: boolean
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +37,7 @@ const emit = defineEmits<{
   (e: 'update:dateFrom', value: string): void
   (e: 'update:dateTo', value: string): void
   (e: 'update:ratingFilter', value: string): void
+  (e: 'update:favoriteOnly', value: boolean): void
   /** 任一筛选值变化（由用户操作触发，用于立即重新搜索） */
   (e: 'filterChange'): void
   /** 点击搜索按钮 */
@@ -85,6 +88,15 @@ const ratingFilterModel = computed({
   get: () => props.ratingFilter,
   set: (v: string) => {
     emit('update:ratingFilter', v)
+    emit('filterChange')
+  },
+})
+
+/** 仅收藏筛选（变更即触发重新搜索） */
+const favoriteOnlyModel = computed({
+  get: () => props.favoriteOnly,
+  set: (v: boolean) => {
+    emit('update:favoriteOnly', v)
     emit('filterChange')
   },
 })
@@ -171,6 +183,10 @@ const ratingFilterModel = computed({
                   ]"
                   size="mini"
                 />
+              </div>
+              <div class="filter-row">
+                <label>收藏</label>
+                <a-checkbox v-model="favoriteOnlyModel"> 仅看已收藏 </a-checkbox>
               </div>
             </div>
           </a-collapse-item>

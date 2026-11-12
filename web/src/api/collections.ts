@@ -3,6 +3,10 @@
 import apiClient from './client'
 import type { InspirationOut } from './inspirations'
 
+/** 系统收藏根名称（与后端 MANUAL_ROOT_COLLECTION_NAME 保持一致）：
+ * 智能合集 {is_favorite:true}，只能自动同步，不允许编辑/固化/删除。 */
+export const SYSTEM_MANUAL_COLLECTION_NAME = '系统入库手动收藏'
+
 /** 智能合集筛选条件（与素材库筛选口径一致，见 docs/features/收藏合集两级结构.md） */
 export interface SmartCollectionQuery {
   keyword?: string | null

@@ -65,6 +65,15 @@ class Inspiration(Base):
             "created_at",
             "id",
         ),
+        # 2026-11-12 收藏审查：仅收藏是高频筛选；部分索引只覆盖收藏行，
+        # 查询 `deleted_at IS NULL AND is_favorite=1` 可直接命中。
+        Index(
+            "ix_inspirations_favorite_active",
+            "is_favorite",
+            "deleted_at",
+            "created_at",
+            sqlite_where=text("is_favorite = 1"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(

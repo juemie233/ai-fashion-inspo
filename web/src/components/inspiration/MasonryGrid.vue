@@ -24,6 +24,10 @@ const props = withDefaults(
     emptyText?: string
     /** 是否显示悬浮操作按钮（删除/收藏），默认显示 */
     showActions?: boolean
+    /** 是否显示收藏按钮（与 showActions 独立，人物/合集详情可只开收藏） */
+    showFavorite?: boolean
+    /** 收藏请求中的素材 id：禁用按钮防连点 */
+    pendingFavoriteIds?: ReadonlySet<string>
     /** 是否显示卡片五星评分（人物详情「全部」视图只开评分） */
     showRating?: boolean
     /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
@@ -41,6 +45,8 @@ const props = withDefaults(
     selectedIds: undefined,
     emptyText: '',
     showActions: false,
+    showFavorite: false,
+    pendingFavoriteIds: undefined,
     showRating: true,
     hoverZoom: false,
     showViewButton: false,
@@ -138,6 +144,8 @@ watch(
             :selectable="selectable"
             :selected="selectable ? selectedIds?.has(item.id) : false"
             :show-actions="showActions !== false"
+            :show-favorite="showFavorite"
+            :favorite-pending="pendingFavoriteIds?.has(item.id) ?? false"
             :show-rating="showRating"
             :hover-zoom="hoverZoom"
             :show-view-button="showViewButton"

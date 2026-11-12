@@ -52,6 +52,7 @@ vi.mock('@/composables/useSearch', () => {
       dateFrom: r(''),
       dateTo: r(''),
       ratingMin: r(''),
+      favoriteOnly: r(false),
       density: r('comfortable'),
       vectorMode: r('none'),
       semanticText: r(''),

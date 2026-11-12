@@ -25,6 +25,7 @@ export default function CollectionDetailScreen() {
   const theme = useTheme()
   const styles = useStyles(makeStyles)
   const apiBaseUrl = useInspirationStore((s) => s.apiBaseUrl)
+  const favoriteRevision = useInspirationStore((s) => s.favoriteRevision)
 
   const [items, setItems] = useState<Inspiration[]>([])
   const [total, setTotal] = useState(0)
@@ -75,6 +76,14 @@ export default function CollectionDetailScreen() {
   useEffect(() => {
     void load(1)
   }, [load])
+
+  /** 详情页改收藏后递增：合集内容按后端动态求值，回来时重拉第一页保持同步 */
+  const lastFavoriteRevisionRef = useRef(0)
+  useEffect(() => {
+    if (favoriteRevision === lastFavoriteRevisionRef.current) return
+    lastFavoriteRevisionRef.current = favoriteRevision
+    void load(1)
+  }, [favoriteRevision, load])
 
   const onRefresh = () => {
     setRefreshing(true)

@@ -145,23 +145,46 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     return item
   }
 
-  /** 切换收藏 */
-  async function toggleFavorite(id: string) {
-    const item = items.value.find((i) => i.id === id)
-    if (!item) {
-      // 列表中无此素材（从详情/外部入口进入）：仅同步详情状态，不再静默返回
-      if (currentDetail.value?.id === id) {
-        const newState = !currentDetail.value.is_favorite
-        await toggleFavoriteApi(id, newState)
-        currentDetail.value.is_favorite = newState
+  /** 正在请求中的收藏 ID：防双击重复发同一请求（2026-11-12 收藏审查 P2） */
+  const pendingFavoriteIds = ref<Set<string>>(new Set())
+
+  /** 设置收藏（显式目标值；列表/详情同步，当前筛选为「仅收藏」且取消时移除条目） */
+  async function setFavorite(id: string, favorite: boolean) {
+    if (pendingFavoriteIds.value.has(id)) return
+    pendingFavoriteIds.value = new Set(pendingFavoriteIds.value).add(id)
+    try {
+      await toggleFavoriteApi(id, favorite)
+      // 仅收藏筛选下取消收藏：条目必须立即消失、总数减一（2026-11-12 P1-1）
+      if (_lastParams.is_favorite === true && !favorite) {
+        items.value = items.value.filter((i) => i.id !== id)
+        total.value = Math.max(0, total.value - 1)
+      } else {
+        const item = items.value.find((i) => i.id === id)
+        if (item) item.is_favorite = favorite
       }
+      if (currentDetail.value?.id === id) {
+        currentDetail.value.is_favorite = favorite
+      }
+    } finally {
+      const next = new Set(pendingFavoriteIds.value)
+      next.delete(id)
+      pendingFavoriteIds.value = next
+    }
+  }
+
+  /** 切换收藏（兼容旧调用；详情页可直接用 setFavorite 显式目标值） */
+  async function toggleFavorite(id: string, desiredState?: boolean) {
+    const item = items.value.find((i) => i.id === id)
+    if (item) {
+      await setFavorite(id, desiredState ?? !item.is_favorite)
       return
     }
-    const newState = !item.is_favorite
-    await toggleFavoriteApi(id, newState)
-    item.is_favorite = newState
     if (currentDetail.value?.id === id) {
-      currentDetail.value.is_favorite = newState
+      await setFavorite(id, desiredState ?? !currentDetail.value.is_favorite)
+      return
+    }
+    if (desiredState !== undefined) {
+      await setFavorite(id, desiredState)
     }
   }
 
@@ -194,6 +217,8 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     loadDetail,
     upload,
     toggleFavorite,
+    setFavorite,
+    pendingFavoriteIds,
     setRating,
     remove,
   }

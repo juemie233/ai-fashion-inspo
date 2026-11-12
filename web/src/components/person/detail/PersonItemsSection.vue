@@ -37,6 +37,8 @@ const props = defineProps<{
   tagOptions: string[]
   unbindMode: boolean
   unbindSelectedIds: Set<string>
+  /** 收藏请求中的素材 id（禁用收藏按钮防连点） */
+  favoritePendingIds?: ReadonlySet<string>
   unbindSubmitting: boolean
   clearingAll: boolean
   isCurrentPageAllSelected: boolean
@@ -56,6 +58,8 @@ const emit = defineEmits<{
   (e: 'open-work', paths: string[]): void
   /** 博主详情「全部」视图：单张作品评分（id=inspiration_id） */
   (e: 'rate', id: string, value: number): void
+  /** 博主详情「全部」视图：单张作品收藏 */
+  (e: 'toggle-favorite', id: string): void
   (e: 'enter-unbind'): void
   (e: 'exit-unbind'): void
   (e: 'toggle-select', id: string): void
@@ -317,6 +321,8 @@ function openWork(work: PersonWorkGroup): void {
         :loading="loading"
         :show-actions="false"
         :show-rating="kind === 'blogger' && !unbindMode"
+        :show-favorite="kind === 'blogger' && !unbindMode"
+        :pending-favorite-ids="favoritePendingIds"
         :selectable="kind === 'blogger' && unbindMode"
         :selected-ids="unbindSelectedIds"
         :show-view-button="unbindMode"
@@ -324,6 +330,7 @@ function openWork(work: PersonWorkGroup): void {
           filtered ? '没有符合筛选条件的素材' : '该人物还没有素材，去素材详情页关联或按博主采集吧'
         "
         @rate="(id: string, value: number) => emit('rate', id, value)"
+        @toggle-favorite="(id: string) => emit('toggle-favorite', id)"
         @toggle-select="(id: string) => emit('toggle-select', id)"
       />
       <a-pagination

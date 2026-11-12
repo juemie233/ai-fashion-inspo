@@ -10,6 +10,7 @@ export interface SearchQuery {
   dominant_color?: string
   source_type?: string
   media_type?: string
+  is_favorite?: boolean
   analysis_status?: string
   tag_status?: string
   date_from?: string

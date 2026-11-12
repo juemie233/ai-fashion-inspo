@@ -67,6 +67,7 @@ async def search_inspirations(
     dominant_color: str | None = Query(None),
     source_type: str | None = Query(None),
     media_type: str | None = Query(None),
+    is_favorite: bool | None = Query(None, description="仅收藏 / 全部"),
     analysis_status: str | None = Query(None, description="done | pending | error"),
     tag_status: str | None = Query(None, description="tagged | untagged"),
     date_from: str | None = Query(None, description="ISO 日期，例如 2026-01-01"),
@@ -108,6 +109,8 @@ async def search_inspirations(
         conditions.append(Inspiration.source_type == source_type)
     if media_type:
         conditions.append(Inspiration.media_type == media_type)
+    if is_favorite is not None:
+        conditions.append(Inspiration.is_favorite == is_favorite)
     if date_from:
         conditions.append(Inspiration.created_at >= date_from)
     if date_to:

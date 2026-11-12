@@ -25,6 +25,13 @@ async def update_inspiration(
     inspiration = result.unique().scalar_one_or_none()
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
+    # 2026-11-12 收藏审查：垃圾桶素材不参与收藏（收藏合集查询排除垃圾桶，
+    # 允许收藏会出现「收藏成功但合集里看不到」的误导）
+    if data.is_favorite is not None and inspiration.deleted_at is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="垃圾桶中的素材不能收藏，请先恢复素材",
+        )
 
     if data.is_favorite is not None:
         inspiration.is_favorite = data.is_favorite

@@ -46,6 +46,26 @@ def _load_query_json(collection: Collection) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _is_manual_root(collection: Collection) -> bool:
+    """是否「系统入库手动收藏」一级节点（只能自动同步，不能编辑/固化/删除）。"""
+    return (
+        collection.parent_id is None
+        and collection.name == MANUAL_ROOT_COLLECTION_NAME
+    )
+
+
+def _guard_manual_root(collection: Collection, action: str) -> None:
+    """系统收藏根为结构性不变量：任何改动入口都返回 400，前端另隐藏按钮。"""
+    if _is_manual_root(collection):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"「{MANUAL_ROOT_COLLECTION_NAME}」是系统收藏根，"
+                f"会随收藏按钮自动同步，不允许{action}"
+            ),
+        )
+
+
 # ── 智能合集动态求值 ──
 
 
@@ -446,6 +466,18 @@ async def ensure_root_collections(db: AsyncSession) -> dict[str, int]:
         description="素材库里手动点过收藏的素材（按 is_favorite 动态求值，自动同步）",
         query_json=MANUAL_ROOT_QUERY,
     )
+    # 结构性修复：历史库可能被旧版本改过 query_json（例如编辑成空条件或转手动）。
+    # 每次启动把系统收藏根的条件恢复为 is_favorite=true，否则收藏按钮不再同步。
+    manual_collection = await db.get(Collection, manual)
+    expected_query = json.dumps(MANUAL_ROOT_QUERY, ensure_ascii=False)
+    if manual_collection is not None and manual_collection.query_json != expected_query:
+        logger.warning(
+            "修复系统收藏根 query_json：%s -> %s",
+            manual_collection.query_json,
+            expected_query,
+        )
+        manual_collection.query_json = expected_query
+        await db.commit()
     douyin = await _ensure_one(
         db,
         DOUYIN_ROOT_COLLECTION_NAME,
@@ -586,6 +618,14 @@ async def update_collection(
     """
     collection = await get_collection(db, collection_id)
 
+    # 系统收藏根：名称与筛选条件必须由 ensure_root_collections 维护，
+    # 否则「收藏按钮即合集成员」的承诺会被用户改坏（2026-11-12 收藏审查）
+    if _is_manual_root(collection):
+        if name is not None and name != collection.name:
+            _guard_manual_root(collection, "改名")
+        if query_json is not None:
+            _guard_manual_root(collection, "修改筛选条件")
+
     if name is not None and name != collection.name:
         # 自动同步的收藏夹名由抖音侧决定：改名会让下一次同步按原名再建一个，
         # 于是「同步来的」和「改过名的」两个夹长期并存
@@ -629,6 +669,7 @@ async def delete_collection(db: AsyncSession, collection_id: int) -> None:
     （测试库、手工 sqlite3 连接都可能如此），那样会留下挂在不存在的父下的孤儿夹。
     """
     collection = await get_collection(db, collection_id)
+    _guard_manual_root(collection, "删除")
     children = (
         await db.execute(select(Collection).where(Collection.parent_id == collection_id))
     ).scalars().all()
@@ -836,6 +877,7 @@ async def solidify_collection(db: AsyncSession, collection_id: int) -> dict:
     固化后可手动增删与拖拽排序；手动合集调用返回 400。
     """
     collection = await get_collection(db, collection_id)
+    _guard_manual_root(collection, "转为手动合集")
     if collection.query_json is None:
         raise HTTPException(status_code=400, detail="手动合集无需固化")
 

@@ -6,9 +6,10 @@
  * 「删除合集」两者共用。
  */
 
-import type { CollectionOut } from '@/api/collections'
+import { computed } from 'vue'
+import { SYSTEM_MANUAL_COLLECTION_NAME, type CollectionOut } from '@/api/collections'
 
-defineProps<{
+const props = defineProps<{
   /** 当前选中的合集 */
   current: CollectionOut
   /** 二级收藏夹所属一级的名字（一级自己的内容区不显示面包屑） */
@@ -18,6 +19,11 @@ defineProps<{
   /** 是否处于「编辑排序」模式（决定显示「编辑排序」还是「保存 / 取消」） */
   ordering: boolean
 }>()
+
+/** 系统收藏根只读：后端也会对 update/solidify/delete 返回 400 */
+const isSystemManualRoot = computed(
+  () => props.current.parent_id == null && props.current.name === SYSTEM_MANUAL_COLLECTION_NAME,
+)
 
 const emit = defineEmits<{
   (e: 'edit-smart'): void
@@ -37,10 +43,11 @@ const emit = defineEmits<{
       <h2>{{ current.name }}</h2>
       <span v-if="parentName" class="content-parent">{{ parentName }} /</span>
       <a-tag v-if="current.kind === 'smart'" color="arcoblue" size="small">⚡ 智能合集</a-tag>
+      <a-tag v-if="isSystemManualRoot" color="gray" size="small">系统收藏 · 自动同步</a-tag>
       <a-tag v-if="current.auto_source" color="gray" size="small">抖音同步</a-tag>
       <span class="content-total">共 {{ total }} 个素材</span>
     </div>
-    <div class="content-actions">
+    <div v-if="!isSystemManualRoot" class="content-actions">
       <template v-if="current.kind === 'smart'">
         <a-button size="small" @click="emit('edit-smart')">编辑条件</a-button>
         <a-popconfirm content="将当前匹配内容固化为手动合集？" @ok="emit('solidify')">

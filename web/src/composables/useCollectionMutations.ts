@@ -7,8 +7,18 @@
 import { reactive, ref, type ComputedRef, type Ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import type { CollectionOut } from '@/api/collections'
-import { addToCollection, deleteCollection, solidifyCollection } from '@/api/collections'
+import {
+  SYSTEM_MANUAL_COLLECTION_NAME,
+  addToCollection,
+  deleteCollection,
+  solidifyCollection,
+} from '@/api/collections'
 import { getApiErrorMessage } from '@/utils/apiError'
+
+/** 系统收藏根只读（后端同时有硬保护） */
+function isSystemManualRoot(c: CollectionOut | null): boolean {
+  return c != null && c.parent_id == null && c.name === SYSTEM_MANUAL_COLLECTION_NAME
+}
 
 interface CollectionMutationDeps {
   collections: Ref<CollectionOut[]>
@@ -47,6 +57,10 @@ export function useCollectionMutations(opts: CollectionMutationDeps) {
   function openRename() {
     const c = current.value
     if (!c) return
+    if (isSystemManualRoot(c)) {
+      Message.warning('系统收藏根由收藏按钮自动同步，不支持编辑')
+      return
+    }
     if (c.auto_source) {
       Message.warning('该收藏夹由抖音同步自动维护，名称不可修改')
       return
@@ -91,6 +105,10 @@ export function useCollectionMutations(opts: CollectionMutationDeps) {
   function confirmDelete() {
     const c = current.value
     if (!c) return
+    if (isSystemManualRoot(c)) {
+      Message.warning('系统收藏根不能删除')
+      return
+    }
     const isSmart = c.kind === 'smart'
     Modal.confirm({
       title: `删除合集「${c.name}」？`,
@@ -121,6 +139,10 @@ export function useCollectionMutations(opts: CollectionMutationDeps) {
   function openEditSmart() {
     const c = current.value
     if (!c || c.kind !== 'smart') return
+    if (isSystemManualRoot(c)) {
+      Message.warning('系统收藏根由收藏按钮自动同步，条件不可编辑')
+      return
+    }
     editingSmart.value = c
     smartEditorId.value = c.id
     smartEditorVisible.value = true
@@ -141,6 +163,10 @@ export function useCollectionMutations(opts: CollectionMutationDeps) {
   function confirmSolidify() {
     const c = current.value
     if (!c || c.kind !== 'smart') return
+    if (isSystemManualRoot(c)) {
+      Message.warning('系统收藏根不能转手动，会失去自动同步能力')
+      return
+    }
     Modal.confirm({
       title: `把「${c.name}」转为手动合集？`,
       content: '将当前匹配到的素材固化为合集成员，之后可手动增删与排序；筛选条件将不再生效。',

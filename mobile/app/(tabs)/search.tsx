@@ -68,6 +68,8 @@ export default function SearchScreen() {
   const theme = useTheme()
   const styles = useStyles(makeStyles)
   const { apiBaseUrl, toggleFavorite } = useInspirationStore()
+  /** 收藏变更版本：详情页改收藏后，返回搜索页时本地 results 需要刷新 */
+  const favoriteRevision = useInspirationStore((s) => s.favoriteRevision)
   const { width } = useWindowDimensions()
   /** 平板/大屏切 3 列 */
   const columns = gridColumns(width)
@@ -224,6 +226,15 @@ export default function SearchScreen() {
     },
     [searchText, selectedTags, mode],
   )
+
+  /** 详情页改收藏后会递增 favoriteRevision：搜索页的 results 是本地状态，
+   * 单靠 store.items 同步不到；版本变化时重跑当前搜索。 */
+  const lastFavoriteRevisionRef = useRef(0)
+  useEffect(() => {
+    if (favoriteRevision === lastFavoriteRevisionRef.current) return
+    lastFavoriteRevisionRef.current = favoriteRevision
+    if (searched) void doSearch(1)
+  }, [favoriteRevision, searched, doSearch])
 
   /** 图像向量检索（相册选图与拍照共用）：拿到本地图片地址后跑 `/search/vector` */
   const runImageSearch = async (uri: string) => {

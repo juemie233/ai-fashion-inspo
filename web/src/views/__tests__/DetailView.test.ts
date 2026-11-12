@@ -148,7 +148,9 @@ describe('DetailView 交互路径', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
-  it('收藏切换后同步本地状态（按钮不会停在旧值）', async () => {
+  it('收藏切换后同步本地状态与素材库 store（按钮不会停在旧值）', async () => {
+    const store = useInspirationsStore()
+    store.items = [{ id: 'insp-1', is_favorite: false } as never]
     const wrapper = mountView()
     await flushPromises()
 
@@ -159,6 +161,7 @@ describe('DetailView 交互路径', () => {
       panel.vm.$emit('favorite')
       await flushPromises()
       expect(mocks.toggleFavorite).toHaveBeenCalledWith('insp-1', true)
+      expect(store.items[0].is_favorite).toBe(true)
     }
   })
 

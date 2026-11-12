@@ -700,3 +700,44 @@ def test_smart_collection_date_and_media_filters(client, upload):
                                         "end_date": "2099-12-31"}
     )
     assert get_content(client, col2["id"])[1] == 1
+
+
+async def test_system_manual_root_cannot_be_mutated_or_deleted(client):
+    """系统收藏根只能自动同步：改名/改条件/转手动/删除全部 400。"""
+    from app.database import async_session
+    from app.models.collection import Collection
+    from app.services import collection_service
+
+    async with async_session() as db:
+        roots = await collection_service.ensure_root_collections(db)
+    root_id = roots[collection_service.MANUAL_ROOT_COLLECTION_NAME]
+
+    assert (
+        client.patch(
+            f"/api/collections/{root_id}", json={"name": "被改坏的收藏"}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.patch(
+            f"/api/collections/{root_id}", json={"query_json": {}}
+        ).status_code
+        == 400
+    )
+    assert client.post(f"/api/collections/{root_id}/solidify").status_code == 400
+    assert client.delete(f"/api/collections/{root_id}").status_code == 400
+
+    # 历史坏数据：绕过 API 把 query 置空，启动 ensure 必须修复回 is_favorite
+    async with async_session() as db:
+        root = await db.get(Collection, root_id)
+        assert root is not None
+        root.query_json = "{}"
+        await db.commit()
+
+    async with async_session() as db:
+        await collection_service.ensure_root_collections(db)
+
+    listed = {c["name"]: c for c in client.get("/api/collections").json()}
+    assert listed[collection_service.MANUAL_ROOT_COLLECTION_NAME]["query_json"] == {
+        "is_favorite": True
+    }

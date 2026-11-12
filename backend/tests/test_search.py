@@ -242,3 +242,15 @@ async def test_text_embedding_short_text_single_call(monkeypatch):
     vec = await emb.generate_text_embedding("法式穿搭")
     assert vec is not None
     assert len(calls) == 1
+
+
+def test_search_favorites_only(client, upload):
+    """搜索页「仅收藏」筛选（2026-11-12 收藏审查 P2-5）。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    client.patch(f"/api/inspirations/{a}", json={"is_favorite": True})
+
+    body = client.get("/api/search", params={"is_favorite": True}).json()
+    assert body["total"] == 1
+    assert [i["id"] for i in body["items"]] == [a]
+    assert b not in {i["id"] for i in body["items"]}

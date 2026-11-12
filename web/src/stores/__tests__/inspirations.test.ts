@@ -11,11 +11,7 @@ vi.mock('@/api/inspirations', () => ({
   moveToTrash: vi.fn(),
 }))
 
-import {
-  fetchInspirations,
-  toggleFavorite,
-  moveToTrash,
-} from '@/api/inspirations'
+import { fetchInspirations, toggleFavorite, moveToTrash } from '@/api/inspirations'
 import { useInspirationsStore } from '@/stores/inspirations'
 
 const mockFetch = fetchInspirations as unknown as ReturnType<typeof vi.fn>
@@ -59,7 +55,11 @@ describe('inspirations store', () => {
     await store.load({ source_type: 'xiaohongshu', include_tags: '法式', sort: 'tag_count' })
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.objectContaining({ source_type: 'xiaohongshu', include_tags: '法式', sort: 'tag_count' }),
+      expect.objectContaining({
+        source_type: 'xiaohongshu',
+        include_tags: '法式',
+        sort: 'tag_count',
+      }),
     )
   })
 
@@ -67,7 +67,12 @@ describe('inspirations store', () => {
     const store = useInspirationsStore()
     let resolveOld!: (v: unknown) => void
     mockFetch
-      .mockImplementationOnce(() => new Promise((r) => { resolveOld = r }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            resolveOld = r
+          }),
+      )
       .mockResolvedValueOnce(list([makeItem('new')], 1))
 
     const p1 = store.load()
@@ -124,5 +129,48 @@ describe('inspirations store', () => {
 
     expect(store.items.map((i) => i.id)).toEqual(['b'])
     expect(store.total).toBe(1)
+  })
+})
+
+describe('inspirations store 收藏筛选与防连点（2026-11-12）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockFetch.mockReset()
+    mockToggle.mockReset()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  it('仅收藏筛选下取消收藏：条目移除、total 减一', async () => {
+    mockFetch.mockResolvedValueOnce(list([makeItem('a', true), makeItem('b', true)], 2))
+    const store = useInspirationsStore()
+    await store.load({ is_favorite: true })
+    mockToggle.mockResolvedValue({})
+
+    await store.toggleFavorite('a')
+
+    expect(store.items.map((i) => i.id)).toEqual(['b'])
+    expect(store.total).toBe(1)
+  })
+
+  it('收藏请求进行中重复点击只发一次请求', async () => {
+    mockFetch.mockResolvedValueOnce(list([makeItem('a')]))
+    const store = useInspirationsStore()
+    await store.load()
+    let resolveToggle!: (v: unknown) => void
+    mockToggle.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveToggle = resolve
+        }),
+    )
+
+    const first = store.toggleFavorite('a')
+    const second = store.toggleFavorite('a')
+    await Promise.resolve()
+    expect(mockToggle).toHaveBeenCalledTimes(1)
+
+    resolveToggle({})
+    await Promise.all([first, second])
+    expect(store.items[0].is_favorite).toBe(true)
   })
 })

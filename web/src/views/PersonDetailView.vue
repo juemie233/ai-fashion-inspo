@@ -13,7 +13,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { usePageTitle } from '@/composables/usePageTitle'
 import { computed, ref, watch } from 'vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
-import { updateRating } from '@/api/inspirations'
+import { updateRating, toggleFavorite } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import PersonDetailHeader from '@/components/person/detail/PersonDetailHeader.vue'
@@ -115,6 +115,30 @@ async function handleItemRate(id: string, value: number) {
   } catch (e) {
     item.rating = previous
     Message.error(getApiErrorMessage(e, '评分失败'))
+  }
+}
+
+/** 收藏请求中的素材（禁用按钮，防快速连点重复请求） */
+const favoritePendingIds = ref<Set<string>>(new Set())
+
+/** 详情页「全部」视图单张作品收藏：局部更新，失败回滚 */
+async function handleItemFavorite(id: string) {
+  if (favoritePendingIds.value.has(id)) return
+  const item = items.value.find((i) => i.inspiration_id === id)
+  if (!item) return
+  const previous = Boolean(item.is_favorite)
+  const next = !previous
+  favoritePendingIds.value = new Set(favoritePendingIds.value).add(id)
+  item.is_favorite = next
+  try {
+    await toggleFavorite(id, next)
+  } catch (e) {
+    item.is_favorite = previous
+    Message.error(getApiErrorMessage(e, '收藏失败'))
+  } finally {
+    const set = new Set(favoritePendingIds.value)
+    set.delete(id)
+    favoritePendingIds.value = set
   }
 }
 
@@ -332,6 +356,7 @@ watch(
           :tag-options="tagOptions"
           :unbind-mode="unbindMode"
           :unbind-selected-ids="unbindSelectedIds"
+          :favorite-pending-ids="favoritePendingIds"
           :unbind-submitting="unbindSubmitting"
           :clearing-all="clearingAll"
           :is-current-page-all-selected="isCurrentPageAllSelected"
@@ -346,6 +371,7 @@ watch(
           @random-browse="openRandom"
           @open-work="openWorkLightbox"
           @rate="handleItemRate"
+          @toggle-favorite="handleItemFavorite"
           @enter-unbind="enterUnbindMode"
           @exit-unbind="exitUnbindMode"
           @toggle-select="toggleUnbindSelect"

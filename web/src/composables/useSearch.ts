@@ -63,6 +63,8 @@ export function useSearch() {
   const dateTo = ref((route.query.to as string) || '')
   /** 评分筛选（rating >= 指定值，空串表示不限） */
   const ratingMin = ref((route.query.rating_min as string) || '')
+  /** 仅收藏筛选（搜索页与素材库口径一致） */
+  const favoriteOnly = ref(route.query.favorite === '1')
 
   // 密度
   const density = ref<'compact' | 'standard' | 'comfortable'>(
@@ -132,6 +134,7 @@ export function useSearch() {
     if (dateFrom.value) query.from = dateFrom.value
     if (dateTo.value) query.to = dateTo.value
     if (ratingMin.value) query.rating_min = ratingMin.value
+    if (favoriteOnly.value) query.favorite = '1'
     return router.replace({ query })
   }
 
@@ -166,6 +169,7 @@ export function useSearch() {
     if (dateFrom.value) query.date_from = dateFrom.value
     if (dateTo.value) query.date_to = dateTo.value
     if (ratingMin.value) query.rating_min = Number(ratingMin.value)
+    if (favoriteOnly.value) query.is_favorite = true
 
     return query
   }
@@ -314,7 +318,13 @@ export function useSearch() {
     try {
       const newState = !item.is_favorite
       await toggleFavoriteApi(id, newState)
-      item.is_favorite = newState
+      // 仅收藏筛选下取消收藏：结果立即移除，避免留下不符合筛选条件的条目
+      if (favoriteOnly.value && !newState) {
+        results.value = results.value.filter((r) => r.id !== id)
+        total.value = Math.max(0, total.value - 1)
+      } else {
+        item.is_favorite = newState
+      }
     } catch {
       Message.error('操作失败')
     }
@@ -395,6 +405,7 @@ export function useSearch() {
     dateFrom,
     dateTo,
     ratingMin,
+    favoriteOnly,
     density,
     vectorMode,
     semanticText,

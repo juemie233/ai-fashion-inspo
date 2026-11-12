@@ -386,3 +386,17 @@ def test_trash_releases_platform_id_for_reimport(client, upload):
     new = upload(source_platform_id="platform-id-reuse")
     assert new.status_code == 201, new.text
     assert new.json()["source_platform_id"] == "platform-id-reuse"
+
+
+def test_trash_cannot_be_favorited(client, upload):
+    """垃圾桶素材禁止收藏（2026-11-12 收藏审查：避免收藏成功但合集看不到）。"""
+    insp_id = upload().json()["id"]
+    assert client.post(f"/api/inspirations/{insp_id}/trash").status_code == 200
+
+    r = client.patch(f"/api/inspirations/{insp_id}", json={"is_favorite": True})
+    assert r.status_code == 400
+    assert "垃圾桶" in r.json()["detail"]
+
+    # 收藏筛选不会出现在结果里
+    body = client.get("/api/inspirations", params={"is_favorite": True}).json()
+    assert body["total"] == 0

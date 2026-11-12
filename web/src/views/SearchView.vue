@@ -26,6 +26,7 @@ const {
   dateFrom,
   dateTo,
   ratingMin,
+  favoriteOnly,
   density,
   vectorMode,
   semanticText,
@@ -94,6 +95,7 @@ const {
         v-model:date-from="dateFrom"
         v-model:date-to="dateTo"
         v-model:rating-filter="ratingMin"
+        v-model:favorite-only="favoriteOnly"
         :searching="searching"
         @filter-change="doSearch(1)"
         @search="doSearch(1)"

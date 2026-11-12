@@ -21,7 +21,7 @@ import {
 } from '@/api/collections'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
-import { getFileUrl } from '@/api/inspirations'
+import { getFileUrl, toggleFavorite } from '@/api/inspirations'
 import { describeSmartQuery } from '@/utils/collectionQuery'
 import { useTagsStore } from '@/stores/tags'
 import { useBatchSelection } from '@/composables/useBatchSelection'
@@ -157,6 +157,39 @@ const {
 } = useCollectionMutations({ collections, current, currentId, loadCollections, loadContent })
 
 const currentPageIds = computed(() => items.value.map((i) => i.id))
+
+/** 收藏请求中的素材 id：禁用按钮防连点 */
+const favoritePendingIds = ref<Set<string>>(new Set())
+
+/** 合集内容卡片收藏：系统收藏根/智能合集取消时立即从当前列表移除 */
+async function handleContentFavorite(id: string) {
+  if (favoritePendingIds.value.has(id)) return
+  const item = items.value.find((i) => i.id === id)
+  if (!item) return
+  const previous = Boolean(item.is_favorite)
+  const next = !previous
+  favoritePendingIds.value = new Set(favoritePendingIds.value).add(id)
+  item.is_favorite = next
+  try {
+    await toggleFavorite(id, next)
+    // 系统入库手动收藏 = {is_favorite:true} 智能合集：取消后当前列表应收敛；
+    // 其它智能合集可能仍匹配（例如仅按标签筛），不能一律移除
+    const favoriteSmart =
+      current.value?.kind === 'smart' &&
+      Boolean((current.value.query_json as { is_favorite?: boolean } | null)?.is_favorite)
+    if (!next && favoriteSmart) {
+      items.value = items.value.filter((i) => i.id !== id)
+      total.value = Math.max(0, total.value - 1)
+    }
+  } catch (e) {
+    item.is_favorite = previous
+    Message.error(getApiErrorMessage(e, '收藏失败'))
+  } finally {
+    const set = new Set(favoritePendingIds.value)
+    set.delete(id)
+    favoritePendingIds.value = set
+  }
+}
 const allSelected = computed(
   () => items.value.length > 0 && items.value.every((i) => selectedIds.value.has(i.id)),
 )
@@ -324,6 +357,9 @@ onMounted(() => {
               :selected-ids="selectedIds"
               :show-view-button="batchMode"
               :show-actions="false"
+              :show-favorite="true"
+              :pending-favorite-ids="favoritePendingIds"
+              @toggle-favorite="handleContentFavorite"
               @toggle-select="toggleSelect"
             />
 

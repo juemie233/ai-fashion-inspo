@@ -8,7 +8,6 @@ import { Message } from '@arco-design/web-vue'
 import { IconLeft, IconRight } from '@arco-design/web-vue/es/icon'
 import {
   fetchInspiration,
-  toggleFavorite,
   moveToTrash,
   restoreInspiration,
   deleteInspiration,
@@ -186,15 +185,18 @@ watch(
 /** 加入合集弹窗 */
 const collectionPickerOpen = ref(false)
 
-/** 切换收藏 */
+/** 切换收藏：统一走 store，列表状态同步；仅收藏筛选下取消会移除列表项 */
 async function handleToggleFavorite() {
   if (!detail.value) return
+  if (inspirationsStore.pendingFavoriteIds.has(detail.value.id)) return
+  const previous = detail.value.is_favorite
+  const newState = !previous
+  detail.value.is_favorite = newState
   try {
-    const newState = !detail.value.is_favorite
-    await toggleFavorite(detail.value.id, newState)
-    detail.value.is_favorite = newState
-  } catch {
-    Message.error('操作失败')
+    await inspirationsStore.setFavorite(detail.value.id, newState)
+  } catch (e) {
+    if (detail.value) detail.value.is_favorite = previous
+    Message.error(getApiErrorMessage(e, '操作失败'))
   }
 }
 

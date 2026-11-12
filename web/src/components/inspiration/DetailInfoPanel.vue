@@ -96,6 +96,7 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
     <!-- 顶部操作 -->
     <div class="info-actions">
       <a-button
+        v-if="!detail.deleted_at"
         :type="detail.is_favorite ? 'primary' : 'secondary'"
         :status="detail.is_favorite ? 'danger' : undefined"
         @click="emit('favorite')"

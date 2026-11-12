@@ -12,9 +12,10 @@ const MasonryStub = defineComponent({
   props: {
     items: { type: Array, default: () => [] },
     showRating: { type: Boolean, default: true },
+    showFavorite: { type: Boolean, default: false },
     showActions: { type: Boolean, default: false },
   },
-  emits: ['rate'],
+  emits: ['rate', 'toggle-favorite'],
   template: '<div class="masonry-stub" />',
 })
 
@@ -65,6 +66,7 @@ describe('PersonItemsSection 评分', () => {
     const wrapper = mountSection('blogger')
     const grid = wrapper.findComponent({ name: 'MasonryGrid' })
     expect(grid.props('showRating')).toBe(true)
+    expect(grid.props('showFavorite')).toBe(true)
     expect(grid.props('showActions')).toBe(false)
     expect((grid.props('items') as (typeof ITEM)[])[0].rating).toBe(4)
   })
@@ -72,6 +74,7 @@ describe('PersonItemsSection 评分', () => {
   it('模特视图不显示评分', () => {
     const wrapper = mountSection('model')
     expect(wrapper.findComponent({ name: 'MasonryGrid' }).props('showRating')).toBe(false)
+    expect(wrapper.findComponent({ name: 'MasonryGrid' }).props('showFavorite')).toBe(false)
   })
 
   it('网格评分事件透传 inspiration_id 与值', () => {

@@ -240,7 +240,20 @@ export function useHomeActions(opts: HomeActionDeps) {
   /** 当前页素材 ID（供全选/取消全选） */
 
   async function handleBatchFavorite(isFavorite: boolean) {
+    const selected = [...selectedIds.value]
     const updated = await batchFavorite(isFavorite)
+    // 仅收藏筛选下批量取消：按新的收藏集合重拉，避免本条/本页残留
+    if (statusFilter.value === 'favorites' && !isFavorite) {
+      exitBatchMode()
+      loadPage(currentPage.value)
+      return
+    }
+    // 后端可能只更新部分（已删除/不存在的 ID），未全量更新时重拉校正 UI
+    if (updated !== selected.length) {
+      exitBatchMode()
+      loadPage(currentPage.value)
+      return
+    }
     if (updated > 0) {
       for (const item of store.items) {
         if (selectedIds.value.has(item.id)) item.is_favorite = isFavorite

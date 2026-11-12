@@ -293,12 +293,14 @@ export default function DetailScreen() {
 
         {/* 操作栏：删除收进「更多」（P2-9） */}
         <View style={styles.actions}>
-          <ActionItem
-            icon={detail.is_favorite ? 'heart' : 'heart-outline'}
-            label={detail.is_favorite ? '已收藏' : '收藏'}
-            color={detail.is_favorite ? theme.color.dangerText : theme.color.textSecondary}
-            onPress={() => void handleToggleFav()}
-          />
+          {!detail.deleted_at ? (
+            <ActionItem
+              icon={detail.is_favorite ? 'heart' : 'heart-outline'}
+              label={detail.is_favorite ? '已收藏' : '收藏'}
+              color={detail.is_favorite ? theme.color.dangerText : theme.color.textSecondary}
+              onPress={() => void handleToggleFav()}
+            />
+          ) : null}
           <ActionItem
             icon="pricetag-outline"
             label="编辑标签"

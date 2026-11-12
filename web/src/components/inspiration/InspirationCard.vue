@@ -26,6 +26,10 @@ const props = withDefaults(
     badge?: string
     /** 是否显示悬浮操作按钮（删除/收藏），相似推荐卡片默认关闭 */
     showActions?: boolean
+    /** 是否显示收藏按钮：与 showActions 独立，人物/合集详情可只开收藏 */
+    showFavorite?: boolean
+    /** 收藏请求进行中：禁用按钮防快速连点 */
+    favoritePending?: boolean
     /** 是否显示五星评分；与 showActions 独立，人物详情「全部」视图只开评分 */
     showRating?: boolean
     /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
@@ -40,6 +44,8 @@ const props = withDefaults(
   {
     badge: '',
     showActions: false,
+    showFavorite: false,
+    favoritePending: false,
     showRating: true,
     selectable: false,
     selected: false,
@@ -150,8 +156,8 @@ function openDetail() {
         <IconEye :size="14" />
       </div>
 
-      <!-- 悬浮操作层：showActions=false 时可只保留评分（人物详情「全部」视图） -->
-      <div v-if="showActions !== false || showRating" class="card-overlay">
+      <!-- 悬浮操作层：showActions=false 时可只保留评分/收藏（人物/合集详情） -->
+      <div v-if="showActions !== false || showRating || showFavorite" class="card-overlay">
         <template v-if="showActions !== false">
           <a-button
             v-if="item.quality_status === 'rejected'"
@@ -177,19 +183,23 @@ function openDetail() {
               </template>
             </a-button>
           </a-popconfirm>
-          <a-button
-            size="mini"
-            shape="circle"
-            :type="item.is_favorite ? 'primary' : 'text'"
-            :status="item.is_favorite ? 'danger' : undefined"
-            @click.stop="emit('toggleFavorite')"
-          >
-            <template #icon>
-              <IconHeartFill v-if="item.is_favorite" :size="14" />
-              <IconHeart v-else :size="14" />
-            </template>
-          </a-button>
         </template>
+        <a-button
+          v-if="(showActions !== false || showFavorite) && !item.deleted_at"
+          size="mini"
+          shape="circle"
+          :type="item.is_favorite ? 'primary' : 'text'"
+          :status="item.is_favorite ? 'danger' : undefined"
+          :disabled="favoritePending"
+          :loading="favoritePending"
+          title="收藏/取消收藏"
+          @click.stop="emit('toggleFavorite')"
+        >
+          <template #icon>
+            <IconHeartFill v-if="item.is_favorite" :size="14" />
+            <IconHeart v-else :size="14" />
+          </template>
+        </a-button>
         <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
         <a-rate
           v-if="showRating"
