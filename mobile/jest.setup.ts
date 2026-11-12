@@ -38,6 +38,10 @@ jest.mock('expo-video', () => {
   }
 })
 
+// reanimated：手势/动画库自带 mock（共享值 read/write 变普通对象）。
+// 不 mock 的话 Jest 里没有 UI 线程，useAnimatedStyle 会直接抛错。
+jest.mock('react-native-reanimated', () => require('react-native-reanimated/mock'))
+
 // 安全区：组件里的 useSafeAreaInsets 在没有 SafeAreaProvider 的测试树里会抛错，
 // 测试环境统一给 0 边距（真机行为由 App 里的 SafeAreaProvider 提供）
 jest.mock('react-native-safe-area-context', () => {
@@ -86,10 +90,13 @@ jest.mock('@expo/vector-icons', () => {
 jest.mock('expo-image', () => {
   const React = require('react')
   const { View } = require('react-native')
-  return {
-    __esModule: true,
-    Image: (props: Record<string, unknown>) => React.createElement(View, props),
-  }
+  // 真实 API 是静态方法 `Image.loadAsync(uri)`（上传队列恢复时用它探测本地文件），
+  // 所以挂到组件函数上而不是模块导出上
+  const MockImage = Object.assign(
+    (props: Record<string, unknown>) => React.createElement(View, props),
+    { loadAsync: jest.fn(async () => ({ width: 1, height: 1 })) },
+  )
+  return { __esModule: true, Image: MockImage }
 })
 
 // 渐变遮罩同上是原生视图：渲染成 View 并保留 children（不影响断言与裸字符串检查）

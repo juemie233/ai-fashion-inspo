@@ -2,6 +2,8 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import * as ImagePicker from 'expo-image-picker'
+import { Image } from 'expo-image'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Alert } from 'react-native'
 
 jest.mock('../services/api', () => {
@@ -18,8 +20,14 @@ const api = require('../services/api') as { uploadInspirationImage: jest.Mock }
 const pickMock = ImagePicker.launchImageLibraryAsync as unknown as jest.Mock
 
 describe('CaptureScreen（多选 + 逐张进度）', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks()
+    // P0-1 起队列会持久化：用例之间必须清空，否则上一轮的选择会被「恢复」进来
+    await AsyncStorage.clear()
+    ;(Image as unknown as { loadAsync: jest.Mock }).loadAsync.mockResolvedValue({
+      width: 1,
+      height: 1,
+    })
     useInspirationStore.setState({ items: [], total: 0, page: 1, loading: false })
     jest.spyOn(Alert, 'alert').mockImplementation(() => {})
   })

@@ -12,6 +12,7 @@ import { useEffect } from 'react'
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useInspirationStore } from '../hooks/useInspirations'
 import { ThemeProvider, useTheme } from '../hooks/useTheme'
 import ErrorBoundary from '../components/ErrorBoundary'
@@ -43,6 +44,7 @@ function RootNavigator() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="detail/[id]" options={{ ...headerOptions, title: '素材详情' }} />
         <Stack.Screen name="tasks" options={{ ...headerOptions, title: '后台任务' }} />
+        <Stack.Screen name="task/[id]" options={{ ...headerOptions, title: '任务详情' }} />
         <Stack.Screen name="collections" options={{ ...headerOptions, title: '收藏合集' }} />
         <Stack.Screen name="collection/[id]" options={{ ...headerOptions, title: '合集内容' }} />
         <Stack.Screen name="persons" options={{ ...headerOptions, title: '人物' }} />
@@ -63,13 +65,16 @@ export default function RootLayout() {
 
   return (
     <ErrorBoundary>
-      <SafeAreaProvider>
+      {/* 看图缩放/拖动依赖 gesture-handler（Android 必须包 RootView） */}
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
         <ThemeProvider>
           {/* 分享 Intent：小红书/抖音/相册分享进来直接入库 */}
           <ShareIntentBridge />
           <RootNavigator />
         </ThemeProvider>
-      </SafeAreaProvider>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
     </ErrorBoundary>
   )
 }

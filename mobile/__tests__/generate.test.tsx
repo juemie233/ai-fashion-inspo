@@ -125,7 +125,8 @@ describe('GenerateRunScreen（候选图）', () => {
     await waitFor(() => expect(screen.getByTestId('candidate-1')).toBeTruthy())
 
     fireEvent.press(screen.getByTestId('candidate-1'))
-    await waitFor(() => expect(screen.getByText('点击任意处关闭')).toBeTruthy())
+    await waitFor(() => // P0-3 后提示改为「双指缩放 · 双击放大 · 点按隐藏按钮」
+    expect(screen.getByText('双指缩放 · 双击放大 · 点按隐藏按钮')).toBeTruthy())
   })
 
   it('空批次显示占位文案', async () => {

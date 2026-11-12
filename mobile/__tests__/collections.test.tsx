@@ -70,7 +70,7 @@ describe('CollectionsScreen（合集宫格）', () => {
 
     render(<CollectionsScreen />)
     await waitFor(() => expect(screen.getByText('还没有合集')).toBeTruthy())
-    expect(screen.getByText('在素材库长按素材 → 加合集，可现场新建')).toBeTruthy()
+    expect(screen.getByText('点上方「新建合集」，或在素材库长按素材加合集')).toBeTruthy()
   })
 })
 

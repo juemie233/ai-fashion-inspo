@@ -199,21 +199,8 @@ export default function SearchScreen() {
     [searchText, selectedTags, mode],
   )
 
-  /** 以图搜图：相册选图 → 图像向量检索 */
-  const doImageSearch = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (!permission.granted) {
-      Alert.alert('权限不足', '请在系统设置中允许访问相册')
-      return
-    }
-    const picked = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.8,
-      allowsMultipleSelection: false,
-    })
-    if (picked.canceled || !picked.assets?.[0]) return
-
-    const uri = picked.assets[0].uri
+  /** 图像向量检索（相册选图与拍照共用）：拿到本地图片地址后跑 `/search/vector` */
+  const runImageSearch = async (uri: string) => {
     const seq = ++searchSeqRef.current
     setLoading(true)
     setLoadingMore(false)
@@ -234,6 +221,44 @@ export default function SearchScreen() {
     } finally {
       if (seq === searchSeqRef.current) setLoading(false)
     }
+  }
+
+  /** 以图搜图：相册选图 → 图像向量检索 */
+  const doImageSearch = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert('权限不足', '请在系统设置中允许访问相册')
+      return
+    }
+    const picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsMultipleSelection: false,
+    })
+    if (picked.canceled || !picked.assets?.[0]) return
+    await runImageSearch(picked.assets[0].uri)
+  }
+
+  /**
+   * 拍照搜图（P0-5）：逛街现场拍同款 → （可选裁剪主体）→ 图像向量检索。
+   *
+   * `allowsEditing: true` 会先进系统裁剪界面：直接把整张图确认掉就是「使用原图」，
+   * 框选则只留主体（背景杂乱的橱窗照裁掉背景后相似度明显更准）。
+   * 不传 `aspect`：Android 上会锁死宽高比，反而不利于按主体自由框选。
+   */
+  const doCameraSearch = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert('权限不足', '请在系统设置中允许使用相机')
+      return
+    }
+    const picked = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: true,
+    })
+    if (picked.canceled || !picked.assets?.[0]) return
+    await runImageSearch(picked.assets[0].uri)
   }
 
   /** 切换模式：语义模式不支持标签筛选，清掉已选标签（避免「选了但没生效」） */
@@ -337,6 +362,13 @@ export default function SearchScreen() {
           label="以图搜图"
           disabled={mode === 'semantic'}
           onPress={() => void doImageSearch()}
+        />
+        <Chip
+          testID="cond-camera"
+          icon="camera-outline"
+          label="拍照搜图"
+          disabled={mode === 'semantic'}
+          onPress={() => void doCameraSearch()}
         />
         {mode === 'semantic' ? (
           <AppText variant="micro" color="textTertiary" style={styles.flex}>

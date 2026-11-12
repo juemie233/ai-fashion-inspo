@@ -9,7 +9,7 @@
  *   「清空已完成」「全部重试」、上传总进度 + 取消、成功弹窗只留有效动作
  */
 
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, View } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { useRouter } from 'expo-router'
@@ -27,19 +27,15 @@ import { useStyles, useTheme } from '../../hooks/useTheme'
 import { uploadInspirationImage, type Inspiration } from '../../services/api'
 import { useInspirationStore } from '../../hooks/useInspirations'
 import { successFeedback, warningFeedback } from '../../utils/haptics'
+import {
+  loadUploadQueue,
+  markMissingFiles,
+  MISSING_FILE_REASON,
+  probeLocalFile,
+  saveUploadQueue,
+  type UploadQueueItem,
+} from '../../utils/uploadQueue'
 import type { Theme } from '../../constants/theme'
-
-/** 队列项状态：pending 待传 / uploading 上传中 / done 成功 / error 失败 */
-type QueueStatus = 'pending' | 'uploading' | 'done' | 'error'
-
-interface QueueItem {
-  /** 本地临时 URI（用作 key 与缩略图） */
-  uri: string
-  status: QueueStatus
-  /** 0~1 上传进度 */
-  progress: number
-  error?: string
-}
 
 /** 单次最多选多少张：太多会让队列长时间跑，手机息屏会断 */
 const MAX_BATCH = 20
@@ -49,21 +45,35 @@ export default function CaptureScreen() {
   const theme = useTheme()
   const styles = useStyles(makeStyles)
   const insets = useSafeAreaInsets()
-  const [queue, setQueue] = useState<QueueItem[]>([])
+  const [queue, setQueue] = useState<UploadQueueItem[]>([])
   const [uploading, setUploading] = useState(false)
+  /** 持久化队列是否已恢复完毕（恢复前不要用空队列覆盖存储） */
+  const [restored, setRestored] = useState(false)
+  /** 本次冷启动恢复了多少张未完成的上传（用于顶部提示条） */
+  const [restoredCount, setRestoredCount] = useState(0)
   /** 上传中取消标志（点「取消」后剩下的不再上传） */
   const cancelRef = useRef(false)
   /** 失败项详情弹层 */
-  const [errorItem, setErrorItem] = useState<QueueItem | null>(null)
+  const [errorItem, setErrorItem] = useState<UploadQueueItem | null>(null)
+  /** 本会话已确认存在的本地文件（新选的图必然存在，只有恢复来的才需要在传前探测） */
+  const verifiedRef = useRef<Set<string>>(new Set())
   const store = useInspirationStore()
 
   const addUris = (uris: string[]) => {
     // 超限提示放在 updater **外面**：state updater 必须是纯函数（StrictMode 下会被
     // 调用两次，写在里面会弹两次窗，也违反 React 的约定）
     const existing = new Set(queue.map((q) => q.uri))
+    const now = Date.now()
     const added = uris
       .filter((u) => !existing.has(u))
-      .map<QueueItem>((uri) => ({ uri, status: 'pending', progress: 0 }))
+      .map<UploadQueueItem>((uri, index) => ({
+        uri,
+        status: 'pending',
+        progress: 0,
+        // 同一批选择内按数组顺序稳定排序（Date.now() 可能相同）
+        addedAt: now + index,
+      }))
+    for (const item of added) verifiedRef.current.add(item.uri)
     const next = [...queue, ...added]
     if (next.length > MAX_BATCH) {
       Alert.alert('超出上限', `一次最多 ${MAX_BATCH} 张，多余的已忽略`)
@@ -111,9 +121,35 @@ export default function CaptureScreen() {
     setQueue((prev) => prev.filter((q) => q.uri !== uri))
   }
 
-  const updateItem = (uri: string, patch: Partial<QueueItem>) => {
+  const updateItem = (uri: string, patch: Partial<UploadQueueItem>) => {
     setQueue((prev) => prev.map((q) => (q.uri === uri ? { ...q, ...patch } : q)))
   }
+
+  // P0-1：冷启动恢复未完成队列（只恢复 pending/error），并探测本地文件是否还在
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const saved = await loadUploadQueue()
+      if (!alive) return
+      if (saved.length > 0) {
+        const { items } = await markMissingFiles(saved)
+        if (!alive) return
+        const usable = items.filter((item) => item.status !== 'error' || item.error !== MISSING_FILE_REASON)
+        setQueue(items)
+        setRestoredCount(usable.length)
+      }
+      setRestored(true)
+    })()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // 队列变化即落盘：只存未完成项；上传中不写（进度变化太频繁，且此时存储里留 pending 才是对的）
+  useEffect(() => {
+    if (!restored || uploading) return
+    void saveUploadQueue(queue)
+  }, [queue, restored, uploading])
 
   /** 串行上传：一次一张，避免局域网下并发把带宽打满、也让进度更可读 */
   const handleUploadAll = async () => {
@@ -127,6 +163,16 @@ export default function CaptureScreen() {
 
     for (const item of targets) {
       if (cancelRef.current) break
+      // 恢复来的项可能已失效（临时文件被系统清理）：传之前确认文件还在
+      if (!verifiedRef.current.has(item.uri)) {
+        const exists = await probeLocalFile(item.uri)
+        if (!exists) {
+          updateItem(item.uri, { status: 'error', progress: 0, error: MISSING_FILE_REASON })
+          failed += 1
+          continue
+        }
+        verifiedRef.current.add(item.uri)
+      }
       updateItem(item.uri, { status: 'uploading', progress: 0, error: undefined })
       try {
         const created: Inspiration = await uploadInspirationImage(item.uri, (ratio) => {
@@ -170,12 +216,30 @@ export default function CaptureScreen() {
   const doneCount = queue.filter((q) => q.status === 'done').length
   const errorCount = queue.filter((q) => q.status === 'error').length
   const uploadingItem = queue.find((q) => q.status === 'uploading')
-  const totalCount = queue.filter((q) => q.status !== 'pending').length
   const overallRatio = queue.length > 0 ? doneCount / queue.length : 0
 
   return (
     <View style={styles.container}>
       <ScreenHeader title="采集" />
+
+      {restoredCount > 0 ? (
+        <View style={styles.restoreBanner}>
+          <Icon name="cloud-done-outline" size={theme.icon.sm} color={theme.color.brandText} />
+          <AppText variant="caption" color="textSecondary" style={styles.restoreText}>
+            已恢复 {restoredCount} 张未完成的上传，点「上传」继续
+          </AppText>
+          <Pressable
+            onPress={() => setRestoredCount(0)}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="关闭恢复提示"
+          >
+            <AppText variant="caption" color="brandText">
+              知道了
+            </AppText>
+          </Pressable>
+        </View>
+      ) : null}
 
       {queue.length === 0 ? (
         <View style={styles.emptyArea}>
@@ -407,6 +471,18 @@ const makeStyles = (t: Theme) =>
     },
     // 44×44 触控区（P0-5：改前 20×20 很难点中）
     cellRemove: { position: 'absolute', top: 0, right: 0 },
+    restoreBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      marginHorizontal: t.space.md,
+      marginTop: t.space.sm,
+      paddingHorizontal: t.space.md,
+      paddingVertical: t.space.sm,
+      borderRadius: t.radius.control,
+      backgroundColor: t.color.brandSubtle,
+    },
+    restoreText: { flex: 1 },
     summary: {
       flexDirection: 'row',
       alignItems: 'center',

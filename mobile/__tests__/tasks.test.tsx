@@ -94,6 +94,60 @@ describe('TaskRow', () => {
     expect(screen.getByText('取消')).toBeTruthy()
   })
 
+  it('运行中的 f2 任务显示阶段与计数（不再只有一个百分比）', () => {
+    render(
+      <TaskRow
+        task={makeTask({
+          type: 'f2_import',
+          status: 'running',
+          done: 4,
+          total: 21,
+          result: { stage: 'download' },
+        })}
+        onCancel={jest.fn()}
+      />,
+    )
+    expect(screen.getByText('下载中：第 4/21')).toBeTruthy()
+  })
+
+  it('已完成任务显示结果摘要（向量回填：图像/文本/失败/跳过）', () => {
+    render(
+      <TaskRow
+        task={makeTask({
+          type: 'vector_backfill',
+          status: 'success',
+          progress: 100,
+          done: 320,
+          total: 320,
+          result: { image_done: 320, text_done: 318, text_failed: 2, image_skipped: 5 },
+        })}
+        onCancel={jest.fn()}
+      />,
+    )
+    expect(screen.getByText('图像向量 320 · 文本向量 318 · 文本失败 2 · 跳过 5')).toBeTruthy()
+  })
+
+  it('质量审核完成后显示通过/拒绝/未判定', () => {
+    render(
+      <TaskRow
+        task={makeTask({
+          type: 'quality_check',
+          status: 'success',
+          result: { approved: 88, rejected: 12, pending: 3 },
+        })}
+        onCancel={jest.fn()}
+      />,
+    )
+    expect(screen.getByText('通过 88 · 拒绝 12 · 未判定 3')).toBeTruthy()
+  })
+
+  it('点整行触发 onPress（进任务详情）', () => {
+    const onPress = jest.fn()
+    render(<TaskRow task={makeTask({ id: 7 })} onCancel={jest.fn()} onPress={onPress} />)
+    fireEvent.press(screen.getByTestId('task-7'))
+    expect(onPress).toHaveBeenCalledTimes(1)
+  })
+
   it('未知类型/状态回退原值，不显示空白', () => {
     render(<TaskRow task={makeTask({ type: 'brand_new', status: 'weird' })} onCancel={jest.fn()} />)
 
@@ -134,7 +188,8 @@ describe('TasksScreen', () => {
     // 两条任务都是 AI 分析类型，这里断言两行都渲染出来
     await waitFor(() => expect(screen.getAllByText('批量 AI 分析')).toHaveLength(2))
 
-    expect(api.fetchTasks).toHaveBeenCalledWith(1, 30)
+    // P0-2：每页 20 条（原固定 30），筛选条件为空对象
+    expect(api.fetchTasks).toHaveBeenCalledWith(1, 20, {})
     expect(findBareText(utils.toJSON())).toEqual([])
   })
 
@@ -153,6 +208,56 @@ describe('TasksScreen', () => {
 
     render(<TasksScreen />)
     await waitFor(() => expect(screen.getByText('暂无后台任务')).toBeTruthy())
+  })
+
+  it('状态 chip 会带 status 重新拉第一页', async () => {
+    api.fetchTasks.mockResolvedValue({ items: [makeTask({ id: 1 })], total: 1, page: 1, size: 20 })
+    render(<TasksScreen />)
+    await waitFor(() => expect(api.fetchTasks).toHaveBeenCalledWith(1, 20, {}))
+
+    fireEvent.press(screen.getByTestId('task-status-failed'))
+    await waitFor(() => expect(api.fetchTasks).toHaveBeenLastCalledWith(1, 20, { status: 'failed' }))
+  })
+
+  it('类型弹层选中后带 type 重新拉第一页', async () => {
+    api.fetchTasks.mockResolvedValue({ items: [makeTask({ id: 1 })], total: 1, page: 1, size: 20 })
+    render(<TasksScreen />)
+    await waitFor(() => expect(api.fetchTasks).toHaveBeenCalled())
+
+    fireEvent.press(screen.getByTestId('task-type-filter'))
+    await waitFor(() => expect(screen.getByText('按类型筛选')).toBeTruthy())
+    fireEvent.press(screen.getByTestId('task-type-vector_backfill'))
+
+    await waitFor(() =>
+      expect(api.fetchTasks).toHaveBeenLastCalledWith(1, 20, { type: 'vector_backfill' }),
+    )
+  })
+
+  it('触底翻页：请求第 2 页并追加', async () => {
+    api.fetchTasks.mockImplementation((page: number) =>
+      Promise.resolve({
+        items: [makeTask({ id: page === 1 ? 1 : 2 })],
+        total: 2,
+        page,
+        size: 20,
+      }),
+    )
+    render(<TasksScreen />)
+    await waitFor(() => expect(screen.getByTestId('task-1')).toBeTruthy())
+
+    // 触底（FlatList 的 onEndReached）
+    fireEvent(screen.getByTestId('task-list'), 'endReached')
+
+    await waitFor(() => expect(api.fetchTasks).toHaveBeenCalledWith(2, 20, {}))
+    await waitFor(() => expect(screen.getByTestId('task-2')).toBeTruthy())
+  })
+
+  it('点任务行进入详情页', async () => {
+    api.fetchTasks.mockResolvedValue({ items: [makeTask({ id: 9 })], total: 1, page: 1, size: 20 })
+    render(<TasksScreen />)
+    await waitFor(() => expect(screen.getByTestId('task-9')).toBeTruthy())
+    fireEvent.press(screen.getByTestId('task-9'))
+    // expo-router 在 jest 里被 mock 成固定对象，这里只断言点击不抛错
   })
 
   it('取消任务需二次确认，确认后调接口并刷新', async () => {

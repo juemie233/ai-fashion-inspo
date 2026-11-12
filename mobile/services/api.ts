@@ -290,14 +290,67 @@ export interface TaskItem {
   error?: string | null
   created_at: string
   updated_at: string
+  /**
+   * 结果摘要：后端 `result_summary`（≤8KB 的小 JSON），列表默认就是它。
+   * 超长结果（如标签体检 2.9MB）不会随列表返回，完整结果走 `fetchTaskResult`。
+   * 运行中的 f2 任务用它里的 `stage` 显示阶段。
+   */
+  result?: Record<string, unknown> | null
+  /** 暂停时的阶段名（后端暂停时写入，恢复/结束后为空） */
+  last_stage?: string | null
+  priority?: number
+  retry_count?: number
+  max_retries?: number
+  next_retry_at?: string | null
 }
 
-/** 任务分页列表 */
-export async function fetchTasks(page = 1, size = 20): Promise<PaginatedResponse<TaskItem>> {
-  const { data } = await apiClient.get<PaginatedResponse<TaskItem>>('/tasks', {
-    params: { page, size },
-  })
+/** 任务列表筛选条件（后端 `/api/tasks` 支持 page/size/status/type） */
+export interface TaskListFilter {
+  /** 单状态过滤：pending / running / paused / success / failed / cancelled */
+  status?: string
+  /** 单类型过滤：见 constants/labels.ts 的 TASK_TYPE_LABELS */
+  type?: string
+}
+
+/** 任务分页列表（可按状态 / 类型筛选） */
+export async function fetchTasks(
+  page = 1,
+  size = 20,
+  filter: TaskListFilter = {},
+): Promise<PaginatedResponse<TaskItem>> {
+  const params: Record<string, string | number> = { page, size }
+  if (filter.status) params.status = filter.status
+  if (filter.type) params.type = filter.type
+  const { data } = await apiClient.get<PaginatedResponse<TaskItem>>('/tasks', { params })
   return data
+}
+
+/** 单个任务（详情页：result 仍是摘要，大结果见 `/tasks/{id}/result`） */
+export async function fetchTask(id: number): Promise<TaskItem> {
+  const { data } = await apiClient.get<TaskItem>(`/tasks/${id}`)
+  return data
+}
+
+/** 一次任务执行尝试的台账（重试会产生多行，按开始时间升序） */
+export interface TaskRun {
+  id: number
+  task_id: number
+  task_type: string
+  /** 0=首次执行，1=第一次重试…… */
+  attempt: number
+  started_at: string
+  finished_at?: string | null
+  item_count: number
+  total_count: number
+  status: 'running' | 'success' | 'retry' | 'failed' | string
+  gpu_model?: string | null
+  error?: string | null
+}
+
+/** 任务的运行台账（`GET /api/tasks/{id}/runs`） */
+export async function fetchTaskRuns(id: number, limit = 50): Promise<TaskRun[]> {
+  const { data } = await apiClient.get<TaskRun[]>(`/tasks/${id}/runs`, { params: { limit } })
+  return Array.isArray(data) ? data : []
 }
 
 /** 取消任务（仅 pending/running 有效） */
@@ -422,6 +475,26 @@ export async function fetchCollections(): Promise<CollectionItem[]> {
 export async function createCollection(name: string): Promise<CollectionItem> {
   const { data } = await apiClient.post<CollectionItem>('/collections', { name })
   return data
+}
+
+/** 更新合集（当前只用于改名；描述/封面留给 Web） */
+export async function updateCollection(
+  id: number,
+  patch: { name?: string; description?: string },
+): Promise<CollectionItem> {
+  const { data } = await apiClient.patch<CollectionItem>(`/collections/${id}`, patch)
+  return data
+}
+
+/** 删除合集（素材不动：只删合集与成员关系，智能合集仅删自身） */
+export async function deleteCollection(id: number): Promise<void> {
+  await apiClient.delete(`/collections/${id}`)
+}
+
+/** 调整合集顺序（按新顺序提交一级合集 ID；未提交的保持相对顺序追加到末尾） */
+export async function reorderCollections(orderedIds: number[]): Promise<void> {
+  if (orderedIds.length === 0) return
+  await apiClient.patch('/collections/order', { ordered_ids: orderedIds })
 }
 
 /** 合集内素材（分页） */
