@@ -60,6 +60,10 @@ jobs:
   mobile:
     name: 移动端（tsc / jest）
     runs-on: ubuntu-latest
+    # 固定 UTC：与后端 job 一致，也让「本地 +08:00 全绿、CI 挂」的时区差异在本地可复现
+    # （2026-11-12 就有一个把 UTC 字面量写进断言的用例栽在这里）。
+    env:
+      TZ: UTC
     defaults:
       run:
         working-directory: mobile
@@ -183,6 +187,14 @@ jobs:
         working-directory: face-service
         run: |
           python -m pip install --upgrade pip
-          # 测试会 import app.router（人脸推理模块）验证注册/匹配/删除；只需 CPU 运行时
-          pip install numpy fastapi opencv-python-headless onnxruntime
+          # 依赖清单以 requirements.txt 为唯一真源：测试会 import app.router（人脸推理模块）
+          # 验证注册/匹配/删除，需要的包必须与生产一致。这里只把 GPU 版运行时换成 CPU 版
+          # （runner 无 CUDA），其余照requirements 装。
+          #
+          # ⚠️ 不要退回「手写包名清单」：2026-11-12 CI 就因此变红——router 里有 File(...)
+          # 端点，requirements.txt 声明了 python-multipart，而手写清单漏了它；新版 FastAPI
+          # （0.162 起）在**导入时**就校验 multipart，于是整个 test_storage.py 导入失败
+          # （RuntimeError: Form data requires "python-multipart"），报错信息完全看不出是缺依赖。
+          grep -v '^onnxruntime-gpu' requirements.txt > /tmp/face-requirements-cpu.txt
+          pip install -r /tmp/face-requirements-cpu.txt onnxruntime
           python -m unittest -q test_storage.py

@@ -127,12 +127,20 @@ describe('时间与耗时', () => {
     expect(parseServerTime('not-a-date')).toBeNull()
   })
 
-  it('formatRunTime 输出本地月-日 时:分（同一年不带年份）', () => {
-    const value = formatRunTime('2026-10-24T00:00:00Z', new Date('2026-10-25T00:00:00Z'))
-    expect(value).toMatch(/^10-24 \d{2}:\d{2}$/)
-    // 跨年：now 在 2027 年时，2026 年的时间要带年份
-    const crossYear = formatRunTime('2025-12-31T23:00:00Z', new Date('2027-01-01T00:00:00Z'))
-    expect(crossYear).toMatch(/^2026-01-01 \d{2}:\d{2}$/)
+  it('formatRunTime 同一自然年省略年份、跨年补年份（与运行环境时区无关）', () => {
+    // 期望值必须由**本地时间**构造后再转 ISO：直接写 UTC 字面量会让断言随 TZ 变化。
+    // 真实事故（2026-11-12 CI）：断言里的 `2025-12-31T23:00:00Z` 在 +08:00 是
+    // 2026-01-01，在 UTC 仍是 2025-12-31 → 跨年分支在 CI（UTC）必挂、本机全绿。
+    const at = new Date(2026, 5, 15, 9, 7) // 本地 2026-06-15 09:07
+    const sameYear = new Date(2026, 11, 31, 23, 0) // 同一年：不带年份
+    expect(formatRunTime(at.toISOString(), sameYear)).toBe('06-15 09:07')
+
+    const nextYear = new Date(2027, 0, 1, 0, 0) // now 在 2027：必须带年份
+    expect(formatRunTime(at.toISOString(), nextYear)).toBe('2026-06-15 09:07')
+
+    // 跨年前一天（本地 2025-12-31 23:30）：同样带年份，且时间保留 23:30
+    const newYearsEve = new Date(2025, 11, 31, 23, 30)
+    expect(formatRunTime(newYearsEve.toISOString(), nextYear)).toBe('2025-12-31 23:30')
   })
 
   it('formatRunDuration 覆盖秒/分/小时', () => {
