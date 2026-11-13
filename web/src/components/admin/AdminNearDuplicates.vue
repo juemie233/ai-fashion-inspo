@@ -9,14 +9,12 @@
 
 import { computed, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import apiClient from '@/api/client'
 import {
-  fetchNearDuplicates,
-  startPhashBackfill,
+  useNearDuplicatesApi,
   type NearDuplicateFile,
   type NearDuplicateGroup,
   type NearDuplicateResult,
-} from '@/api/admin'
+} from '@/composables/useNearDuplicatesApi'
 import { getFileUrl } from '@/api/inspirations'
 import { formatSize } from '@/utils/format'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -27,6 +25,8 @@ import {
   type DupDecision,
 } from '@/utils/nearDup'
 import { usePolling } from '@/composables/usePolling'
+
+const nearApi = useNearDuplicatesApi()
 
 const emit = defineEmits<{
   (e: 'delete-selected', ids: string[]): void
@@ -120,7 +120,7 @@ async function scan() {
   result.value = null
   submittedNotice.value = ''
   try {
-    result.value = await fetchNearDuplicates(limit.value, threshold.value)
+    result.value = await nearApi.scan(limit.value, threshold.value)
     if (result.value.groups.length === 0) {
       Message.success(`已${nearDupScopeLabel(result.value, limit.value)}，未发现近似重复`)
     } else {
@@ -157,13 +157,7 @@ const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
     const id = backfillTaskId.value
     if (id === null) return
     try {
-      const { data } = await apiClient.get<{
-        status: string
-        progress: number
-        done: number
-        total: number
-        result: { complete?: boolean; unhashable?: number; missing?: number } | null
-      }>(`/tasks/${id}`)
+      const data = await nearApi.fetchBackfillTask(id)
       backfillProgress.value = data.progress ?? 0
       backfillStatus.value = data.status
       if (!['pending', 'running'].includes(data.status)) {
@@ -187,7 +181,7 @@ const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
 async function startBackfill() {
   backfillBusy.value = true
   try {
-    const data = await startPhashBackfill(forceRehash.value)
+    const data = await nearApi.startBackfill(forceRehash.value)
     backfillTaskId.value = data.task_id
     backfillProgress.value = 0
     backfillStatus.value = 'running'
@@ -304,10 +298,7 @@ async function deleteBoth() {
   try {
     const ids = collectIdsToDelete(g, 'delete-both')
     // 直接调用批量删除接口并等待结果：失败时不改动候选列表
-    const { data } = await apiClient.post<{ message: string; task_id: number }>(
-      '/admin/batch-delete',
-      { ids },
-    )
+    const data = await nearApi.submitBatchDelete(ids)
     emit('task-started', data.task_id, data.message)
 
     // 从当前组中移除已删除的两张；剩余不足两张时整组移出候选队列

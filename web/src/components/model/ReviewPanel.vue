@@ -5,12 +5,9 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
 import { QUALITY_BATCH_MAX } from '@/utils/qualityBatch'
 import { QUALITY_REASON_OPTIONS, qualityReasonLabel } from '@/utils/qualityReason'
-import { submitQualityCorrection } from '@/api/aiQuality'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import apiClient from '@/api/client'
-import { deleteRejectedInspirations, batchUpdateInspirations, batchTrash } from '@/api/inspirations'
 import QualityLearnerCard from '@/components/model/QualityLearnerCard.vue'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
 import QualityInsightsPanel from '@/components/model/QualityInsightsPanel.vue'
@@ -18,8 +15,24 @@ import InspirationGridBrowser, {
   type GridBrowserItem,
 } from '@/components/inspiration/InspirationGridBrowser.vue'
 import { useQualityReviewPanel } from '@/composables/useQualityReviewPanel'
+import { useRejectedInspirations, type RejectedItem } from '@/composables/useRejectedInspirations'
 
 const router = useRouter()
+
+// 未通过素材列表（分页/筛选/动作在 composable 内）
+const {
+  items: rejectedItems,
+  total: rejectedTotal,
+  loading: rejectedLoading,
+  reasonFilter: rejectedReasonFilter,
+  load: loadRejectedItems,
+  loadMore: loadMoreRejected,
+  approve: approveRejected,
+  trashAllRejected,
+  batchApprove: batchApproveApi,
+  batchTrashSelected: batchTrashSelectedApi,
+  submitCorrection: submitCorrectionApi,
+} = useRejectedInspirations()
 
 const {
   qualityReviewStats,
@@ -45,24 +58,9 @@ const {
   stopReviewPolling,
 } = useQualityReviewPanel({ loadRejectedItems })
 
-// 未通过素材列表
-interface RejectedItem {
-  quality_status?: string | null
-  id: string
-  thumbnail_path?: string | null
-  file_path: string
-  quality_reason?: string | null
-  source_type: string
-}
-const rejectedItems = ref<RejectedItem[]>([])
-const rejectedTotal = ref(0)
-const rejectedLoading = ref(false)
-const rejectedPage = ref(1)
-const rejectedPageSize = 100
 const rejectedDensity = ref<'compact' | 'standard'>(
   (localStorage.getItem('review-rejected-density') as 'compact' | 'standard') || 'compact',
 )
-let rejectedSeq = 0 // 请求序号，防止陈旧响应覆盖
 const approvingRejectedIds = ref<Set<string>>(new Set())
 const batchApproving = ref(false)
 const batchTrashing = ref(false)
@@ -78,9 +76,6 @@ const rejectedGridItems = computed<GridBrowserItem[]>(() =>
   rejectedItems.value.map((i) => ({ ...i, media_type: 'image' })),
 )
 
-/** 按原因筛选未通过素材（空串=全部） */
-const rejectedReasonFilter = ref('')
-
 /** 原因筛选下拉：标签里带数量，直接看出哪类拒绝最多 */
 const rejectedReasonOptions = computed(() => {
   const counts = qualityReviewStats.value?.reason_counts ?? {}
@@ -89,43 +84,6 @@ const rejectedReasonOptions = computed(() => {
     value: o.value,
   }))
 })
-
-async function loadRejectedItems(reset = true) {
-  if (reset) rejectedPage.value = 1
-  const page = rejectedPage.value
-  rejectedLoading.value = true
-  const seq = ++rejectedSeq
-  try {
-    const { data } = await apiClient.get<{ items: RejectedItem[]; total: number }>(
-      '/inspirations',
-      {
-        params: {
-          quality_status: 'rejected',
-          size: rejectedPageSize,
-          page,
-          sort: 'newest',
-          // 按原因筛选（后端 quality_reason_code）；空串表示全部
-          ...(rejectedReasonFilter.value
-            ? { quality_reason_code: rejectedReasonFilter.value }
-            : {}),
-        },
-      },
-    )
-    if (seq !== rejectedSeq) return // 忽略过期响应
-    rejectedItems.value = reset ? data.items : [...rejectedItems.value, ...data.items]
-    rejectedTotal.value = data.total
-  } catch {
-    /* 静默 */
-  } finally {
-    if (seq === rejectedSeq) rejectedLoading.value = false
-  }
-}
-
-function loadMoreRejected() {
-  if (rejectedLoading.value) return // 防止加载中重复点击导致跳页
-  rejectedPage.value += 1
-  loadRejectedItems(false)
-}
 
 /** 纠错可选的原因：排除系统态码（`prefilter_reject` / `unknown` 不是「人工认为错在哪」） */
 const correctionReasonOptions = computed(() =>
@@ -155,7 +113,7 @@ async function submitCorrection() {
   if (!item) return
   correctionSubmitting.value = true
   try {
-    await submitQualityCorrection({
+    await submitCorrectionApi({
       inspiration_id: item.id,
       corrected_status: correctionStatus.value,
       reason_code: correctionReason.value || undefined,
@@ -175,9 +133,7 @@ async function approveItem(id: string) {
   if (approvingRejectedIds.value.has(id)) return
   approvingRejectedIds.value = new Set(approvingRejectedIds.value).add(id)
   try {
-    await apiClient.patch(`/inspirations/${id}`, { quality_status: 'approved' })
-    rejectedItems.value = rejectedItems.value.filter((i) => i.id !== id)
-    rejectedTotal.value = Math.max(0, rejectedTotal.value - 1)
+    await approveRejected(id)
     rejectedGridRef.value?.removeSelectedId(id) // 同步清除网格选中残留
     Message.success('已标记为通过')
     loadQualityReview()
@@ -195,10 +151,8 @@ const deletingRejected = ref(false)
 async function deleteRejected() {
   deletingRejected.value = true
   try {
-    const r = await deleteRejectedInspirations()
+    const r = await trashAllRejected()
     Message.success(r.message || `已将 ${r.trashed} 个已拒绝素材移入垃圾桶`)
-    rejectedItems.value = []
-    rejectedTotal.value = 0
     loadQualityReview()
   } catch (e) {
     Message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
@@ -212,7 +166,7 @@ async function batchApprove(ids: string[], clear: () => void) {
   if (ids.length === 0) return
   batchApproving.value = true
   try {
-    const updated = await batchUpdateInspirations(ids, { quality_status: 'approved' })
+    const updated = await batchApproveApi(ids)
     Message.success(`已将 ${updated} 个素材标记为通过`)
     clear()
     await loadRejectedItems(true)
@@ -229,7 +183,7 @@ async function batchTrashSelected(ids: string[], clear: () => void) {
   if (ids.length === 0) return
   batchTrashing.value = true
   try {
-    const { trashed, skipped } = await batchTrash(ids, '质量差', 'auto')
+    const { trashed, skipped } = await batchTrashSelectedApi(ids)
     const parts = [`已将 ${trashed} 个素材移入垃圾桶`]
     if (skipped > 0) parts.push(`${skipped} 个跳过`)
     Message.success(parts.join('，'))

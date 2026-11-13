@@ -4,37 +4,21 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { h, ref, onMounted } from 'vue'
 import { Tag, Message } from '@arco-design/web-vue'
-import apiClient from '@/api/client'
+import {
+  useAiSettingsApi,
+  type AiSettings,
+  type SamplingParams,
+  type PromptVersion,
+  type ModelConfigOverviewItem,
+} from '@/composables/useAiSettingsApi'
 import { useAiModelsStore } from '@/stores/aiModels'
 import { useTagsStore } from '@/stores/tags'
 import SettingsTestCard from '@/components/model/SettingsTestCard.vue'
 
 const store = useAiModelsStore()
 const tagsStore = useTagsStore()
+const settingsApi = useAiSettingsApi()
 
-interface AiSettings {
-  active_model: string
-  confidence_threshold: number
-  analysis_timeout: number
-  ollama_base_url: string
-  defaults: { confidence_threshold: number; analysis_timeout: number }
-}
-interface SamplingParams {
-  temperature: number
-  top_p: number
-  top_k: number
-  num_predict: number
-  num_ctx: number
-  think: boolean
-  defaults: {
-    temperature: number
-    top_p: number
-    top_k: number
-    num_predict: number
-    num_ctx: number
-    think: boolean
-  }
-}
 const aiSettings = ref<AiSettings>({
   active_model: '',
   confidence_threshold: 0.6,
@@ -84,19 +68,12 @@ const editedBioPrompt = ref('')
 const bioPromptLoading = ref(false)
 const bioPromptSaving = ref(false)
 
-interface PromptVersion {
-  prompt: string
-  saved_at: string
-  length: number
-}
 const promptVersions = ref<PromptVersion[]>([])
 const promptVersionsVisible = ref(false)
 
 async function loadPromptVersions() {
   try {
-    const { data } = await apiClient.get<{ versions: PromptVersion[]; current: string }>(
-      '/ai/prompt/versions',
-    )
+    const data = await settingsApi.fetchPromptVersions()
     promptVersions.value = data.versions
   } catch {
     /* 静默 */
@@ -106,10 +83,10 @@ async function loadPromptVersions() {
 async function savePromptVersion() {
   try {
     if (editedPrompt.value !== currentPrompt.value) {
-      await apiClient.put('/ai/prompt', { prompt: editedPrompt.value })
+      await settingsApi.updatePrompt(editedPrompt.value)
       currentPrompt.value = editedPrompt.value
     }
-    await apiClient.post('/ai/prompt/save-version')
+    await settingsApi.savePromptVersion()
     Message.success('版本已保存')
     loadPromptVersions()
   } catch {
@@ -119,7 +96,7 @@ async function savePromptVersion() {
 
 async function rollbackPrompt(index: number) {
   try {
-    const { data } = await apiClient.post('/ai/prompt/rollback', { index })
+    const data = await settingsApi.rollbackPrompt(index)
     editedPrompt.value = data.prompt
     currentPrompt.value = data.prompt
     Message.success(data.message)
@@ -171,9 +148,7 @@ async function executeReset() {
   resetStep.value = 0
   resetting.value = true
   try {
-    const { data } = await apiClient.delete('/ai/reset', {
-      params: { confirm: 'yes', confirm_text: RESET_CONFIRM_WORD },
-    })
+    const data = await settingsApi.resetAllData()
     Message.success(
       data.snapshot
         ? `${data.message || '所有数据已重置'}（已自动保留 reset 前快照 7 天）`
@@ -195,7 +170,7 @@ async function executeReset() {
 // ===== 参数加载/保存 =====
 async function loadSettings() {
   try {
-    const { data } = await apiClient.get<AiSettings>('/ai/settings')
+    const data = await settingsApi.fetchSettings()
     aiSettings.value = data
     confThreshold.value = data.confidence_threshold
     analysisTimeout.value = data.analysis_timeout
@@ -205,7 +180,7 @@ async function loadSettings() {
 
 async function loadSamplingParams() {
   try {
-    const { data } = await apiClient.get<SamplingParams>('/ai/sampling-params')
+    const data = await settingsApi.fetchSamplingParams()
     samplingParams.value = data
     defaultSampling.value = data.defaults
   } catch {}
@@ -214,22 +189,8 @@ async function loadSamplingParams() {
 async function saveSettings() {
   savingSettings.value = true
   try {
-    await apiClient.put('/ai/settings', null, {
-      params: {
-        confidence_threshold: confThreshold.value,
-        analysis_timeout: analysisTimeout.value,
-      },
-    })
-    await apiClient.put('/ai/sampling-params', null, {
-      params: {
-        temperature: samplingParams.value.temperature,
-        top_p: samplingParams.value.top_p,
-        top_k: samplingParams.value.top_k,
-        num_predict: samplingParams.value.num_predict,
-        num_ctx: samplingParams.value.num_ctx,
-        think: samplingParams.value.think,
-      },
-    })
+    await settingsApi.saveSettings(confThreshold.value, analysisTimeout.value)
+    await settingsApi.saveSamplingParams(samplingParams.value)
     Message.success('参数已保存（按模型独立持久化，重启后仍生效）')
   } catch (e) {
     Message.error(getApiErrorMessage(e, '保存失败'))
@@ -251,7 +212,7 @@ const clearingModelConfig = ref(false)
 async function clearModelConfig() {
   clearingModelConfig.value = true
   try {
-    const { data } = await apiClient.delete<{ message: string }>('/ai/model-config')
+    const data = await settingsApi.clearModelConfig()
     Message.success(data.message || '已恢复全局默认值')
     loadSettings()
     loadSamplingParams()
@@ -263,22 +224,13 @@ async function clearModelConfig() {
 }
 
 // ===== 每模型配置总览 =====
-interface ModelConfigOverviewItem {
-  name: string
-  has_config: boolean
-  config_fields: string[]
-  has_prompt: boolean
-  prompt_length: number
-}
 const configOverview = ref<ModelConfigOverviewItem[]>([])
 const configOverviewLoading = ref(false)
 
 async function loadConfigOverview() {
   configOverviewLoading.value = true
   try {
-    const { data } = await apiClient.get<{ models: ModelConfigOverviewItem[] }>(
-      '/ai/model-config/overview',
-    )
+    const data = await settingsApi.fetchConfigOverview()
     configOverview.value = data.models
   } catch {
     /* 静默 */
@@ -301,10 +253,7 @@ async function copyModelConfig() {
   }
   copyConfigLoading.value = true
   try {
-    const { data } = await apiClient.post<{ message: string }>('/ai/model-config/copy', {
-      source,
-      destination: dest,
-    })
+    const data = await settingsApi.copyModelConfig(source, dest)
     Message.success(data.message)
     loadConfigOverview()
   } catch (e) {
@@ -317,7 +266,7 @@ async function copyModelConfig() {
 async function loadPrompt() {
   promptLoading.value = true
   try {
-    const { data } = await apiClient.get<{ prompt: string; length: number }>('/ai/prompt')
+    const data = await settingsApi.fetchPrompt()
     currentPrompt.value = data.prompt
     editedPrompt.value = data.prompt
   } catch {
@@ -330,7 +279,7 @@ async function loadPrompt() {
 async function savePrompt() {
   promptSaving.value = true
   try {
-    await apiClient.put('/ai/prompt', { prompt: editedPrompt.value })
+    await settingsApi.updatePrompt(editedPrompt.value)
     currentPrompt.value = editedPrompt.value
     Message.success('Prompt 已更新（按模型持久化保存）')
   } catch (e) {
@@ -350,9 +299,7 @@ function resetPrompt() {
 async function loadBioPrompt() {
   bioPromptLoading.value = true
   try {
-    const { data } = await apiClient.get<{ prompt: string; default: string; length: number }>(
-      '/ai/person-bio-prompt',
-    )
+    const data = await settingsApi.fetchBioPrompt()
     bioPrompt.value = data.prompt
     editedBioPrompt.value = data.prompt
   } catch {
@@ -365,7 +312,7 @@ async function loadBioPrompt() {
 async function saveBioPrompt() {
   bioPromptSaving.value = true
   try {
-    await apiClient.put('/ai/person-bio-prompt', { prompt: editedBioPrompt.value })
+    await settingsApi.updateBioPrompt(editedBioPrompt.value)
     bioPrompt.value = editedBioPrompt.value
     Message.success('人物简介 Prompt 已更新')
   } catch (e) {
@@ -382,7 +329,7 @@ function resetBioPromptChanges() {
 
 async function restoreDefaultBioPrompt() {
   try {
-    const { data } = await apiClient.delete<{ prompt: string }>('/ai/person-bio-prompt')
+    const data = await settingsApi.resetBioPrompt()
     bioPrompt.value = data.prompt
     editedBioPrompt.value = data.prompt
     Message.success('已恢复默认人物简介 Prompt')

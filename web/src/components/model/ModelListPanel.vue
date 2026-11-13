@@ -6,7 +6,12 @@ import { h, ref, computed, onMounted, onUnmounted } from 'vue'
 import { Tag, Button, Popconfirm, Message } from '@arco-design/web-vue'
 import type { EChartsOption } from 'echarts'
 import { storeToRefs } from 'pinia'
-import apiClient from '@/api/client'
+import {
+  useModelListApi,
+  type ModelDetail,
+  type ModelStat,
+  type DownloadEndpoint,
+} from '@/composables/useModelListApi'
 import { useNotification } from '@/composables/useNotification'
 import { useGpuMonitor } from '@/composables/useGpuMonitor'
 import { useAiModelsStore, type OllamaModel } from '@/stores/aiModels'
@@ -23,6 +28,7 @@ import ArcoChart from '@/components/chart/ArcoChart.vue'
 
 const { requestAndNotify } = useNotification()
 const store = useAiModelsStore()
+const modelApi = useModelListApi()
 const { models, activeModel, embeddingModel, ollamaConnected, statusLoading } = storeToRefs(store)
 const { refreshModels, setActiveModel, setEmbeddingModel, deleteModel } = store
 
@@ -32,10 +38,7 @@ const ollamaUptime = ref<number | null>(null)
 
 async function loadAiStatus() {
   try {
-    const { data } = await apiClient.get<{
-      ollama_version: string
-      ollama_uptime_seconds: number | null
-    }>('/ai/status')
+    const data = await modelApi.fetchStatus()
     ollamaVersion.value = data.ollama_version || ''
     ollamaUptime.value = data.ollama_uptime_seconds ?? null
   } catch {
@@ -78,21 +81,6 @@ const gpuChartOption = computed<EChartsOption | null>(() => {
 })
 
 // ===== 模型详情 =====
-interface ModelDetail {
-  name: string
-  parameter_size: string
-  quantization_level: string
-  family: string
-  families: string[]
-  format: string
-  parent_model: string
-  architecture: string
-  template: string
-  system: string
-  license: string
-  modelfile: string
-  parameters: string
-}
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const modelDetail = ref<ModelDetail | null>(null)
@@ -102,10 +90,7 @@ async function openDetail(name: string) {
   detailLoading.value = true
   modelDetail.value = null
   try {
-    const { data } = await apiClient.get<ModelDetail>(
-      `/ai/models/${encodeURIComponent(name)}/detail`,
-    )
-    modelDetail.value = data
+    modelDetail.value = await modelApi.fetchDetail(name)
   } catch (e) {
     Message.error(getApiErrorMessage(e, '获取模型详情失败'))
     detailVisible.value = false
@@ -134,9 +119,7 @@ async function doCopyModel() {
   }
   copying.value = true
   try {
-    const { data } = await apiClient.post<{ message: string }>('/ai/models/copy', null, {
-      params: { source: copySource.value, destination: dest },
-    })
+    const data = await modelApi.copyModel(copySource.value, dest)
     Message.success(data.message || '复制完成')
     copyVisible.value = false
     refreshModels()
@@ -148,7 +131,6 @@ async function doCopyModel() {
 }
 
 // ===== 下载队列（多模型排队下载 + 更新复用） =====
-type DownloadEndpoint = 'pull' | 'update'
 interface DownloadTask {
   key: number
   name: string
@@ -215,11 +197,7 @@ async function runDownload(task: DownloadTask) {
   task.status = 'running'
   task.statusText = '连接中...'
   task.controller = new AbortController()
-  const baseUrl = apiClient.defaults.baseURL || '/api'
-  const url =
-    task.endpoint === 'update'
-      ? `${baseUrl}/ai/models/${encodeURIComponent(task.name)}/update`
-      : `${baseUrl}/ai/models/pull?model_name=${encodeURIComponent(task.name)}`
+  const url = modelApi.downloadUrl(task.name, task.endpoint)
 
   try {
     const response = await fetch(url, { method: 'POST', signal: task.controller.signal })
@@ -319,16 +297,6 @@ const downloadSize = computed(() => {
 })
 
 // ===== 模型统计 =====
-interface ModelStat {
-  model_name: string
-  total_analyses: number
-  success_count: number
-  failure_count: number
-  success_rate: number
-  avg_time_ms: number
-  avg_tags: number
-  last_used: string
-}
 const modelStats = ref<ModelStat[]>([])
 const totalAnalyses = ref(0)
 const statsLoading = ref(false)
@@ -336,9 +304,7 @@ const statsLoading = ref(false)
 async function loadModelStats() {
   statsLoading.value = true
   try {
-    const { data } = await apiClient.get<{ models: ModelStat[]; total_analyses: number }>(
-      '/ai/model-stats',
-    )
+    const data = await modelApi.fetchStats()
     modelStats.value = data.models
     totalAnalyses.value = data.total_analyses
   } catch {
