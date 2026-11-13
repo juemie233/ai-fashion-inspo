@@ -4,6 +4,8 @@
  * 统一在这里收敛，页面不再各自手写 `a-tag` 颜色映射。
  */
 
+import { STATUS_BG } from '@/utils/colors'
+
 export type StatusTagKind = 'task' | 'quality' | 'ai' | 'analysis' | 'trash'
 
 export interface StatusMeta {
@@ -17,13 +19,13 @@ export interface StatusMeta {
 }
 
 /** 质量审核状态 */
-export const QUALITY_STATUS_META: Record<string, StatusMeta> = {
-  approved: { label: '已通过', color: 'green', bg: 'rgba(0, 180, 42, 0.85)' },
-  pending: { label: '待审核', color: 'orange', bg: 'rgba(160, 160, 160, 0.8)' },
+const QUALITY_STATUS_META: Record<string, StatusMeta> = {
+  approved: { label: '已通过', color: 'green', bg: STATUS_BG.success },
+  pending: { label: '待审核', color: 'orange', bg: STATUS_BG.neutral },
   rejected: {
     label: '已拒绝',
     color: 'red',
-    bg: 'rgba(208, 48, 80, 0.85)',
+    bg: STATUS_BG.danger,
     title: 'AI 判定为非穿搭内容',
   },
 }
@@ -35,39 +37,39 @@ export function aiStatusMeta(isAi: boolean, sourceType?: string | null): StatusM
     return {
       label: 'AI 生成',
       color: 'purple',
-      bg: 'rgba(122, 80, 200, 0.9)',
+      bg: STATUS_BG.ai,
       title: '由本地出图生成（不是真实拍摄）',
     }
   }
   return {
     label: '疑似 AI',
     color: 'purple',
-    bg: 'rgba(122, 80, 200, 0.9)',
+    bg: STATUS_BG.ai,
     title: '疑似 AI 生成，请人工确认',
   }
 }
 
 /** AI 分析状态 */
 export function analysisStatusMeta(status: string | null | undefined): StatusMeta {
-  if (status === 'none') return { label: '尚未分析', color: 'gray', bg: 'rgba(160,160,160,.8)' }
+  if (status === 'none') return { label: '尚未分析', color: 'gray', bg: STATUS_BG.neutral }
   if (status === 'analyzing') {
-    return { label: '分析中...', color: 'arcoblue', bg: 'rgba(22,93,255,.8)' }
+    return { label: '分析中...', color: 'arcoblue', bg: STATUS_BG.primary }
   }
-  if (status === 'error') return { label: '分析失败', color: 'red', bg: 'rgba(208,48,80,.85)' }
+  if (status === 'error') return { label: '分析失败', color: 'red', bg: STATUS_BG.danger }
   if (status === 'done' || status === 'success') {
-    return { label: '已分析', color: 'green', bg: 'rgba(0,180,42,.85)' }
+    return { label: '已分析', color: 'green', bg: STATUS_BG.success }
   }
-  return { label: status || '未知', color: 'gray', bg: 'rgba(160,160,160,.8)' }
+  return { label: status || '未知', color: 'gray', bg: STATUS_BG.neutral }
 }
 
 /** 垃圾桶删除原因 */
 const TRASH_REASON_META: Record<string, StatusMeta> = {
-  质量差: { label: '质量差', color: 'red', bg: 'rgba(208,48,80,.85)' },
-  重复: { label: '重复', color: 'orange', bg: 'rgba(255,125,0,.85)' },
-  不喜欢: { label: '不喜欢', color: 'gray', bg: 'rgba(160,160,160,.8)' },
-  隐私: { label: '隐私', color: 'red', bg: 'rgba(208,48,80,.85)' },
-  AI生成: { label: 'AI生成', color: 'purple', bg: 'rgba(122,80,200,.9)' },
-  其他: { label: '其他', color: 'gray', bg: 'rgba(160,160,160,.8)' },
+  质量差: { label: '质量差', color: 'red', bg: STATUS_BG.danger },
+  重复: { label: '重复', color: 'orange', bg: STATUS_BG.warning },
+  不喜欢: { label: '不喜欢', color: 'gray', bg: STATUS_BG.neutral },
+  隐私: { label: '隐私', color: 'red', bg: STATUS_BG.danger },
+  AI生成: { label: 'AI生成', color: 'purple', bg: STATUS_BG.ai },
+  其他: { label: '其他', color: 'gray', bg: STATUS_BG.neutral },
 }
 
 export function trashReasonMeta(reason: string | null | undefined): StatusMeta {
@@ -75,7 +77,7 @@ export function trashReasonMeta(reason: string | null | undefined): StatusMeta {
     TRASH_REASON_META[reason || ''] || {
       label: reason || '未知',
       color: 'gray',
-      bg: 'rgba(160,160,160,.8)',
+      bg: STATUS_BG.neutral,
     }
   )
 }
@@ -85,7 +87,7 @@ export function qualityStatusMeta(status: string | null | undefined): StatusMeta
     QUALITY_STATUS_META[status || ''] || {
       label: status || '未知',
       color: 'gray',
-      bg: 'rgba(160,160,160,.8)',
+      bg: STATUS_BG.neutral,
     }
   )
 }

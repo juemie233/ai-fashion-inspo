@@ -10,6 +10,7 @@
  */
 
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
+import { MASK_COLORS } from '@/utils/colors'
 
 /** 卡片状态（决定遮罩图标与配色） */
 export type ThumbStatus = 'pending' | 'uploading' | 'done' | 'failed' | 'duplicate'
@@ -52,7 +53,18 @@ withDefaults(
 </script>
 
 <template>
-  <div class="thumb-card" :class="[`status-${status}`, { 'is-selected': selected }]">
+  <div
+    class="thumb-card"
+    :class="[`status-${status}`, { 'is-selected': selected }]"
+    :style="{
+      '--mask-uploading': MASK_COLORS.uploading,
+      '--mask-done': MASK_COLORS.done,
+      '--mask-failed': MASK_COLORS.failed,
+      '--mask-duplicate': MASK_COLORS.duplicate,
+      '--selected-border': MASK_COLORS.selectedBorder,
+      '--selected-fill': MASK_COLORS.selectedFill,
+    }"
+  >
     <!-- 媒体区（按 aspectRatio 撑高，overflow 裁剪） -->
     <div class="thumb-media-area" :style="{ aspectRatio }">
       <HoverImagePreview v-if="hoverSrc" :large-src="hoverSrc" class="thumb-media">
@@ -73,7 +85,12 @@ withDefaults(
 
       <!-- 状态遮罩 -->
       <div v-if="status === 'uploading'" class="thumb-mask uploading">
-        <a-progress v-if="progress !== undefined" type="circle" :percent="progress / 100" :width="44" />
+        <a-progress
+          v-if="progress !== undefined"
+          type="circle"
+          :percent="progress / 100"
+          :width="44"
+        />
         <a-spin v-else :size="18" />
       </div>
       <div v-else-if="status === 'done'" class="thumb-mask done">✓</div>
@@ -139,23 +156,23 @@ withDefaults(
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.55);
+  background: var(--mask-uploading);
   font-size: 28px;
   font-weight: 700;
 }
 
 .thumb-mask.done {
-  background: rgba(16, 185, 129, 0.35);
+  background: var(--mask-done);
   color: #065f46;
 }
 
 .thumb-mask.failed {
-  background: rgba(239, 68, 68, 0.35);
+  background: var(--mask-failed);
   color: #7f1d1d;
 }
 
 .thumb-mask.dup {
-  background: rgba(250, 204, 21, 0.4);
+  background: var(--mask-duplicate);
   color: #713f12;
 }
 
@@ -163,8 +180,8 @@ withDefaults(
 .thumb-selected-mask {
   position: absolute;
   inset: 0;
-  border: 2px solid #3b82f6;
-  background: rgba(59, 130, 246, 0.15);
+  border: 2px solid var(--selected-border);
+  background: var(--selected-fill);
   pointer-events: none;
 }
 </style>

@@ -23,6 +23,7 @@ import { autoTitleRun, candidateUrl, fetchRun } from '@/api/generate'
 import { fetchInspirations } from '@/api/inspirations'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import GenerateImportDialog from '@/components/generate/GenerateImportDialog.vue'
+import GenerateHistoryStatsToolbar from '@/components/generate/GenerateHistoryStatsToolbar.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -579,105 +580,30 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
 </script>
 
 <template>
-  <div class="gen-result-head">
-    <span class="gen-label" style="margin: 0">生成历史</span>
-    <span class="gen-history-hint">点行首箭头看完整描述、参数与全部候选图</span>
-    <a-button size="mini" :loading="loading" @click="emit('refresh')">刷新</a-button>
-  </div>
-
-  <!-- 统计卡（近 30 天）：入库率按「张」算，耗时含排队等待 -->
-  <div v-if="stats" class="gh-stats">
-    <div class="gh-stat">
-      <b>{{ stats.runs }}</b
-      ><span>批次</span>
-    </div>
-    <div class="gh-stat">
-      <b>{{ stats.images }}</b
-      ><span>出图</span>
-    </div>
-    <div class="gh-stat">
-      <b>{{ stats.imported_images }}</b
-      ><span>入库（{{ importRateText }}）</span>
-    </div>
-    <div class="gh-stat">
-      <b>{{ stats.avg_duration_s }}s</b><span>均耗时</span>
-    </div>
-    <div class="gh-stat">
-      <b>{{ failureRateText }}</b
-      ><span>失败率</span>
-    </div>
-    <div v-if="topModels.length" class="gh-stat-models">
-      <div v-for="item in topModels" :key="item.model_key" class="gh-stat-model">
-        <span class="gh-stat-model-name">{{ modelLabel(item.model_key) }}</span>
-        <span class="gh-stat-model-bar">
-          <i :style="{ width: `${Math.round((item.runs / maxModelRuns) * 100)}%` }" />
-        </span>
-        <span class="gh-stat-model-num">{{ item.runs }} 批</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- 筛选工具栏：全部走后端参数（total 与 items 同口径，分页才不会飘） -->
-  <div class="gh-toolbar">
-    <a-select
-      :model-value="filters.model_key || ''"
-      :options="modelOptions"
-      size="mini"
-      style="width: 170px"
-      @update:model-value="patchFilters({ model_key: String($event) || undefined })"
-    />
-    <a-select
-      :model-value="filters.status || ''"
-      :options="statusOptions"
-      size="mini"
-      style="width: 120px"
-      @update:model-value="patchFilters({ status: String($event) || undefined })"
-    />
-    <a-checkbox
-      :model-value="Boolean(filters.has_imported)"
-      @update:model-value="patchFilters({ has_imported: Boolean($event) || undefined })"
-    >
-      只看已入库
-    </a-checkbox>
-    <a-range-picker
-      :model-value="dateRange"
-      size="mini"
-      style="width: 216px"
-      value-format="YYYY-MM-DD"
-      @change="onDateRangeChange"
-    />
-    <a-input
-      v-model="keyword"
-      size="mini"
-      placeholder="搜描述 / 负面词"
-      allow-clear
-      style="width: 180px"
-    />
-    <a-button v-if="filtered" size="mini" type="text" @click="emit('update:filters', {})">
-      清空筛选
-    </a-button>
-    <!-- 参考素材筛选的可见反馈（从展开行点参考图进来） -->
-    <a-tag
-      v-if="filters.reference_id"
-      size="small"
-      closable
-      @close="patchFilters({ reference_id: undefined })"
-    >
-      只看这张参考图（{{ String(filters.reference_id).slice(0, 8) }}…）
-    </a-tag>
-    <!-- 导出当前筛选结果（C2）：走接口拿真文件名，且带上筛选条件 -->
-    <a-dropdown>
-      <a-button size="mini" style="margin-left: auto">导出</a-button>
-      <template #content>
-        <a-doption @click="emit('export', 'csv')">导出 CSV（Excel 可直接打开）</a-doption>
-        <a-doption @click="emit('export', 'json')">导出 JSON</a-doption>
-      </template>
-    </a-dropdown>
-    <a-button size="mini" type="primary" :disabled="!canCompare" @click="submitCompare">
-      对比这两批{{ comparePicked.length ? `（${comparePicked.length}/2）` : '' }}
-    </a-button>
-    <span class="gen-history-hint">共 {{ total }} 条</span>
-  </div>
+  <GenerateHistoryStatsToolbar
+    :stats="stats || null"
+    :import-rate-text="importRateText"
+    :failure-rate-text="failureRateText"
+    :top-models="topModels"
+    :max-model-runs="maxModelRuns"
+    :model-label="modelLabel"
+    :filters="filters"
+    :model-options="modelOptions"
+    :status-options="statusOptions"
+    :date-range="dateRange"
+    :keyword="keyword"
+    :filtered="filtered"
+    :can-compare="canCompare"
+    :compare-count="comparePicked.length"
+    :total="total"
+    :loading="loading"
+    @refresh="emit('refresh')"
+    @update:filters="emit('update:filters', $event)"
+    @date-change="onDateRangeChange"
+    @update:keyword="keyword = $event"
+    @export="(fmt: 'csv' | 'json') => emit('export', fmt)"
+    @compare="submitCompare"
+  />
 
   <div v-if="!history.length" class="gen-empty">
     {{ filtered ? '没有符合筛选条件的生成记录。' : '还没有生成记录。' }}
@@ -1037,290 +963,4 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
   />
 </template>
 
-<style scoped>
-/* 下面 .gen-label / .gen-result-head / .gen-hint 在视图里另有一份：
-   生成结果卡与参数面板也要用，scoped 样式不能跨组件继承，故各自保留。 */
-.gen-label {
-  font-size: 13px;
-  font-weight: 600;
-  margin: 12px 0 6px;
-}
-.gen-result-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.gen-history-hint {
-  flex: 1;
-  margin-left: 8px;
-  color: #8a8f99;
-  font-size: 12px;
-}
-.gen-model-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-.gen-status-count {
-  margin-left: 6px;
-  color: #8a8f99;
-  font-size: 12px;
-  white-space: nowrap;
-}
-.gen-empty {
-  color: #8a8f99;
-  font-size: 13px;
-  padding: 24px 0;
-  text-align: center;
-}
-/* 展开行：描述按原样保留换行（提示词里常有分句换行） */
-.ghd {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px 12px 10px;
-}
-.ghd-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.ghd-label {
-  flex: 0 0 76px;
-  color: #86909c;
-  font-size: 12px;
-  line-height: 20px;
-}
-.ghd-text {
-  flex: 1;
-  min-width: 0;
-  color: #1d2129;
-  font-size: 13px;
-  line-height: 20px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.ghd-error {
-  color: #f53f3f;
-}
-.ghd-params {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.ghd-chip {
-  padding: 0 6px;
-  border-radius: 3px;
-  background: #f2f3f5;
-  color: #4e5969;
-  font-size: 12px;
-  line-height: 20px;
-}
-.ghd-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  color: #86909c;
-  font-size: 12px;
-}
-
-/* ── P1：统计卡 / 收藏星标 / 标题与备注 / 保留期 ── */
-.gh-stats {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 18px;
-  margin: 8px 0 10px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: #f7f8fa;
-}
-
-.gh-stat {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  font-size: 12px;
-  color: #86909c;
-}
-
-.gh-stat b {
-  font-size: 16px;
-  color: #1d2129;
-}
-
-.gh-stat-models {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 240px;
-}
-
-.gh-stat-model {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #4e5969;
-}
-
-.gh-stat-model-name {
-  width: 110px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.gh-stat-model-bar {
-  flex: 1;
-  height: 6px;
-  border-radius: 3px;
-  background: #e5e6eb;
-  overflow: hidden;
-}
-
-.gh-stat-model-bar i {
-  display: block;
-  height: 100%;
-  background: rgb(var(--primary-5));
-}
-
-.gh-star {
-  color: #c9cdd4;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.gh-star.is-on {
-  color: #ff7d00;
-}
-
-.gh-title {
-  color: #1d2129;
-  font-size: 13px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.gh-note {
-  margin-top: 2px;
-  color: #86909c;
-  font-size: 12px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.gh-retention {
-  color: #86909c;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.gh-retention.is-gone {
-  color: #f53f3f;
-}
-
-/* 参考素材：小方图，点击 = 按这张参考图筛选 */
-.ghd-refs {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.ghd-ref {
-  padding: 0;
-  border: 1px solid var(--color-border-2);
-  border-radius: 4px;
-  overflow: hidden;
-  background: none;
-  cursor: pointer;
-  line-height: 0;
-}
-
-.ghd-ref:hover {
-  border-color: rgb(var(--primary-5));
-}
-
-.ghd-ref img {
-  width: 44px;
-  height: 44px;
-  object-fit: cover;
-  display: block;
-}
-
-.gh-meta-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.gh-meta-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-/* ── 缩略图 / 展开行候选图 ──
-   这两个块此前没有尺寸约束（图片按 256px/1024px 原尺寸撑开），补上统一尺寸；
-   cursor: zoom-in 提示「鼠标移上去可以放大预览」。 */
-.gh-thumbs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.gh-thumb {
-  display: block;
-  width: 56px;
-  height: 56px;
-  object-fit: cover;
-  border-radius: 4px;
-  cursor: zoom-in;
-  background: var(--color-fill-3);
-}
-
-.ghd-cand-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.ghd-cand {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 132px;
-}
-
-.ghd-cand img {
-  display: block;
-  width: 132px;
-  height: 132px;
-  object-fit: cover;
-  border-radius: 6px;
-  cursor: zoom-in;
-  background: var(--color-fill-3);
-}
-
-.ghd-cand.is-imported {
-  opacity: 0.6;
-}
-
-.ghd-cand .arco-checkbox {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  padding: 2px;
-  border-radius: 4px;
-  background: rgb(255 255 255 / 85%);
-}
-</style>
+<style scoped src="./GenerateHistoryTable.css"></style>

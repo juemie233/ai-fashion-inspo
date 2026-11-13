@@ -29,7 +29,7 @@ export interface ModelStat {
   last_used: string
 }
 
-export interface AiStatus {
+interface AiStatus {
   ollama_version: string
   ollama_uptime_seconds: number | null
 }

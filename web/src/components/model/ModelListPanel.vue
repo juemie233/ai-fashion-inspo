@@ -14,6 +14,7 @@ import {
 } from '@/composables/useModelListApi'
 import { useNotification } from '@/composables/useNotification'
 import { useGpuMonitor } from '@/composables/useGpuMonitor'
+import { CHART_COLORS } from '@/utils/colors'
 import { useAiModelsStore, type OllamaModel } from '@/stores/aiModels'
 import {
   formatBytes,
@@ -65,7 +66,7 @@ const gpuChartOption = computed<EChartsOption | null>(() => {
     grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: points.map((p) => p.time), axisLabel: { fontSize: 10 } },
-    yAxis: { type: 'value', name: 'MB', splitLine: { lineStyle: { color: '#eee' } } },
+    yAxis: { type: 'value', name: 'MB', splitLine: { lineStyle: { color: CHART_COLORS.grid } } },
     series: [
       {
         name: '已用显存',
@@ -73,8 +74,8 @@ const gpuChartOption = computed<EChartsOption | null>(() => {
         smooth: true,
         showSymbol: false,
         data: points.map((p) => p.used_mb),
-        itemStyle: { color: '#2a78d6' },
-        areaStyle: { opacity: 0.12 },
+        itemStyle: { color: CHART_COLORS.primary },
+        areaStyle: { opacity: CHART_COLORS.areaOpacity },
       },
     ],
   }

@@ -1,0 +1,225 @@
+/* 下面 .gen-label / .gen-result-head / .gen-hint 在视图里另有一份：
+   生成结果卡与参数面板也要用，scoped 样式不能跨组件继承，故各自保留。 */
+.gen-label {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+.gen-result-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.gen-history-hint {
+  flex: 1;
+  margin-left: 8px;
+  color: #8a8f99;
+  font-size: 12px;
+}
+.gen-model-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.gen-status-count {
+  margin-left: 6px;
+  color: #8a8f99;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.gen-empty {
+  color: #8a8f99;
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
+}
+/* 展开行：描述按原样保留换行（提示词里常有分句换行） */
+.ghd {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px 10px;
+}
+.ghd-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ghd-label {
+  flex: 0 0 76px;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 20px;
+}
+.ghd-text {
+  flex: 1;
+  min-width: 0;
+  color: #1d2129;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ghd-error {
+  color: #f53f3f;
+}
+.ghd-params {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ghd-chip {
+  padding: 0 6px;
+  border-radius: 3px;
+  background: #f2f3f5;
+  color: #4e5969;
+  font-size: 12px;
+  line-height: 20px;
+}
+.ghd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #86909c;
+  font-size: 12px;
+}
+
+/* ── P1：统计卡 / 收藏星标 / 标题与备注 / 保留期 ── */
+.gh-star {
+  color: #c9cdd4;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.gh-star.is-on {
+  color: #ff7d00;
+}
+
+.gh-title {
+  color: #1d2129;
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gh-note {
+  margin-top: 2px;
+  color: #86909c;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gh-retention {
+  color: #86909c;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.gh-retention.is-gone {
+  color: #f53f3f;
+}
+
+/* 参考素材：小方图，点击 = 按这张参考图筛选 */
+.ghd-refs {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ghd-ref {
+  padding: 0;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  overflow: hidden;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.ghd-ref:hover {
+  border-color: rgb(var(--primary-5));
+}
+
+.ghd-ref img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  display: block;
+}
+
+.gh-meta-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gh-meta-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ── 缩略图 / 展开行候选图 ──
+   这两个块此前没有尺寸约束（图片按 256px/1024px 原尺寸撑开），补上统一尺寸；
+   cursor: zoom-in 提示「鼠标移上去可以放大预览」。 */
+.gh-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.gh-thumb {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: zoom-in;
+  background: var(--color-fill-3);
+}
+
+.ghd-cand-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ghd-cand {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 132px;
+}
+
+.ghd-cand img {
+  display: block;
+  width: 132px;
+  height: 132px;
+  object-fit: cover;
+  border-radius: 6px;
+  cursor: zoom-in;
+  background: var(--color-fill-3);
+}
+
+.ghd-cand.is-imported {
+  opacity: 0.6;
+}
+
+.ghd-cand .arco-checkbox {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 85%);
+}

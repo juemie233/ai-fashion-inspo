@@ -14,7 +14,7 @@ import {
 
 export type { NearDuplicateFile, NearDuplicateGroup, NearDuplicateResult }
 
-export interface PhashBackfillTask {
+interface PhashBackfillTask {
   status: string
   progress: number
   done: number
@@ -22,7 +22,7 @@ export interface PhashBackfillTask {
   result: { complete?: boolean; unhashable?: number; missing?: number } | null
 }
 
-export interface BatchDeleteResult {
+interface BatchDeleteResult {
   message: string
   task_id: number
 }

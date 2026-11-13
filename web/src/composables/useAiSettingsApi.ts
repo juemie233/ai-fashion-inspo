@@ -45,18 +45,18 @@ export interface ModelConfigOverviewItem {
   prompt_length: number
 }
 
-export interface PromptData {
+interface PromptData {
   prompt: string
   length: number
 }
 
-export interface BioPromptData {
+interface BioPromptData {
   prompt: string
   default: string
   length: number
 }
 
-export interface ResetData {
+interface ResetData {
   message?: string
   snapshot?: string | null
 }

@@ -9,7 +9,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 const root = path.resolve(import.meta.dirname, '../..')
@@ -57,13 +57,44 @@ try {
 }
 
 const current = new Set()
+
+// ts-prune 不解析 .vue：只在 SFC 里被使用的导出会被误报为死代码（本轮新增的
+// composable / 常量就是这种）。扫描 SFC 文本做一次「是否在 Vue 文件里出现过」的
+// 兜底；真正的零引用 Vue 组件由 check-web-unused-components.mjs 单独负责。
+function walkVue(dir, files = []) {
+  for (const name of readdirSync(dir)) {
+    const full = path.join(dir, name)
+    const stat = statSync(full)
+    if (stat.isDirectory()) {
+      if (name === 'node_modules') continue
+      walkVue(full, files)
+    } else if (name.endsWith('.vue')) {
+      files.push(full)
+    }
+  }
+  return files
+}
+
+const vueSource = walkVue(path.join(root, 'web/src'))
+  .map((file) => readFileSync(file, 'utf8'))
+  .join('\n')
+
+function usedInVue(symbol) {
+  const name = symbol.replace(/\s+\(used in module\)$/, '').trim()
+  if (!name) return false
+  // ts-prune 的符号是 identifier；用边界判断，避免 symbol 里出现正则元字符
+  return new RegExp(`(^|[^A-Za-z0-9_$])${name}([^A-Za-z0-9_$]|$)`).test(vueSource)
+}
+
 for (const line of raw.split('\n')) {
   const s = line.trim()
   if (!s || s.startsWith('npm ')) continue
   const m = s.match(/^(.*):(\d+) - (.*)$/)
   if (!m) continue
   // 不含行号：插入代码会让后续行号整体位移，行号不能当标识
-  current.add(`${cut(m[1])} - ${m[3]}`)
+  const symbol = m[3]
+  if (usedInVue(symbol)) continue
+  current.add(`${cut(m[1])} - ${symbol}`)
 }
 
 const added = [...current].filter((l) => !baseline.has(l)).sort()

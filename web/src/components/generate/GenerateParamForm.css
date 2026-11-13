@@ -1,0 +1,294 @@
+/* 云端多姿态：横向卡片列表 */
+.gen-pose-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* 姿势参考卡片：缩略图 + 名称/角度（选中后显示，避免只留一个 id） */
+.gen-pose {
+  margin: 4px 0 10px;
+}
+
+.gen-pose-card {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+}
+
+.gen-pose-card img {
+  width: 64px;
+  height: 86px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+}
+
+.gen-pose-name {
+  color: var(--color-text-1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 下面 .gen-alert / .gen-hint / .gen-label 三条在视图里另有一份：
+   它们同时被环境提示、结果区与历史表用到，scoped 样式不能跨组件继承，故各自保留。 */
+.gen-alert {
+  margin-bottom: 12px;
+}
+
+/* 已选参考缩略图条：一行铺开，超出可横向滑动（10 张参考也不会把描述框挤下去） */
+.gen-ref-strip {
+  margin: 4px 0 10px;
+}
+
+.gen-ref-strip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.gen-label--inline {
+  margin-bottom: 0;
+}
+
+.gen-ref-thumbs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.gen-ref-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--color-fill-2);
+  cursor: zoom-in;
+}
+
+.gen-ref-thumb:hover {
+  border-color: rgb(var(--primary-5));
+}
+
+.gen-ref-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.gen-ref-thumb-index {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 60%);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+.gen-model-loading {
+  padding: 4px 0 10px;
+}
+/* 紧贴在档位选择器下面的风险提示，不要额外的下边距把表单撑开 */
+.gen-alert--tight {
+  margin: 8px 0 0;
+}
+.gen-form {
+  display: flex;
+  flex-direction: column;
+}
+/* 分区标题：左侧一条主色竖线，长表单里一眼能看出「现在在哪一段」 */
+.gen-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 16px 0 8px;
+  padding-left: 8px;
+  border-left: 3px solid rgb(var(--primary-6));
+}
+.gen-section-head:first-child {
+  margin-top: 0;
+}
+.gen-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
+  white-space: nowrap;
+}
+/* 档位卡片：2×2 网格，按「本地 / 云端」分组；用户按任务标题选，不用记模型名 */
+.gen-models {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+.gen-model-group {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #8a8f99;
+}
+.gen-model-card {
+  display: block;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-fill-1);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.gen-model-card:hover {
+  border-color: rgb(var(--primary-5));
+}
+.gen-model-card.arco-radio-checked {
+  border-color: rgb(var(--primary-6));
+  background: rgb(var(--primary-1));
+}
+.gen-model-card :deep(.arco-radio-label) {
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+.gen-model-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.gen-model-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
+}
+.gen-model-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #8a8f99;
+  white-space: nowrap;
+}
+.gen-model-state.is-ready {
+  color: rgb(var(--green-6));
+}
+.gen-model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.gen-model-card-name {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-2);
+}
+.gen-model-card-desc {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #8a8f99;
+}
+.gen-model-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+/* 高级参数默认收起，避免首屏被尺寸/步数/seed/负向撑满 */
+.gen-advanced {
+  margin-top: 16px;
+}
+.gen-advanced :deep(.arco-collapse-item-header) {
+  padding-left: 0;
+}
+.gen-advanced :deep(.arco-collapse-item-content-box) {
+  padding-left: 0;
+  padding-right: 0;
+}
+.gen-hint {
+  color: #8a8f99;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.gen-label {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+.gen-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.gen-row--multi {
+  flex-wrap: wrap;
+}
+/* 提交栏贴在面板底部：长表单滚动时不用再翻到底找「生成」 */
+.gen-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 0 4px;
+  background: var(--color-bg-2, #fff);
+  border-top: 1px solid var(--color-border-2);
+}
+.gen-actions-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.gen-actions-mode {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
+}
+.gen-actions-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+@media (max-width: 480px) {
+  .gen-models {
+    grid-template-columns: 1fr;
+  }
+}
+.gen-preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.gen-preset-tag {
+  cursor: pointer;
+}

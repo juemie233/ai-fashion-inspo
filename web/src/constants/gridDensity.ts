@@ -14,7 +14,7 @@ export const GRID_DENSITY_OPTIONS: Array<{ label: string; value: GridDensity }> 
 ]
 
 /** MasonryGrid：视口宽度上限 -> 列数（从窄到宽） */
-export interface MasonryBreakpoint {
+interface MasonryBreakpoint {
   max: number
   cols: number
 }
