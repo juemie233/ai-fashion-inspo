@@ -15,6 +15,7 @@ import { computed, ref, watch } from 'vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import { updateRating, toggleFavorite } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
+import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import PersonDetailHeader from '@/components/person/detail/PersonDetailHeader.vue'
 import PersonStyleProfile from '@/components/person/detail/PersonStyleProfile.vue'
@@ -46,6 +47,10 @@ const {
   page,
   pageSize,
   itemsLoading,
+  trashModalOpen,
+  trashTargetId,
+  openTrashModal,
+  confirmTrash,
   lightboxOpen,
   lightboxPaths,
   photoSets,
@@ -372,6 +377,7 @@ watch(
           @open-work="openWorkLightbox"
           @rate="handleItemRate"
           @toggle-favorite="handleItemFavorite"
+          @delete-inspiration="openTrashModal"
           @enter-unbind="enterUnbindMode"
           @exit-unbind="exitUnbindMode"
           @toggle-select="toggleUnbindSelect"
@@ -415,6 +421,13 @@ watch(
         />
       </template>
     </a-spin>
+
+    <!-- 单张素材移入垃圾桶：原因选择复用素材库 TrashReasonModal -->
+    <TrashReasonModal
+      v-model:visible="trashModalOpen"
+      :count="trashTargetId ? 1 : 0"
+      @confirm="confirmTrash"
+    />
 
     <!-- 随机浏览：每次随机抽一张（可回看上一张），与「全屏浏览当前页」互补 -->
     <PersonRandomBrowseModal

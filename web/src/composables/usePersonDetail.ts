@@ -15,7 +15,7 @@ import {
   type PersonInspirationFilters,
   type PersonWorkGroup,
 } from '@/api/persons'
-import type { InspirationOut } from '@/api/inspirations'
+import { moveToTrash, type InspirationOut, type TrashReason } from '@/api/inspirations'
 import type { PersonDetail, PersonType } from '@shared/types/person'
 
 /** 人物详情页素材分页大小 */
@@ -157,6 +157,34 @@ export function usePersonDetail() {
       detail.value = await api.value.fetchDetail(personId.value)
     } catch {
       // 统计刷新失败不阻塞
+    }
+  }
+
+  // ── 单张素材删除（博主详情卡片「删除小按钮」）──
+  /** 待删除素材 id（null = 未选择） */
+  const trashTargetId = ref<string | null>(null)
+  /** 删除原因弹窗开关（复用素材库 TrashReasonModal） */
+  const trashModalOpen = ref(false)
+
+  function openTrashModal(id: string) {
+    trashTargetId.value = id
+    trashModalOpen.value = true
+  }
+
+  /** 确认移入垃圾桶：按所选原因删除并刷新当前页与头部统计 */
+  async function confirmTrash(reason: TrashReason) {
+    const id = trashTargetId.value
+    if (!id) return
+    trashModalOpen.value = false
+    trashTargetId.value = null
+    try {
+      await moveToTrash(id, reason)
+      Message.success('已移入垃圾桶')
+      // 当前页最后一张：回退一页，避免删完停在空页
+      if (page.value > 1 && items.value.length === 1) page.value -= 1
+      await Promise.all([loadInspirations(), refreshDetailStats()])
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '删除失败'))
     }
   }
 
@@ -368,6 +396,8 @@ export function usePersonDetail() {
     viewMode.value = 'list'
     works.value = []
     worksPage.value = 1
+    trashModalOpen.value = false
+    trashTargetId.value = null
     loadDetail()
   })
 
@@ -398,6 +428,10 @@ export function usePersonDetail() {
     page,
     pageSize: PAGE_SIZE,
     itemsLoading,
+    trashModalOpen,
+    trashTargetId,
+    openTrashModal,
+    confirmTrash,
     lightboxOpen,
     toInspirationOut,
     lightboxPaths,

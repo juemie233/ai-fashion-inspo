@@ -28,6 +28,8 @@ const props = withDefaults(
     showActions?: boolean
     /** 是否显示收藏按钮：与 showActions 独立，人物/合集详情可只开收藏 */
     showFavorite?: boolean
+    /** 是否显示删除按钮：与 showActions 独立，人物详情可按张移入垃圾桶 */
+    showDelete?: boolean
     /** 收藏请求进行中：禁用按钮防快速连点 */
     favoritePending?: boolean
     /** 是否显示五星评分；与 showActions 独立，人物详情「全部」视图只开评分 */
@@ -45,6 +47,7 @@ const props = withDefaults(
     badge: '',
     showActions: false,
     showFavorite: false,
+    showDelete: false,
     favoritePending: false,
     showRating: true,
     selectable: false,
@@ -156,11 +159,14 @@ function openDetail() {
         <IconEye :size="14" />
       </div>
 
-      <!-- 悬浮操作层：showActions=false 时可只保留评分/收藏（人物/合集详情） -->
-      <div v-if="showActions !== false || showRating || showFavorite" class="card-overlay">
-        <template v-if="showActions !== false">
+      <!-- 悬浮操作层：showActions=false 时可只保留评分/收藏/删除（人物/合集详情） -->
+      <div
+        v-if="showActions !== false || showRating || showFavorite || showDelete"
+        class="card-overlay"
+      >
+        <template v-if="showActions !== false || showDelete">
           <a-button
-            v-if="item.quality_status === 'rejected'"
+            v-if="showActions !== false && item.quality_status === 'rejected'"
             size="mini"
             shape="circle"
             type="text"
@@ -173,11 +179,20 @@ function openDetail() {
             </template>
           </a-button>
           <a-popconfirm
+            v-if="!item.deleted_at"
             content="移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复"
             :ok-button-props="{ status: 'danger' }"
             @ok="emit('delete')"
           >
-            <a-button size="mini" shape="circle" type="text" status="danger" @click.stop>
+            <a-button
+              class="card-delete"
+              size="mini"
+              shape="circle"
+              type="text"
+              status="danger"
+              title="移入垃圾桶"
+              @click.stop
+            >
               <template #icon>
                 <IconDelete :size="14" />
               </template>

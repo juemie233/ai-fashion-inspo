@@ -26,6 +26,8 @@ const props = withDefaults(
     showActions?: boolean
     /** 是否显示收藏按钮（与 showActions 独立，人物/合集详情可只开收藏） */
     showFavorite?: boolean
+    /** 是否显示删除按钮（与 showActions 独立，人物详情可按张移入垃圾桶） */
+    showDelete?: boolean
     /** 收藏请求中的素材 id：禁用按钮防连点 */
     pendingFavoriteIds?: ReadonlySet<string>
     /** 是否显示卡片五星评分（人物详情「全部」视图只开评分） */
@@ -46,6 +48,7 @@ const props = withDefaults(
     emptyText: '',
     showActions: false,
     showFavorite: false,
+    showDelete: false,
     pendingFavoriteIds: undefined,
     showRating: true,
     hoverZoom: false,
@@ -145,6 +148,7 @@ watch(
             :selected="selectable ? selectedIds?.has(item.id) : false"
             :show-actions="showActions !== false"
             :show-favorite="showFavorite"
+            :show-delete="showDelete"
             :favorite-pending="pendingFavoriteIds?.has(item.id) ?? false"
             :show-rating="showRating"
             :hover-zoom="hoverZoom"

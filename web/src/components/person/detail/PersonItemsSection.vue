@@ -60,6 +60,8 @@ const emit = defineEmits<{
   (e: 'rate', id: string, value: number): void
   /** 博主详情「全部」视图：单张作品收藏 */
   (e: 'toggle-favorite', id: string): void
+  /** 博主详情「全部」视图：单张作品移入垃圾桶（由视图弹原因选择框） */
+  (e: 'delete-inspiration', id: string): void
   (e: 'enter-unbind'): void
   (e: 'exit-unbind'): void
   (e: 'toggle-select', id: string): void
@@ -322,6 +324,7 @@ function openWork(work: PersonWorkGroup): void {
         :show-actions="false"
         :show-rating="kind === 'blogger' && !unbindMode"
         :show-favorite="kind === 'blogger' && !unbindMode"
+        :show-delete="kind === 'blogger' && !unbindMode"
         :pending-favorite-ids="favoritePendingIds"
         :selectable="kind === 'blogger' && unbindMode"
         :selected-ids="unbindSelectedIds"
@@ -331,6 +334,7 @@ function openWork(work: PersonWorkGroup): void {
         "
         @rate="(id: string, value: number) => emit('rate', id, value)"
         @toggle-favorite="(id: string) => emit('toggle-favorite', id)"
+        @delete="(id: string) => emit('delete-inspiration', id)"
         @toggle-select="(id: string) => emit('toggle-select', id)"
       />
       <a-pagination
