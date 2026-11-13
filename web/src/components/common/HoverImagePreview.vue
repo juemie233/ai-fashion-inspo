@@ -13,12 +13,25 @@ import { onBeforeUnmount, ref } from 'vue'
 const props = withDefaults(
   defineProps<{
     /** 大图 URL（原图/清晰图，由父组件拼接完整地址） */
-    largeSrc: string
+    largeSrc?: string
+    /** 可选：直接渲染小图；不传时使用默认插槽作为触发内容 */
+    src?: string
+    /** 小图 alt（src 模式使用） */
+    alt?: string
+    /** 小图 class（src 模式使用） */
+    imgClass?: string
     /** 停留时长（毫秒）：短暂停留才弹出，快速扫过不闪烁 */
     delay?: number
+    /** 触发区域按内容宽度（默认占满父容器）：表格缩略图等 flex 场景使用 */
+    inline?: boolean
   }>(),
   {
+    largeSrc: '',
+    src: '',
+    alt: '',
+    imgClass: '',
     delay: 250,
+    inline: false,
   },
 )
 
@@ -47,12 +60,18 @@ onBeforeUnmount(clear)
 </script>
 
 <template>
-  <div class="hover-preview-trigger" @mouseenter="start" @mouseleave="clear">
-    <slot />
+  <div
+    class="hover-preview-trigger"
+    :class="{ 'is-inline': inline }"
+    @mouseenter="start"
+    @mouseleave="clear"
+  >
+    <img v-if="src" :src="src" :alt="alt" :class="imgClass" loading="lazy" />
+    <slot v-else />
     <Teleport to="body">
       <div v-if="visible" class="hover-preview-layer">
         <div class="hover-preview-panel">
-          <img :src="largeSrc" alt="悬停大图预览" />
+          <img :src="largeSrc" alt="悬停大图预览" loading="lazy" />
         </div>
       </div>
     </Teleport>
@@ -63,6 +82,12 @@ onBeforeUnmount(clear)
 /* 触发区域：默认不干扰布局，具体尺寸/裁剪由父组件 class 控制（如 image-wrap） */
 .hover-preview-trigger {
   width: 100%;
+}
+
+/* 表格缩略图等 flex 场景：按内容宽度占位，避免每个预览各占满一行 */
+.hover-preview-trigger.is-inline {
+  display: inline-block;
+  width: auto;
 }
 
 /* 悬停大图预览：fixed 定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界 */

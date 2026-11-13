@@ -34,7 +34,7 @@ vi.mock('@/api/inspirations', async (importOriginal) => {
 
 import GenerateHistoryTable from '../GenerateHistoryTable.vue'
 import GenerateImportDialog from '../GenerateImportDialog.vue'
-import ImageHoverPreview from '@/components/common/ImageHoverPreview.vue'
+import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import type { GenerateStatus, GenerationRunBrief } from '@/api/generate'
 
 const LONG_PROMPT =
@@ -455,10 +455,10 @@ describe('生成历史表', () => {
     )
     await wrapper.vm.$nextTick()
 
-    const previews = wrapper.findAllComponents(ImageHoverPreview)
+    const previews = wrapper.findAllComponents(HoverImagePreview)
     expect(previews).toHaveLength(1)
     expect(previews[0].props('src')).toContain('?w=256')
-    expect(previews[0].props('previewSrc')).toContain('01_seed-1.png?w=1024')
+    expect(previews[0].props('largeSrc')).toContain('01_seed-1.png?w=1024')
 
     wrapper.unmount()
   })
@@ -538,7 +538,7 @@ describe('生成历史表', () => {
     // 列表行显示合并标识；重跑按钮不出现（组行不单独代表某一批）
     expect(wrapper.text()).toContain('多姿态 2')
     expect(wrapper.text()).not.toContain('同参重跑')
-    expect(wrapper.findAllComponents(ImageHoverPreview)).toHaveLength(2)
+    expect(wrapper.findAllComponents(HoverImagePreview)).toHaveLength(2)
 
     await expandFirstRow(wrapper)
     expect(mocks.fetchRun).toHaveBeenCalledWith(20)

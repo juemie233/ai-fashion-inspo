@@ -21,7 +21,7 @@ import type {
 } from '@/api/generate'
 import { autoTitleRun, candidateUrl, fetchRun } from '@/api/generate'
 import { fetchInspirations } from '@/api/inspirations'
-import ImageHoverPreview from '@/components/common/ImageHoverPreview.vue'
+import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import GenerateImportDialog from '@/components/generate/GenerateImportDialog.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -714,13 +714,15 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
         <template #cell="{ record }">
           <div v-if="record.candidates?.length" class="gh-thumbs">
             <!-- 悬停自动放大预览（大图走 ?w=1024 缩略图，不拉原图） -->
-            <image-hover-preview
+            <HoverImagePreview
               v-for="thumb in record.candidates"
               :key="`${thumb.run_id ?? record.id}:${thumb.filename}`"
               :src="thumb.thumb_url"
-              :preview-src="candidateUrl(thumb.run_id ?? record.id, thumb.filename, 1024)"
+              :large-src="candidateUrl(thumb.run_id ?? record.id, thumb.filename, 1024)"
               :alt="thumb.filename"
               img-class="gh-thumb"
+              :delay="120"
+              inline
             />
           </div>
           <span v-else-if="record.files_missing" class="gh-missing">图已清理</span>
@@ -932,10 +934,11 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
                   :class="{ 'is-imported': item.imported }"
                 >
                   <!-- 悬停自动放大预览（候选图原图较大，预览用 ?w=1024 缩略图） -->
-                  <image-hover-preview
+                  <HoverImagePreview
                     :src="item.url"
-                    :preview-src="candidateUrl(item.run_id ?? record.id, item.filename, 1024)"
+                    :large-src="candidateUrl(item.run_id ?? record.id, item.filename, 1024)"
                     :alt="item.filename"
+                    :delay="120"
                   />
                   <span class="ghd-cand-seed">{{ seedText(item.seed) }}</span>
                   <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>

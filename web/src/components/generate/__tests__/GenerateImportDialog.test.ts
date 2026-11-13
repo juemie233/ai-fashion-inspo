@@ -10,7 +10,7 @@ import { mount } from '@vue/test-utils'
 import ArcoVue from '@arco-design/web-vue'
 
 import GenerateImportDialog from '../GenerateImportDialog.vue'
-import ImageHoverPreview from '@/components/common/ImageHoverPreview.vue'
+import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import type { GenerationCandidate } from '@/api/generate'
 
 const ModalStub = {
@@ -100,11 +100,11 @@ describe('GenerateImportDialog', () => {
 
   it('图片带悬停放大组件：卡片 384、预览 1024', () => {
     const wrapper = mountDialog(CANDIDATES)
-    const previews = wrapper.findAllComponents(ImageHoverPreview)
+    const previews = wrapper.findAllComponents(HoverImagePreview)
 
     expect(previews).toHaveLength(3)
     expect(previews[0].props('src')).toContain('01_seed-1.png?w=384')
-    expect(previews[0].props('previewSrc')).toContain('01_seed-1.png?w=1024')
+    expect(previews[0].props('largeSrc')).toContain('01_seed-1.png?w=1024')
 
     wrapper.unmount()
   })

@@ -11,7 +11,7 @@
 
 import { computed, ref, watch } from 'vue'
 import { candidateUrl, type GenerationCandidate } from '@/api/generate'
-import ImageHoverPreview from '@/components/common/ImageHoverPreview.vue'
+import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -120,11 +120,12 @@ function confirm(): void {
         :class="{ 'is-imported': item.imported, 'is-selected': isSelected(item) }"
         @click="!item.imported && toggle(item)"
       >
-        <image-hover-preview
+        <HoverImagePreview
           :src="candidateUrl(candidateRunId(item), item.filename, 384)"
-          :preview-src="candidateUrl(candidateRunId(item), item.filename, 1024)"
+          :large-src="candidateUrl(candidateRunId(item), item.filename, 1024)"
           :alt="item.filename"
           img-class="gid-img"
+          :delay="120"
         />
         <span class="gid-seed">{{
           item.seed > 0 ? `seed ${item.seed}` : '无 seed（云端每次随机）'

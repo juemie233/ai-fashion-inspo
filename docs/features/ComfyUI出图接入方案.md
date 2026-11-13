@@ -869,7 +869,7 @@ python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jp
 
 | 项 | 实现 |
 | --- | --- |
-| 悬停放大 | 新增 `web/src/components/common/ImageHoverPreview.vue`：历史缩略图 / 展开行候选图 / 入库弹窗里的图，鼠标移上去右侧浮层显示大图；大图走候选图接口 `?w=1024`（后端 `ensure_thumbnail` 缓存到批次 `.thumbs/`），不拉 1.6~4 MB 原图，避免划一排图就卡顿 |
+| 悬停放大 | 复用 `web/src/components/common/HoverImagePreview.vue`（2026-11-13 合并原 `ImageHoverPreview`）：历史缩略图 / 展开行候选图 / 入库弹窗里的图，鼠标移上去浮层显示大图；大图走候选图接口 `?w=1024`（后端 `ensure_thumbnail` 缓存到批次 `.thumbs/`），不拉 1.6~4 MB 原图，避免划一排图就卡顿 |
 | 操作列入库 | 生成历史每行「操作」新增**入库**按钮（仅 `done` 且候选目录未清理的批次显示）：默认语义=**全部入库**——只有 1 张可入库候选时直接调确认入库接口；多张时打开选择弹窗 |
 | 多张选择弹窗 | 新增 `web/src/components/generate/GenerateImportDialog.vue`：**默认全选**未入库候选（已入库的只读、不可重复选），可逐张取消/全选/清空；确认后把选中的文件名回抛历史表 → 视图调用 `POST /generate/runs/{id}/confirm` 并刷新历史；弹窗内图片同样支持悬停放大 |
 | 与展开行入库的关系 | 展开行的「入库选中」保留（适合先逐张核对再勾选）；操作列的「入库」是快捷路径，两者最终都走同一个 `import-selected` 事件与确认入库接口，不会出现两套入库逻辑 |

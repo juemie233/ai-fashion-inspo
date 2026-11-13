@@ -2,12 +2,15 @@
 /** 操作审计日志：展示破坏性批量操作的留痕（时间/动作/数量/释放空间）。 */
 
 import { onMounted, ref } from 'vue'
-import { Message, type TableColumnData } from '@arco-design/web-vue'
+import type { TableColumnData } from '@arco-design/web-vue'
 import { fetchAuditLogs, type AuditLogItem } from '@/api/admin'
+import AsyncState from '@/components/common/AsyncState.vue'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { formatDate, formatSize, renderTimeCell } from '@/utils/format'
 
 const items = ref<AuditLogItem[]>([])
 const loading = ref(false)
+const error = ref<string | null>(null)
 
 /** 操作类型中文映射（与后端 record_audit_log 的 action 值全量对齐） */
 const ACTION_LABELS: Record<string, string> = {
@@ -72,10 +75,11 @@ const logColumns: TableColumnData[] = [
 
 async function load() {
   loading.value = true
+  error.value = null
   try {
     items.value = await fetchAuditLogs(50)
-  } catch {
-    Message.error('加载审计日志失败')
+  } catch (e) {
+    error.value = getApiErrorMessage(e, '加载审计日志失败')
     items.value = []
   } finally {
     loading.value = false
@@ -90,19 +94,24 @@ onMounted(load)
     <template #extra>
       <a-button size="mini" type="text" @click="load">刷新</a-button>
     </template>
-    <a-spin :loading="loading" style="display: block">
+    <AsyncState
+      :loading="loading"
+      :error="error"
+      :empty="items.length === 0"
+      empty-text="暂无破坏性操作记录"
+      loading-text="加载审计日志..."
+      @retry="load"
+    >
       <div class="audit-table-wrap">
         <a-table
-          v-if="items.length > 0"
           :columns="logColumns"
           :data="items"
           size="small"
           :bordered="false"
           :pagination="false"
         />
-        <div v-else-if="!loading" class="audit-empty">暂无破坏性操作记录</div>
       </div>
-    </a-spin>
+    </AsyncState>
   </a-card>
 </template>
 
@@ -111,11 +120,5 @@ onMounted(load)
 .audit-table-wrap {
   max-width: 760px;
   margin: 0 auto;
-}
-.audit-empty {
-  color: #999;
-  font-size: 13px;
-  text-align: center;
-  padding: 24px 0;
 }
 </style>

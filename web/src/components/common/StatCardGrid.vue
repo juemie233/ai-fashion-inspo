@@ -49,8 +49,16 @@ withDefaults(
 
 <template>
   <a-row :gutter="gutter" :style="{ marginBottom }">
-    <a-col v-for="item in items" :key="item.title" :flex="span ? undefined : 1" :span="span || undefined">
-      <a-card size="small" :style="item.highlight ? 'border-color: rgb(var(--primary-6))' : undefined">
+    <a-col
+      v-for="item in items"
+      :key="item.title"
+      :flex="span ? undefined : 1"
+      :span="span || undefined"
+    >
+      <a-card
+        size="small"
+        :style="item.highlight ? 'border-color: rgb(var(--primary-6))' : undefined"
+      >
         <a-statistic
           v-if="item.value !== undefined"
           :title="item.title"
@@ -63,7 +71,9 @@ withDefaults(
         </a-statistic>
         <div v-else class="stat-custom">
           <span class="stat-custom-title">{{ item.title }}</span>
-          <span class="stat-custom-value" :style="item.valueStyle">{{ item.text ?? '-' }}</span>
+          <span class="stat-custom-value" :style="item.valueStyle">{{
+            item.text || item.placeholder || '-'
+          }}</span>
         </div>
         <div v-if="item.note" class="stat-note">{{ item.note }}</div>
       </a-card>
