@@ -6,6 +6,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useTagsStore } from '@/stores/tags'
 import { useInspirationsStore } from '@/stores/inspirations'
+import type { GridDensity } from '@/constants/gridDensity'
 import {
   searchInspirations,
   vectorSearchText,
@@ -67,8 +68,8 @@ export function useSearch() {
   const favoriteOnly = ref(route.query.favorite === '1')
 
   // 密度
-  const density = ref<'compact' | 'standard' | 'comfortable'>(
-    (localStorage.getItem('search-density') as 'compact' | 'standard' | 'comfortable') || 'compact',
+  const density = ref<GridDensity>(
+    (localStorage.getItem('search-density') as GridDensity) || 'compact',
   )
 
   // ── 持久化分页大小 / 筛选面板可见性 / 密度：刷新或再次进入时保持上次选择 ──

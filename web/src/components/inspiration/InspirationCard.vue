@@ -13,6 +13,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 import CategoryTag from './CategoryTag.vue'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { openInspiration } from '@/utils/openInspiration'
 
@@ -102,6 +103,22 @@ function handleCardClick() {
   }
 }
 
+/** 卡片键盘操作：只在卡片自身获得焦点时响应，避免嵌套按钮的回车/空格冒泡触发打开详情 */
+function onCardKeydown(e: KeyboardEvent) {
+  if (e.target !== e.currentTarget) return
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    handleCardClick()
+  }
+}
+
+/** 读屏标签：区分「打开素材」与「勾选素材」两种语义 */
+const cardAriaLabel = computed(() => {
+  const kind = props.item.media_type === 'video' ? '视频' : '图片'
+  const author = props.item.source_author ? `，作者 ${props.item.source_author}` : ''
+  return props.selectable ? `选择${kind}素材${author}` : `打开${kind}素材${author}`
+})
+
 /** 浏览详情：选择模式下通过专用按钮进入详情页（阻止冒泡，不触发勾选切换） */
 function openDetail() {
   goToDetail()
@@ -109,7 +126,15 @@ function openDetail() {
 </script>
 
 <template>
-  <div class="card" @click="handleCardClick">
+  <div
+    class="card"
+    :role="selectable ? 'checkbox' : 'button'"
+    :aria-checked="selectable ? selected : undefined"
+    :aria-label="cardAriaLabel"
+    tabindex="0"
+    @click="handleCardClick"
+    @keydown="onCardKeydown"
+  >
     <!-- 缩略图 / 视频首帧 -->
     <div class="card-image">
       <!-- 悬停放大预览：复用通用 HoverImagePreview（仅图片素材，停留 2s 弹出原图大图） -->
@@ -155,7 +180,17 @@ function openDetail() {
       </div>
 
       <!-- 浏览详情按钮（选择模式下仍可进入详情页） -->
-      <div v-if="showViewButton" class="view-detail-btn" title="浏览详情" @click.stop="openDetail">
+      <div
+        v-if="showViewButton"
+        class="view-detail-btn"
+        role="button"
+        tabindex="0"
+        title="浏览详情"
+        aria-label="浏览详情"
+        @click.stop="openDetail"
+        @keydown.enter.stop.prevent="openDetail"
+        @keydown.space.stop.prevent="openDetail"
+      >
         <IconEye :size="14" />
       </div>
 
@@ -172,6 +207,7 @@ function openDetail() {
             type="text"
             status="success"
             title="标记为通过（翻案）"
+            aria-label="标记为通过"
             @click.stop="emit('approve')"
           >
             <template #icon>
@@ -191,6 +227,7 @@ function openDetail() {
               type="text"
               status="danger"
               title="移入垃圾桶"
+              aria-label="移入垃圾桶"
               @click.stop
             >
               <template #icon>
@@ -208,6 +245,7 @@ function openDetail() {
           :disabled="favoritePending"
           :loading="favoritePending"
           title="收藏/取消收藏"
+          :aria-label="item.is_favorite ? '取消收藏' : '收藏'"
           @click.stop="emit('toggleFavorite')"
         >
           <template #icon>
@@ -233,30 +271,32 @@ function openDetail() {
         {{ analysisStatusLabel() }}
       </div>
 
-      <!-- 质量审核状态 + 疑似 AI 标记（正交，可同时显示） -->
+      <!-- 质量审核状态 + 疑似 AI 标记（正交，可同时显示；文案/颜色统一走 StatusTag） -->
       <div v-if="item.quality_status !== 'approved' || item.is_ai_generated" class="quality-badges">
-        <div
+        <StatusTag
           v-if="item.quality_status === 'rejected'"
+          kind="quality"
+          :status="item.quality_status"
+          variant="badge"
           class="quality-badge rejected"
-          :title="item.quality_reason || 'AI 判定为非穿搭内容'"
-        >
-          已拒绝
-        </div>
-        <div v-else-if="item.quality_status === 'pending'" class="quality-badge pending">
-          待审核
-        </div>
+          :title="item.quality_reason || undefined"
+        />
+        <StatusTag
+          v-else-if="item.quality_status === 'pending'"
+          kind="quality"
+          :status="item.quality_status"
+          variant="badge"
+          class="quality-badge pending"
+        />
         <!-- 本地出图是**确定**的 AI 生成，不叫「疑似」；两者共用 is_ai_generated 这一个标记 -->
-        <div
+        <StatusTag
           v-if="item.is_ai_generated"
+          kind="ai"
+          status="ai"
+          :source-type="item.source_type"
+          variant="badge"
           class="quality-badge ai"
-          :title="
-            item.source_type === 'generated'
-              ? '由本地出图生成（不是真实拍摄）'
-              : '疑似 AI 生成，请人工确认'
-          "
-        >
-          {{ item.source_type === 'generated' ? 'AI 生成' : '疑似 AI' }}
-        </div>
+        />
       </div>
     </div>
 
@@ -468,19 +508,6 @@ function openDetail() {
 }
 .quality-badge {
   width: fit-content;
-  color: #fff;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-.quality-badge.rejected {
-  background: rgba(208, 48, 80, 0.85);
-}
-.quality-badge.pending {
-  background: rgba(160, 160, 160, 0.8);
-}
-.quality-badge.ai {
-  background: rgba(122, 80, 200, 0.9);
 }
 
 .card-body {

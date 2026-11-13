@@ -16,6 +16,7 @@ import { useBatchSelection } from '@/composables/useBatchSelection'
 import { useInspirationFilters } from '@/composables/useInspirationFilters'
 import { useHomeActions } from '@/composables/useHomeActions'
 import { buildBrowseParams, storedBrowsePageSize, PAGE_SIZE_STORAGE_KEY } from '@/utils/browseQuery'
+import type { GridDensity } from '@/constants/gridDensity'
 
 const router = useRouter()
 const route = useRoute()
@@ -37,8 +38,6 @@ const {
 } = useBatchSelection()
 
 // ── 筛选状态（从 URL query 初始化）──
-
-type Density = 'compact' | 'standard' | 'comfortable'
 
 /** 筛选域（状态 + 选项 + setter）：视图自己只用其中一部分，另外整份传给筛选栏组件 */
 const filters = useInspirationFilters({
@@ -65,7 +64,9 @@ const {
   clearFocus,
 } = filters
 
-const density = ref<Density>((localStorage.getItem('masonry-density') as Density) || 'standard')
+const density = ref<GridDensity>(
+  (localStorage.getItem('masonry-density') as GridDensity) || 'standard',
+)
 
 const currentPage = ref(parseInt(route.query.page as string) || 1)
 // 每页数量同样持久化，避免刷新后重置（与排序/密度偏好行为一致）
@@ -147,7 +148,7 @@ function onFilterChange() {
   syncUrl()
 }
 
-function setDensity(d: Density) {
+function setDensity(d: GridDensity) {
   density.value = d
   localStorage.setItem('masonry-density', d)
 }

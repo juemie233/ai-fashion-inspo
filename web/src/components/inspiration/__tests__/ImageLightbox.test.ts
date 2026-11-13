@@ -28,6 +28,16 @@ afterEach(() => {
 })
 
 describe('ImageLightbox 图片 URL 解析', () => {
+  it('打开时暴露 dialog 语义与关闭/切换按钮的读屏标签', () => {
+    mountBox({ imagePaths: ['images/a.jpg', 'images/b.jpg'] })
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog?.getAttribute('aria-modal')).toBe('true')
+    expect(dialog?.getAttribute('aria-label')).toBe('图片预览')
+    expect(document.body.querySelector('[aria-label="关闭图片预览"]')).toBeTruthy()
+    expect(document.body.querySelector('[aria-label="下一张"]')).toBeTruthy()
+  })
+
   it('缺省给素材相对路径套上 /api/files 前缀', () => {
     mountBox({ imagePath: 'images/2026-10/a b.webp' })
     const img = document.body.querySelector('.lightbox-img')

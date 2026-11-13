@@ -10,7 +10,7 @@
  * 自建网格曾因为固定六列 + 网格项最小宽度而把容器撑出横向滚动条，故不再自绘布局。
  */
 
-import { h, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { useRouter } from 'vue-router'
 import { TRASH_REASON_OPTIONS, getFileUrl, type TrashReason } from '@/api/inspirations'
@@ -19,6 +19,8 @@ import { formatDate } from '@/utils/format'
 import DensityImageGrid from '@/components/common/DensityImageGrid.vue'
 import ThumbCard from '@/components/common/ThumbCard.vue'
 import LoadMoreBar from '@/components/common/LoadMoreBar.vue'
+import AsyncState from '@/components/common/AsyncState.vue'
+import { DENSITY_FIXED_COLUMNS, type GridDensity } from '@/constants/gridDensity'
 import { useF2Results, type F2ResultFilter, type F2ResultItem } from '@/composables/useF2Results'
 
 const props = defineProps<{ taskId: number }>()
@@ -28,12 +30,11 @@ const router = useRouter()
 const reason = ref<TrashReason>('质量差')
 
 /** 网格密度（v-model 给 DensityImageGrid）：与素材库/搜索页一样本地记住选择 */
-type DensityMode = 'compact' | 'standard' | 'comfortable'
 const DENSITY_STORAGE_KEY = 'f2-results-density'
 /** 列数规格：紧凑 6 / 标准 4 / 宽松 3（本面板图片偏大，默认「宽松」三张一行） */
-const GRID_COLUMNS = { compact: 6, standard: 4, comfortable: 3 }
-const density = ref<DensityMode>(
-  (localStorage.getItem(DENSITY_STORAGE_KEY) as DensityMode | null) ?? 'comfortable',
+const GRID_COLUMNS = DENSITY_FIXED_COLUMNS
+const density = ref<GridDensity>(
+  (localStorage.getItem(DENSITY_STORAGE_KEY) as GridDensity | null) ?? 'comfortable',
 )
 watch(density, (value) => localStorage.setItem(DENSITY_STORAGE_KEY, value))
 
@@ -47,6 +48,7 @@ const {
   filter,
   authorFilter,
   loading,
+  error,
   acting,
   selectedIds,
   selectedItems,
@@ -66,6 +68,13 @@ const {
   previewRollback,
   rollbackBatch,
 } = useF2Results()
+
+/** 空态文案：整批无结果 vs 当前筛选无结果 */
+const emptyText = computed(() =>
+  counts.value.total
+    ? '当前筛选下没有素材（换一个筛选口径看看）'
+    : '这批任务没有可浏览的结果（未落批次清单或未导入任何文件）',
+)
 
 // 打开面板即加载本批结果（任务 id 变化时重新拉取）
 watch(
@@ -207,138 +216,128 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
       />
     </div>
 
-    <a-spin :loading="loading" style="display: block">
-      <div v-if="!items.length && !loading" class="f2r-empty">
-        {{
-          counts.total
-            ? '当前筛选下没有素材（换一个筛选口径看看）'
-            : '这批任务没有可浏览的结果（未落批次清单或未导入任何文件）'
-        }}
-      </div>
-
+    <AsyncState
+      :loading="loading"
+      :error="error"
+      :empty="!items.length"
+      :empty-text="emptyText"
+      loading-text="加载本批素材..."
+      @retry="reload()"
+    >
       <!-- 图片浏览：网格容器与密度切换、缩略图卡、悬停大图全部走 common 公共组件。
            网格不做内部滚动（自适应列数 + 单元 min-width: 0），从根上避免横向滚动条 -->
-      <div v-else>
-        <DensityImageGrid v-model:density="density" :columns="GRID_COLUMNS">
-          <template #header-left>
-            <a-button size="mini" @click="selectAllLoaded">
-              {{ allLoadedSelected() ? '取消全选' : '全选已加载' }}
-            </a-button>
-            <span class="f2r-meta">已选 {{ selectedItems.length }}</span>
-            <a-select
-              v-model="reason"
-              :options="TRASH_REASON_OPTIONS"
-              size="mini"
-              style="width: 110px"
-            />
-            <a-popconfirm
-              :content="`确定把选中的 ${selectedLive.length} 个素材移入垃圾桶？（可在垃圾桶还原）`"
-              :disabled="selectedLive.length === 0"
-              @ok="trashSelected(reason)"
-            >
-              <a-button
-                size="mini"
-                type="outline"
-                status="warning"
-                :disabled="!selectedLive.length"
-                :loading="acting"
-              >
-                移入垃圾桶<template v-if="selectedLive.length"
-                  >（{{ selectedLive.length }}）</template
-                >
-              </a-button>
-            </a-popconfirm>
+      <DensityImageGrid v-model:density="density" :columns="GRID_COLUMNS">
+        <template #header-left>
+          <a-button size="mini" @click="selectAllLoaded">
+            {{ allLoadedSelected() ? '取消全选' : '全选已加载' }}
+          </a-button>
+          <span class="f2r-meta">已选 {{ selectedItems.length }}</span>
+          <a-select
+            v-model="reason"
+            :options="TRASH_REASON_OPTIONS"
+            size="mini"
+            style="width: 110px"
+          />
+          <a-popconfirm
+            :content="`确定把选中的 ${selectedLive.length} 个素材移入垃圾桶？（可在垃圾桶还原）`"
+            :disabled="selectedLive.length === 0"
+            @ok="trashSelected(reason)"
+          >
             <a-button
               size="mini"
               type="outline"
-              status="success"
-              :disabled="!selectedTrashed.length"
+              status="warning"
+              :disabled="!selectedLive.length"
               :loading="acting"
-              @click="restoreSelected"
             >
-              还原<template v-if="selectedTrashed.length"
-                >（{{ selectedTrashed.length }}）</template
+              移入垃圾桶<template v-if="selectedLive.length"
+                >（{{ selectedLive.length }}）</template
               >
             </a-button>
-            <a-popconfirm
-              content="彻底删除不可恢复（连同磁盘文件与向量），确定提交批量删除任务？"
-              :disabled="selectedItems.length === 0"
-              @ok="deleteSelected"
-            >
-              <a-button
-                size="mini"
-                type="outline"
-                status="danger"
-                :disabled="!selectedItems.length"
-                :loading="acting"
-              >
-                彻底删除<template v-if="selectedItems.length"
-                  >（{{ selectedItems.length }}）</template
-                >
-              </a-button>
-            </a-popconfirm>
-          </template>
-
-          <div
-            v-for="item in items"
-            :key="item.id"
-            class="f2r-cell"
-            @click="item.state !== 'gone' && toggleSelect(item.id)"
+          </a-popconfirm>
+          <a-button
+            size="mini"
+            type="outline"
+            status="success"
+            :disabled="!selectedTrashed.length"
+            :loading="acting"
+            @click="restoreSelected"
           >
-            <ThumbCard
-              v-if="item.state !== 'gone'"
-              :src="getFileUrl(item.thumbnail_path || item.file_path || '')"
-              :video-src="
-                item.media_type === 'video' && !item.thumbnail_path
-                  ? getFileUrl(item.file_path || '')
-                  : undefined
-              "
-              :alt="item.caption || item.author || 'f2 素材'"
-              :selected="selectedIds.has(item.id)"
-              :hover-src="previewSrc(item)"
+            还原<template v-if="selectedTrashed.length">（{{ selectedTrashed.length }}）</template>
+          </a-button>
+          <a-popconfirm
+            content="彻底删除不可恢复（连同磁盘文件与向量），确定提交批量删除任务？"
+            :disabled="selectedItems.length === 0"
+            @ok="deleteSelected"
+          >
+            <a-button
+              size="mini"
+              type="outline"
+              status="danger"
+              :disabled="!selectedItems.length"
+              :loading="acting"
             >
-              <template #extra>
-                <div class="f2r-check">
-                  <a-checkbox :model-value="selectedIds.has(item.id)" size="small" />
-                </div>
-                <a-tag
-                  v-if="stateTag(item)"
-                  class="f2r-tag"
-                  size="small"
-                  :color="stateTag(item)!.color"
-                >
-                  {{ stateTag(item)!.text }}
-                </a-tag>
-                <a-button
-                  class="f2r-open"
-                  size="mini"
-                  type="text"
-                  @click.stop="openDetail(item.id)"
-                >
-                  查看详情
-                </a-button>
-              </template>
-              <template #footer>
-                <div class="f2r-caption" :title="item.caption">
-                  <b>{{ item.author || '未知博主' }}</b> · {{ item.caption || '（无正文）' }}
-                </div>
-              </template>
-            </ThumbCard>
+              彻底删除<template v-if="selectedItems.length"
+                >（{{ selectedItems.length }}）</template
+              >
+            </a-button>
+          </a-popconfirm>
+        </template>
 
-            <!-- 已被彻底删除：保留占位以说明「本批导入过、现已不存在」 -->
-            <div v-else class="f2r-gone">
-              <div class="f2r-gone-mark">🗑️ 已彻底删除</div>
-              <div class="f2r-gone-meta">{{ item.author || '未知博主' }}</div>
-              <div class="f2r-gone-meta" :title="item.caption">
-                {{ item.caption || '（无正文）' }}
+        <div
+          v-for="item in items"
+          :key="item.id"
+          class="f2r-cell"
+          @click="item.state !== 'gone' && toggleSelect(item.id)"
+        >
+          <ThumbCard
+            v-if="item.state !== 'gone'"
+            :src="getFileUrl(item.thumbnail_path || item.file_path || '')"
+            :video-src="
+              item.media_type === 'video' && !item.thumbnail_path
+                ? getFileUrl(item.file_path || '')
+                : undefined
+            "
+            :alt="item.caption || item.author || 'f2 素材'"
+            :selected="selectedIds.has(item.id)"
+            :hover-src="previewSrc(item)"
+          >
+            <template #extra>
+              <div class="f2r-check">
+                <a-checkbox :model-value="selectedIds.has(item.id)" size="small" />
               </div>
+              <a-tag
+                v-if="stateTag(item)"
+                class="f2r-tag"
+                size="small"
+                :color="stateTag(item)!.color"
+              >
+                {{ stateTag(item)!.text }}
+              </a-tag>
+              <a-button class="f2r-open" size="mini" type="text" @click.stop="openDetail(item.id)">
+                查看详情
+              </a-button>
+            </template>
+            <template #footer>
+              <div class="f2r-caption" :title="item.caption">
+                <b>{{ item.author || '未知博主' }}</b> · {{ item.caption || '（无正文）' }}
+              </div>
+            </template>
+          </ThumbCard>
+
+          <!-- 已被彻底删除：保留占位以说明「本批导入过、现已不存在」 -->
+          <div v-else class="f2r-gone">
+            <div class="f2r-gone-mark">🗑️ 已彻底删除</div>
+            <div class="f2r-gone-meta">{{ item.author || '未知博主' }}</div>
+            <div class="f2r-gone-meta" :title="item.caption">
+              {{ item.caption || '（无正文）' }}
             </div>
           </div>
-        </DensityImageGrid>
-      </div>
+        </div>
+      </DensityImageGrid>
 
       <LoadMoreBar :loading="loading" :loaded="items.length" :total="total" @load-more="loadMore" />
-    </a-spin>
+    </AsyncState>
   </div>
 </template>
 
@@ -390,12 +389,6 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   gap: 10px;
   flex-wrap: wrap;
   margin-top: 10px;
-}
-.f2r-empty {
-  text-align: center;
-  color: #999;
-  padding: 32px 0;
-  font-size: 13px;
 }
 /* 网格单元：min-width: 0 允许收缩到轨道宽度以下，图片不会把网格撑宽 */
 .f2r-cell {

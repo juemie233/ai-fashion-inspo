@@ -5,6 +5,8 @@
  * 的「执行结果」类型分开放：这里只放**扫描候选**及其展示枚举）。
  */
 
+import type { GridDensity } from '@/constants/gridDensity'
+
 /** 扫描候选（后端 /admin/crop-phone-screenshots/scan 返回的一项） */
 export interface CropCandidate {
   id: string
@@ -28,5 +30,5 @@ export interface CropCandidate {
   created_at: string | null
 }
 
-/** 候选网格密度（紧凑/标准/宽松），偏好持久化，与素材库页面行为一致 */
-export type CropGridDensity = 'compact' | 'standard' | 'comfortable'
+/** 候选网格密度（紧凑/标准/宽松），复用全局网格密度类型 */
+export type CropGridDensity = GridDensity

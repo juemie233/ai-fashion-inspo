@@ -318,6 +318,7 @@ const columns: TableColumnData[] = [
     :loading="loading"
     :bordered="false"
     :pagination="false"
+    aria-label="任务列表"
   />
   <task-run-history-modal v-model:visible="historyVisible" :task="historyTask" />
 </template>

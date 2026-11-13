@@ -183,8 +183,8 @@ function confirmEdit() {
 </script>
 
 <template>
-  <div class="batch-bar">
-    <span class="batch-count">已选 {{ count }} 个</span>
+  <div class="batch-bar" role="toolbar" aria-label="批量操作">
+    <span class="batch-count" aria-live="polite">已选 {{ count }} 个</span>
     <a-button size="mini" @click="emit('favorite', true)">批量收藏</a-button>
     <a-button size="mini" @click="emit('favorite', false)">取消收藏</a-button>
     <a-button size="mini" @click="openTagModal">加标签</a-button>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 大图灯箱：支持多图左右切换、滚轮/按键/双击缩放、加载提示与 body 滚动锁定。 */
 
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
 
 const props = defineProps<{
@@ -201,6 +201,10 @@ function onImageLoad() {
 let prevBodyOverflow = ''
 /** 当前是否由本组件锁定了 body 滚动 */
 let bodyLocked = false
+/** 打开前的焦点元素：关闭时归还焦点，键盘/读屏用户不会丢失位置 */
+let previouslyFocused: HTMLElement | null = null
+/** 关闭按钮引用：打开时把焦点移入对话框 */
+const closeBtnRef = ref<HTMLButtonElement | null>(null)
 
 /** 键盘：Esc 关闭优先，左右箭头切换、+/- 缩放 */
 function onKeydown(e: KeyboardEvent) {
@@ -226,6 +230,7 @@ watch(
   (val) => {
     if (val) {
       // 打开：锁定 body 滚动，重置索引与缩放，标记图片为加载中
+      previouslyFocused = document.activeElement as HTMLElement | null
       bodyLocked = true
       prevBodyOverflow = document.body.style.overflow
       document.body.style.overflow = 'hidden'
@@ -234,12 +239,20 @@ watch(
       resetZoom()
       imageLoading.value = true
       document.addEventListener('keydown', onKeydown)
+      // Arco a-button 的模板 ref 是组件实例；Stub/真实场景都安全地取 DOM 再聚焦
+      void nextTick(() => {
+        const btn = closeBtnRef.value as unknown as { focus?: () => void; $el?: HTMLElement } | null
+        if (btn && typeof btn.focus === 'function') btn.focus()
+        else btn?.$el?.focus()
+      })
     } else {
       if (bodyLocked) {
         document.body.style.overflow = prevBodyOverflow
         bodyLocked = false
       }
       document.removeEventListener('keydown', onKeydown)
+      previouslyFocused?.focus?.()
+      previouslyFocused = null
     }
   },
   // 挂载时 show 即 true 也要生效：加 immediate 确保初始打开就锁定滚动并注册键盘监听
@@ -260,7 +273,14 @@ onUnmounted(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="lightbox-backdrop" @click="onBackdropClick">
+    <div
+      v-if="show"
+      class="lightbox-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="图片预览"
+      @click="onBackdropClick"
+    >
       <div class="lightbox-content" @click.stop>
         <!-- 图片 + 加载中提示 -->
         <div
@@ -295,14 +315,37 @@ onUnmounted(() => {
 
         <!-- 缩放控制 -->
         <div class="zoom-controls">
-          <a-button size="small" shape="circle" @click="zoomOut" title="缩小（-）">−</a-button>
+          <a-button
+            size="small"
+            shape="circle"
+            aria-label="缩小图片"
+            @click="zoomOut"
+            title="缩小（-）"
+            >−</a-button
+          >
           <span class="zoom-level">{{ Math.round(scale * 100) }}%</span>
-          <a-button size="small" shape="circle" @click="zoomIn" title="放大（+）">＋</a-button>
-          <a-button size="small" @click="resetZoom" title="重置缩放">重置</a-button>
+          <a-button
+            size="small"
+            shape="circle"
+            aria-label="放大图片"
+            @click="zoomIn"
+            title="放大（+）"
+            >＋</a-button
+          >
+          <a-button size="small" aria-label="重置缩放" @click="resetZoom" title="重置缩放"
+            >重置</a-button
+          >
         </div>
 
         <!-- 关闭按钮 -->
-        <a-button class="close-btn" shape="circle" size="large" @click="emit('close')">
+        <a-button
+          ref="closeBtnRef"
+          class="close-btn"
+          shape="circle"
+          size="large"
+          aria-label="关闭图片预览"
+          @click="emit('close')"
+        >
           ✕
         </a-button>
       </div>
@@ -313,6 +356,7 @@ onUnmounted(() => {
         class="nav-btn nav-prev"
         shape="circle"
         size="large"
+        aria-label="上一张"
         @click.stop="goPrev"
         >‹</a-button
       >
@@ -321,6 +365,7 @@ onUnmounted(() => {
         class="nav-btn nav-next"
         shape="circle"
         size="large"
+        aria-label="下一张"
         @click.stop="goNext"
         >›</a-button
       >

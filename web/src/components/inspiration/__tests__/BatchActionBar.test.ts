@@ -35,6 +35,15 @@ afterEach(() => {
 })
 
 describe('BatchActionBar 评分', () => {
+  it('操作栏暴露 toolbar 语义与选中数量播报', () => {
+    const wrapper = mountBar()
+    const bar = wrapper.find('.batch-bar')
+    expect(bar.attributes('role')).toBe('toolbar')
+    expect(bar.attributes('aria-label')).toBe('批量操作')
+    expect(wrapper.find('.batch-count').attributes('aria-live')).toBe('polite')
+    wrapper.unmount()
+  })
+
   it('进入批量模式不预载全部博主（懒加载）', async () => {
     bloggerMocks.fetchList.mockClear()
     const wrapper = mountBar()

@@ -38,11 +38,13 @@ function styleOf(wrapper: ReturnType<typeof mountGrid>): string {
 }
 
 describe('DensityImageGrid', () => {
-  it('不传 columns：只按密度类走 auto-fill 自适应，不写内联列数', () => {
+  it('不传 columns：列宽/间距由统一密度常量注入 CSS 变量', () => {
     const w = mountGrid({ density: 'standard' })
 
     expect(w.find('.density-grid-body').classes()).toContain('density-standard')
     expect(styleOf(w)).not.toContain('grid-template-columns')
+    expect(styleOf(w)).toContain('--density-min: 130px')
+    expect(styleOf(w)).toContain('--density-gap: 12px')
   })
 
   it('传 columns：每档按固定列数渲染（0 最小宽保证可收缩）', async () => {

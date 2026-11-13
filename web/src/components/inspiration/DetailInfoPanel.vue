@@ -11,6 +11,7 @@ import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 import FaceDetectionSection from '@/components/inspiration/FaceDetectionSection.vue'
 import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import { CATEGORY_LABELS } from '@/constants/tag'
 import { formatDate } from '@/utils/format'
 import { sourceLabel } from '@/utils/sourceLabel'
@@ -68,15 +69,6 @@ const outfitSelected = defineModel<string[]>('outfitSelected', { required: true 
 
 /** 标签分类中文名（A 类/…；未知分类回退原值） */
 const CAT_LABELS = CATEGORY_LABELS
-
-/** 分析状态文本 */
-function analysisStatusLabel(): string {
-  const status = props.detail.analysis_status
-  if (status === 'none') return '尚未分析'
-  if (status === 'analyzing') return '分析中...'
-  if (status === 'error') return '分析失败'
-  return '已分析'
-}
 
 /** 按类别分组标签（穿搭大标签已在顶部单独展示，这里跳过去重） */
 function groupedTags(): Record<string, InspirationTagOut[]> {
@@ -151,18 +143,7 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
           >
         </a-descriptions-item>
         <a-descriptions-item label="AI 分析">
-          <a-tag
-            size="small"
-            :color="
-              detail.analysis_status === 'done'
-                ? 'green'
-                : detail.analysis_status === 'error'
-                  ? 'red'
-                  : 'gray'
-            "
-          >
-            {{ analysisStatusLabel() }}
-          </a-tag>
+          <StatusTag kind="analysis" :status="detail.analysis_status || 'none'" />
           <a-button
             v-if="detail.analysis_status === 'error' || detail.analysis_status === 'none'"
             size="mini"

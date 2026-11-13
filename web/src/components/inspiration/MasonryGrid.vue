@@ -8,12 +8,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import InspirationCard from './InspirationCard.vue'
 import type { InspirationOut } from '@/api/inspirations'
+import { DEFAULT_GRID_DENSITY, masonryColumnCount, type GridDensity } from '@/constants/gridDensity'
 
 const props = withDefaults(
   defineProps<{
     items: InspirationOut[]
     loading?: boolean
-    density?: 'compact' | 'standard' | 'comfortable'
+    density?: GridDensity
     /** 卡片角标映射：素材 id -> 角标文本（如「92% 相似」），用于向量搜索结果 */
     badges?: Record<string, string>
     /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
@@ -41,7 +42,7 @@ const props = withDefaults(
   }>(),
   {
     loading: false,
-    density: 'standard',
+    density: DEFAULT_GRID_DENSITY,
     badges: () => ({}),
     selectable: false,
     selectedIds: undefined,
@@ -65,36 +66,12 @@ const emit = defineEmits<{
   (e: 'toggleSelect', id: string): void
 }>()
 
-// ── 响应式列数：断点与原 CSS columns 行为保持一致 ──
-
-/** 密度 -> (视口宽度上限, 列数) 列表，从窄到宽 */
-const DENSITY_BREAKPOINTS: Record<string, Array<{ max: number; cols: number }>> = {
-  compact: [
-    { max: 700, cols: 2 },
-    { max: 1000, cols: 3 },
-    { max: 1400, cols: 4 },
-    { max: Infinity, cols: 6 },
-  ],
-  standard: [
-    { max: 700, cols: 1 },
-    { max: 1000, cols: 2 },
-    { max: 1400, cols: 3 },
-    { max: Infinity, cols: 4 },
-  ],
-  comfortable: [
-    { max: 700, cols: 1 },
-    { max: 1000, cols: 2 },
-    { max: 1400, cols: 2 },
-    { max: Infinity, cols: 3 },
-  ],
-}
+// ── 响应式列数：断点统一由 constants/gridDensity 提供 ──
 
 const colCount = ref(4)
 
 function updateColCount() {
-  const width = window.innerWidth
-  const list = DENSITY_BREAKPOINTS[props.density || 'standard'] || DENSITY_BREAKPOINTS.standard
-  colCount.value = list.find((b) => width <= b.max)?.cols ?? 4
+  colCount.value = masonryColumnCount(props.density, window.innerWidth)
 }
 
 watch(() => props.density, updateColCount)
@@ -132,12 +109,18 @@ watch(
 
 <template>
   <div class="masonry-container">
-    <div class="masonry-grid" :class="'density-' + (density || 'standard')">
+    <div
+      class="masonry-grid"
+      :class="'density-' + (density || DEFAULT_GRID_DENSITY)"
+      role="list"
+      aria-label="素材列表"
+    >
       <div v-for="(col, ci) in columns" :key="ci" class="masonry-column">
         <div
           v-for="item in col"
           :key="item.id"
           class="masonry-cell"
+          role="listitem"
           :class="{ focused: focusedIds?.includes(item.id) }"
           :data-insp-id="item.id"
         >
@@ -164,7 +147,7 @@ watch(
     </div>
 
     <!-- 加载指示器 -->
-    <div v-if="loading" class="loading-bar">
+    <div v-if="loading" class="loading-bar" role="status" aria-label="素材加载中">
       <a-spin :size="14" />
       <span style="margin-left: 8px">加载中...</span>
     </div>

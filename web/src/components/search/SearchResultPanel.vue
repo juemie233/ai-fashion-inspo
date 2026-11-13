@@ -4,6 +4,7 @@
 import { computed } from 'vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import type { InspirationOut } from '@/api/inspirations'
+import type { GridDensity } from '@/constants/gridDensity'
 
 const props = defineProps<{
   /** 筛选面板是否可见 */
@@ -23,7 +24,7 @@ const props = defineProps<{
   /** 结果列表 */
   results: InspirationOut[]
   /** 卡片密度 */
-  density: 'compact' | 'standard' | 'comfortable'
+  density: GridDensity
   /** 向量搜索模式 */
   vectorMode: 'none' | 'semantic' | 'image'
   /** 向量搜索查询描述 */
@@ -46,7 +47,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:filterVisible', value: boolean): void
-  (e: 'update:density', value: 'compact' | 'standard' | 'comfortable'): void
+  (e: 'update:density', value: GridDensity): void
   (e: 'update:sortMode', value: string): void
   (e: 'copyLink'): void
   (e: 'exitVector'): void
@@ -69,7 +70,7 @@ const filterVisibleModel = computed({
 /** 卡片密度 */
 const densityModel = computed({
   get: () => props.density,
-  set: (v: 'compact' | 'standard' | 'comfortable') => emit('update:density', v),
+  set: (v: GridDensity) => emit('update:density', v),
 })
 
 /** 排序模式（变更即触发重新搜索） */

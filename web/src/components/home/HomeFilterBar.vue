@@ -12,22 +12,21 @@ import { Message } from '@arco-design/web-vue'
 import { useUiStore, type MaterialOpenMode } from '@/stores/ui'
 // 只用它的返回类型，不在这里实例化（实例在视图里，状态必须唯一）
 import { useInspirationFilters } from '@/composables/useInspirationFilters'
+import { GRID_DENSITY_OPTIONS, type GridDensity } from '@/constants/gridDensity'
 
 /** 筛选域返回值：状态 + 选项 + setter */
 type Filters = ReturnType<typeof useInspirationFilters>
-/** 瀑布流密度（与 MasonryGrid 的 density 取值一致） */
-type Density = 'compact' | 'standard' | 'comfortable'
 
 const props = defineProps<{
   /** 视图侧 useInspirationFilters() 的返回值 */
   filters: Filters
   /** 当前瀑布流密度 */
-  density: Density
+  density: GridDensity
 }>()
 
 const emit = defineEmits<{
   /** 点密度按钮：视图负责写入 localStorage（偏好持久化） */
-  (e: 'update:density', v: Density): void
+  (e: 'update:density', v: GridDensity): void
   /** 标签 / 评分 / 排序下拉变更：视图负责退出定位、回第一页并重载 */
   (e: 'change'): void
 }>()
@@ -57,11 +56,7 @@ const {
   setColorFilter,
 } = props.filters
 
-const densityOptions: { label: string; value: Density }[] = [
-  { label: '紧凑', value: 'compact' },
-  { label: '标准', value: 'standard' },
-  { label: '宽松', value: 'comfortable' },
-]
+const densityOptions = GRID_DENSITY_OPTIONS
 
 // ── 素材打开模式（全局偏好，直接读 ui store）──
 const uiStore = useUiStore()

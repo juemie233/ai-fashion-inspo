@@ -5,6 +5,8 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import ThumbCard from '@/components/common/ThumbCard.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
+import AsyncState from '@/components/common/AsyncState.vue'
 import {
   fetchTrash,
   restoreInspiration,
@@ -15,7 +17,7 @@ import {
   type TrashReason,
   type InspirationOut,
 } from '@/api/inspirations'
-import { formatSize, shortenText } from '@/utils/format'
+import { formatSize } from '@/utils/format'
 
 // ── 列表与分页 ──
 const items = ref<InspirationOut[]>([])
@@ -23,6 +25,7 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 50
 const loading = ref(false)
+const error = ref<string | null>(null)
 const reasonFilter = ref<TrashReason | ''>('')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
@@ -35,6 +38,7 @@ const autoCleanupEnabled = computed(() => retentionDays.value > 0)
 
 async function load() {
   loading.value = true
+  error.value = null
   try {
     const data = await fetchTrash({
       page: page.value,
@@ -46,8 +50,8 @@ async function load() {
     if (data.trash_retention_days) {
       retentionDays.value = data.trash_retention_days
     }
-  } catch {
-    Message.error('加载垃圾桶失败')
+  } catch (e) {
+    error.value = getApiErrorMessage(e, '加载垃圾桶失败')
   } finally {
     loading.value = false
   }
@@ -74,14 +78,6 @@ function daysRemaining(deletedAt?: string | null): string {
   const expire = deleted + retentionDays.value * 86400_000
   const days = Math.max(0, Math.ceil((expire - Date.now()) / 86400_000))
   return `${days} 天`
-}
-
-/** 移入来源与原因展示（紧凑）：手动移入 / 自动移动（质量审核）+ 删除原因 + 精简审核结论 */
-function trashSourceLabel(item: InspirationOut): string {
-  const reason = item.trash_reason || '未知'
-  const base = item.trash_source === 'auto' ? '自动移动' : '手动移入'
-  const note = item.quality_reason ? `：${shortenText(item.quality_reason)}` : ''
-  return `${base} · ${reason}${note}`
 }
 
 /** 完整原因文案（title 悬停提示用）：含未精简的审核结论全文 */
@@ -164,7 +160,9 @@ async function cleanExpired() {
     <div class="toolbar">
       <div class="toolbar-left">
         <a-tag status="warning" size="small">
-          共 {{ total }} 个垃圾桶素材{{ autoCleanupEnabled ? `（${retentionDays} 天后自动清理）` : '（不会自动清理）' }}
+          共 {{ total }} 个垃圾桶素材{{
+            autoCleanupEnabled ? `（${retentionDays} 天后自动清理）` : '（不会自动清理）'
+          }}
         </a-tag>
         <a-select
           v-model="reasonFilter"
@@ -184,29 +182,46 @@ async function cleanExpired() {
           <a-button size="small" :loading="cleaningExpired">清理过期</a-button>
         </a-popconfirm>
         <a-popconfirm content="彻底删除垃圾桶中全部素材并释放磁盘空间，不可恢复。" @ok="emptyAll">
-          <a-button size="small" type="secondary" status="danger" :loading="emptying">清空垃圾桶</a-button>
+          <a-button size="small" type="secondary" status="danger" :loading="emptying"
+            >清空垃圾桶</a-button
+          >
         </a-popconfirm>
       </div>
     </div>
 
     <!-- 列表 -->
-    <a-spin :loading="loading" style="display: block">
-      <div v-if="items.length === 0 && !loading" class="empty">
-        <a-empty description="垃圾桶是空的 🎉" />
-      </div>
-      <div v-else class="grid">
+    <AsyncState
+      :loading="loading"
+      :error="error"
+      :empty="items.length === 0"
+      empty-text="垃圾桶是空的 🎉"
+      loading-text="加载垃圾桶..."
+      @retry="load"
+    >
+      <div class="grid">
         <div v-for="item in items" :key="item.id" class="trash-card">
           <ThumbCard
             :src="getFileUrl(item.thumbnail_path || item.file_path)"
-            :video-src="item.media_type === 'video' && !item.thumbnail_path ? getFileUrl(item.file_path) : undefined"
+            :video-src="
+              item.media_type === 'video' && !item.thumbnail_path
+                ? getFileUrl(item.file_path)
+                : undefined
+            "
             :alt="item.source_author || '垃圾桶素材'"
           >
             <template #footer>
               <div class="meta">
-                <a-tag size="small" status="danger" :title="trashSourceFull(item)">
-                  {{ trashSourceLabel(item) }}
-                </a-tag>
-                <span v-if="autoCleanupEnabled" class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
+                <StatusTag
+                  kind="trash"
+                  :status="item.trash_reason || '未知'"
+                  :title="trashSourceFull(item)"
+                />
+                <span class="meta-source">
+                  {{ item.trash_source === 'auto' ? '自动移动' : '手动移入' }}
+                </span>
+                <span v-if="autoCleanupEnabled" class="days"
+                  >剩余 {{ daysRemaining(item.deleted_at) }}</span
+                >
               </div>
               <div class="actions">
                 <a-button
@@ -217,7 +232,10 @@ async function cleanExpired() {
                 >
                   恢复
                 </a-button>
-                <a-popconfirm content="彻底删除后不可恢复，确定继续？" @ok="permanentDelete(item.id)">
+                <a-popconfirm
+                  content="彻底删除后不可恢复，确定继续？"
+                  @ok="permanentDelete(item.id)"
+                >
                   <a-button
                     size="mini"
                     type="text"
@@ -232,16 +250,11 @@ async function cleanExpired() {
           </ThumbCard>
         </div>
       </div>
-    </a-spin>
+    </AsyncState>
 
     <!-- 分页 -->
     <div v-if="totalPages > 1" class="pagination-wrapper">
-      <a-pagination
-        :total="total"
-        :current="page"
-        :page-size="pageSize"
-        @change="onPageChange"
-      />
+      <a-pagination :total="total" :current="page" :page-size="pageSize" @change="onPageChange" />
     </div>
   </div>
 </template>
@@ -289,14 +302,16 @@ async function cleanExpired() {
   font-size: 12px;
   color: #999;
 }
+.meta-source {
+  font-size: 11px;
+  color: var(--color-text-3);
+  white-space: nowrap;
+}
 .actions {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 8px 10px 10px;
-}
-.empty {
-  padding: 48px 0;
 }
 .pagination-wrapper {
   display: flex;

@@ -19,8 +19,16 @@
  */
 
 import { computed } from 'vue'
+import {
+  DEFAULT_GRID_DENSITY,
+  DENSITY_GRID_GAP,
+  DENSITY_GRID_MIN_WIDTH,
+  GRID_DENSITY_OPTIONS,
+  type GridDensity,
+} from '@/constants/gridDensity'
 
-export type DensityMode = 'compact' | 'standard' | 'comfortable'
+/** 兼容旧调用方：密度类型已收敛到 constants/gridDensity */
+export type DensityMode = GridDensity
 
 /** 每档固定列数（传 columns 时使用） */
 export interface DensityColumns {
@@ -29,38 +37,34 @@ export interface DensityColumns {
   comfortable: number
 }
 
-/** 密度选项展示文案（与素材库页面一致） */
-const DENSITY_OPTIONS: { label: string; value: DensityMode }[] = [
-  { label: '紧凑', value: 'compact' },
-  { label: '标准', value: 'standard' },
-  { label: '宽松', value: 'comfortable' },
-]
-
 const props = withDefaults(
   defineProps<{
     /** 当前密度（v-model），默认为标准 */
-    density?: DensityMode
+    density?: GridDensity
     /** 是否展示密度切换按钮组，默认展示 */
     showSwitch?: boolean
     /** 固定列数覆盖（不传则按密度用 auto-fill 自适应列数） */
     columns?: DensityColumns
   }>(),
   {
-    density: 'standard',
+    density: DEFAULT_GRID_DENSITY,
     showSwitch: true,
     columns: undefined,
   },
 )
 
 const emit = defineEmits<{
-  (e: 'update:density', v: DensityMode): void
+  (e: 'update:density', v: GridDensity): void
 }>()
 
-/** 固定列数模式下由内联样式覆盖 grid-template-columns（间距仍用密度类） */
+/** 固定列数模式下由内联样式覆盖 grid-template-columns；自适应模式把列宽/间距交给 CSS 变量 */
 const bodyStyle = computed(() => {
   const count = props.columns?.[props.density]
-  if (!count) return undefined
-  return { gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }
+  if (count) return { gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }
+  return {
+    '--density-min': `${DENSITY_GRID_MIN_WIDTH[props.density]}px`,
+    '--density-gap': `${DENSITY_GRID_GAP[props.density]}px`,
+  }
 })
 </script>
 
@@ -71,7 +75,7 @@ const bodyStyle = computed(() => {
       <div class="density-grid-header-left"><slot name="header-left" /></div>
       <a-button-group v-if="showSwitch" size="mini">
         <a-button
-          v-for="d in DENSITY_OPTIONS"
+          v-for="d in GRID_DENSITY_OPTIONS"
           :key="d.value"
           :type="density === d.value ? 'primary' : 'secondary'"
           @click="emit('update:density', d.value)"
@@ -107,23 +111,10 @@ const bodyStyle = computed(() => {
   flex: 1;
 }
 
-/* 网格：auto-fill + minmax，随可用宽度自适应列数 */
+/* 网格：auto-fill + minmax，列宽/间距由 constants/gridDensity 通过 CSS 变量注入 */
 .density-grid-body {
   display: grid;
-}
-
-.density-grid-body.density-compact {
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-  gap: 6px;
-}
-
-.density-grid-body.density-standard {
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 12px;
-}
-
-.density-grid-body.density-comfortable {
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(var(--density-min, 130px), 1fr));
+  gap: var(--density-gap, 12px);
 }
 </style>

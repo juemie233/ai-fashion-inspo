@@ -101,6 +101,7 @@ export function useF2Results() {
   const filter = ref<F2ResultFilter>('all')
   const authorFilter = ref('')
   const loading = ref(false)
+  const error = ref<string | null>(null)
   const acting = ref(false)
   const selectedIds = ref<Set<string>>(new Set())
 
@@ -117,6 +118,7 @@ export function useF2Results() {
   /** 拉取结果：append 为真时追加（加载更多），否则替换（切任务/切筛选） */
   async function fetchResults(taskId: number, targetPage: number, append: boolean) {
     loading.value = true
+    error.value = null
     try {
       const { data } = await apiClient.get(`/scraper/f2-tasks/${taskId}/results`, {
         params: {
@@ -144,7 +146,7 @@ export function useF2Results() {
       page = targetPage
     } catch (e) {
       // 带上后端 detail（批次清单缺失 / 素材 ID 非法等都有可操作的原因）
-      Message.error(getApiErrorMessage(e, '加载本批素材失败'))
+      error.value = getApiErrorMessage(e, '加载本批素材失败')
     } finally {
       loading.value = false
     }
@@ -393,6 +395,7 @@ export function useF2Results() {
     filter,
     authorFilter,
     loading,
+    error,
     acting,
     selectedIds,
     hasMore,
