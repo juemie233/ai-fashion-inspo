@@ -57,6 +57,9 @@ jobs:
       - name: 死代码基线（ts-prune，只拦新增）
         run: node ../scripts/ci/check-web-dead-code.mjs
 
+      - name: Vue 组件零引用检查
+        run: node ../scripts/ci/check-web-unused-components.mjs
+
   mobile:
     name: 移动端（tsc / jest）
     runs-on: ubuntu-latest

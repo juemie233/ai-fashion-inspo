@@ -1,0 +1,6 @@
+# Vue 组件零引用检查白名单
+#
+# 仅登记「确实被使用，但静态解析不到」的组件，一行一个仓库相对路径，例如：
+# web/src/components/foo/DynamicWidget.vue
+#
+# 常规组件由 import / import() 引用即可，不要往这里加；白名单不是死代码仓库。

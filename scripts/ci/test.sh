@@ -15,7 +15,7 @@
 #    8. 前端 vue-tsc 类型检查
 #    9. 前端 vitest
 #   10. 前端 eslint（带 --max-warnings 棘轮：只能降不能升，当前 34）
-#   11. 前端死代码基线（ts-prune，只拦新增）
+#   11. 前端死代码基线（ts-prune，只拦新增）+ Vue 组件零引用检查
 #   12. 前端格式（只查本次改动文件；全库检查会因约 45 个历史文件永远为红）
 #   13. 移动端类型检查（tsc）+ 单元测试（jest-expo + RNTL，含覆盖率门槛）
 #   14. 子项目最低测试（browser-extension 纯函数；face-service 存储层，无 venv 时跳过）
@@ -100,9 +100,10 @@ cd "$ROOT/web"
 node node_modules/eslint/bin/eslint.js . --max-warnings 34
 
 echo ""
-echo "===== 11/14 前端死代码基线（ts-prune）====="
+echo "===== 11/14 前端死代码基线（ts-prune + Vue 组件引用）====="
 cd "$ROOT"
 node scripts/ci/check-web-dead-code.mjs
+node scripts/ci/check-web-unused-components.mjs
 
 echo ""
 echo "===== 12/14 前端格式（只查改动文件）====="
