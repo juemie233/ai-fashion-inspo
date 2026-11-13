@@ -19,7 +19,14 @@ const mocks = vi.hoisted(() => ({
   fetchFaceClusterGroups: vi.fn(),
   fetchFaceClusterTask: vi.fn(),
   runFaceCluster: vi.fn(),
-  pollTaskUntilIdle: vi.fn(async () => {}),
+  pollTaskUntilIdle: vi.fn(
+    async (_opts: {
+      taskId: number
+      intervalMs: number
+      refresh: () => Promise<unknown>
+      onIdle: () => unknown
+    }) => {},
+  ),
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   loadUnmatched: vi.fn(),
 }))
@@ -110,10 +117,7 @@ describe('useFaceClusterGroups', () => {
       const c = setup()
       await c.startCluster()
 
-      const opts = mocks.pollTaskUntilIdle.mock.calls.at(-1)![0] as {
-        refresh: () => Promise<unknown>
-        onIdle: () => unknown
-      }
+      const opts = mocks.pollTaskUntilIdle.mock.calls.at(-1)![0]
       await opts.refresh()
       expect(mocks.fetchFaceClusterTask).toHaveBeenCalled()
 
