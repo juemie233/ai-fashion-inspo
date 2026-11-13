@@ -17,11 +17,14 @@
    - failed：临时性问题（Cookie 缺失/登录墙/网络异常等）——不跳过，
      保留在缺失列表，问题解决后重试
 
-**抖音**（为缺失 IP 属地的博主回填）策略：直接读 f2 用户库
-（``douyin_users.db`` → ``user_info_web.ip_location``），**离线、零网络、零风控**：
+**抖音**（为资料卡缺失的博主回填 IP 属地与统计快照）策略：直接读 f2 用户库
+（``douyin_users.db`` → ``user_info_web.ip_location`` 与粉丝/关注/作品/获赞），
+**离线、零网络、零风控**：
 - 只按 ``bloggers.platform_user_id`` ↔ ``sec_user_id`` **精确匹配**（不猜昵称，
   避免把别人的属地写进来）；
 - **只补空缺**：已有 IP 属地一律不动（用户手填/CSV 导入的值优先）；
+- **不读取、不写入抖音签名**：简介只由用户手填或 AI 按标签生成，
+  「从抖音博主获取简介」的能力已下线（2026-11-13 产品决定）；
 - 三种「条件未具备」（缺 ID / f2 库里没有该账号 / f2 库该账号没有属地）**只记在本轮
   结果明细里，不写跳过表**——它们全都可重试（补 ID、让 f2 采一次主页），博主继续留在
   补全列表里等条件具备。跳过表从此只由小红书路径写入（缺小红书号 / 不在关注列表，
@@ -299,7 +302,7 @@ async def list_missing_profile_bloggers(
 
 
 def load_f2_profile_map() -> dict[str, dict]:
-    """读取 f2 用户库的账号资料（{sec_user_id: {nickname, ip_location}}）。
+    """读取 f2 用户库的账号资料（{sec_user_id: {nickname, ip_location, 统计数...}}）。
 
     阻塞式文件读取（sqlite 只读）：调用方放线程池；f2 目录/库缺失时返回空 dict，
     由调用方按「f2 用户库不可用」处理（全部记为跳过并说明原因）。
@@ -316,7 +319,7 @@ def load_f2_profile_map() -> dict[str, dict]:
 async def backfill_douyin_profile_from_f2(
     db: AsyncSession, blogger: Blogger, profiles: dict[str, dict]
 ) -> dict:
-    """按 f2 用户库回填单个抖音博主的**资料卡**（IP 属地 + 统计快照 + 签名）。
+    """按 f2 用户库回填单个抖音博主的**资料卡**（IP 属地 + 统计快照）。
 
     为什么合并成一个函数：详情页「补齐资料」与批量「一键补全」必须同一套口径
     （否则两处各写一份，日后必然漂移）。一次读库、一次写库，返回逐字段明细。
@@ -324,8 +327,8 @@ async def backfill_douyin_profile_from_f2(
     写入策略（都是「只补空缺 / 不猜」）：
 
     - ``ip_location``：已有值不动（手填 / CSV 导入优先）；
-    - ``bio``：**仅当为空**时写入抖音签名，并打 ``bio_source='f2_signature'``
-      ——用户手改过简介就不再覆盖（A4 要能看出简介来源）；
+    - **简介不参与回填**：不读抖音签名，也不写 ``bio``——简介只由用户手填或
+      AI 按标签生成（2026-11-13 产品决定，相关能力已删除）；
     - 四个统计数（粉丝 / 关注 / 作品 / 获赞）：总是刷新（同一个人不同时间差别很大，
       旧值没有保留价值），同时写 ``stats_synced_at`` 标记快照时间；
     - 统计列全为空的账号只写 IP，不把 ``stats_synced_at`` 打上（避免假装同步过）。
@@ -372,12 +375,6 @@ async def backfill_douyin_profile_from_f2(
         blogger.ip_location = ip_location
         updated.append("ip_location")
 
-    signature = str(profile.get("signature") or "").strip()
-    if signature and not (blogger.bio or "").strip():
-        blogger.bio = signature
-        blogger.bio_source = "f2_signature"
-        updated.append("bio")
-
     stats = {
         "follower_count": profile.get("follower_count"),
         "following_count": profile.get("following_count"),
@@ -398,7 +395,7 @@ async def backfill_douyin_profile_from_f2(
             **detail,
             "status": "skipped",
             "reason": (
-                "f2 用户库里该账号没有可回填的资料（既无 IP 属地也无统计/签名）："
+                "f2 用户库里该账号没有可回填的资料（既无 IP 属地也无统计数）："
                 "让 f2 采一次 TA 的主页后再跑即可"
             ),
         }
@@ -415,7 +412,7 @@ async def backfill_douyin_from_f2(
 ) -> dict:
     """按 f2 用户库回填单个抖音博主的 IP 属地（离线；只补空缺）。
 
-    ⚠ 新代码请用 :func:`backfill_douyin_profile_from_f2`（一次补齐 IP + 统计 + 签名）；
+    ⚠ 新代码请用 :func:`backfill_douyin_profile_from_f2`（一次补齐 IP + 统计快照）；
     本函数保留给只关心属地的既有调用方，行为不变。
 
     Args:

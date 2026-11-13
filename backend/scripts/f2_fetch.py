@@ -174,19 +174,21 @@ def load_f2_authors(f2_dir: Path) -> list[dict]:
 
 
 def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
-    """读取 f2 用户库里的账号资料，按 sec_user_id 索引（供离线回填博主 IP 属地）。
+    """读取 f2 用户库里的账号资料，按 sec_user_id 索引（供离线回填博主资料卡）。
 
     为什么能用：f2 的 ``user_info_web`` 存着它见过账号的 ``ip_location``
-    （形如「IP属地：浙江」）——素材库的 ``bloggers.ip_location`` 正好缺这块，
-    而这份数据**离线可读**（不联网、无风控），比重新去抓主页划算得多。
+    （形如「IP属地：浙江」）与粉丝/关注/作品/获赞快照——素材库的
+    ``bloggers`` 资料卡正好缺这块，而这份数据**离线可读**（不联网、无风控），
+    比重新去抓主页划算得多。**不读取主页签名**：简介回填能力已下线
+    （2026-11-13 产品决定），签名原文不再进入本系统。
 
     Args:
         f2_dir: f2 工作目录（其下有 douyin_users.db）。
 
     Returns:
-        {sec_user_id: {"nickname", "ip_location", "signature"?, "follower_count"?,
+        {sec_user_id: {"nickname", "ip_location", "follower_count"?,
         "following_count"?, "aweme_count"?, "total_favorited"?}}；
-        后四项仅在 f2 库有对应列时出现（详情页资料卡用，缺失即不展示）；
+        四个统计数仅在 f2 库有对应列时出现（详情页资料卡用，缺失即不展示）；
         ``ip_location`` 已按既有口径剥掉
         「IP属地：」前缀（复用 ``fetch_xhs_following.parse_ip_location``，全角/半角
         冒号都认，裸值不会误判）。库/表/列缺失时返回空 dict。
@@ -200,8 +202,7 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
     # 资料列随 f2 版本演进：先试完整列集，缺列再退回「只有昵称+属地」的最小集。
     # 为什么显式列名而不是 SELECT *：不同 f2 版本列序不同，按名取才不会默默错位。
     full_cols = (
-        "sec_user_id, nickname, ip_location, signature, "
-        "follower_count, following_count, aweme_count, total_favorited"
+        "sec_user_id, nickname, ip_location, follower_count, following_count, aweme_count, total_favorited"
     )
     minimal_cols = "sec_user_id, nickname, ip_location"
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -230,13 +231,12 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
             "ip_location": parse_ip_location(ip_location or ""),
         }
         if len(row) > 3:
-            # 完整列集：签名（简介原文）与三个统计数
-            profile["signature"] = (row[3] or "").strip()
+            # 完整列集：四个统计数
             for key, idx in (
-                ("follower_count", 4),
-                ("following_count", 5),
-                ("aweme_count", 6),
-                ("total_favorited", 7),
+                ("follower_count", 3),
+                ("following_count", 4),
+                ("aweme_count", 5),
+                ("total_favorited", 6),
             ):
                 value = row[idx]
                 profile[key] = int(value) if value not in (None, "") else None

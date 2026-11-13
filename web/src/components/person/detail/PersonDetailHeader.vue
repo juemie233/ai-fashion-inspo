@@ -36,7 +36,7 @@ defineEmits<{
   'avatar-changed': []
   /** 下载该博主的全部作品：由详情页提交 f2 任务 */
   'download-works': []
-  /** 补齐资料卡（f2 用户库：粉丝/作品/获赞 + 签名） */
+  /** 补齐资料卡（f2 用户库：IP 属地、粉丝/作品/获赞快照） */
   enrich: []
   /** 打开人脸注册候选弹窗 */
   'open-face-candidates': []
@@ -57,20 +57,6 @@ const hasStats = computed(
     props.detail.aweme_count != null ||
     props.detail.total_favorited != null,
 )
-
-/** 简介来源标签：抖音签名原文 / AI 生成 / 手填（null = 早期数据，不显示） */
-const bioSourceLabel = computed(() => {
-  switch (props.detail.bio_source) {
-    case 'f2_signature':
-      return { text: '抖音签名', color: 'gray' as const }
-    case 'ai':
-      return { text: 'AI 生成', color: 'arcoblue' as const }
-    case 'manual':
-      return { text: '手填', color: 'green' as const }
-    default:
-      return null
-  }
-})
 
 /** 最近素材时效：超过 90 天提示「疑似断更」（列表页用同一个判断口径） */
 const lastInspirationAge = computed(() => formatAge(props.detail.last_inspiration_at))
@@ -164,14 +150,6 @@ const dormant = computed(() => {
         <!-- 简介：有内容时以独立块展示（保留换行），无内容时给轻量占位，避免头像下方信息断裂 -->
         <div class="bio-block">
           <span class="bio-label">简介</span>
-          <a-tag
-            v-if="bioSourceLabel && detail.bio"
-            size="small"
-            :color="bioSourceLabel.color"
-            class="bio-source"
-          >
-            {{ bioSourceLabel.text }}
-          </a-tag>
           <a-typography-text v-if="detail.bio" class="bio-text" type="secondary">
             <span class="bio-text-inner">{{ detail.bio }}</span>
           </a-typography-text>
@@ -321,10 +299,6 @@ const dormant = computed(() => {
 
 .stat-age {
   color: var(--color-text-3);
-}
-
-.bio-source {
-  margin-left: 6px;
 }
 
 .bio-line {

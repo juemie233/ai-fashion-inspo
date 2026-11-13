@@ -61,8 +61,6 @@ export interface Person {
   following_count?: number | null;
   aweme_count?: number | null;
   total_favorited?: number | null;
-  /** 简介来源：f2_signature（抖音签名原文）/ ai / manual（null = 早期数据） */
-  bio_source?: "f2_signature" | "ai" | "manual" | string | null;
   /** 统计快照的采集时间 */
   stats_synced_at?: string | null;
   /** 人物组 ID（方案 B，仅博主）：null/undefined = 独立账号；非空 = 与组内其它账号为同一人 */

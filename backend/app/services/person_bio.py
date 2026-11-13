@@ -1,9 +1,11 @@
 """根据人物标签调用本地大模型生成简介。
 
 输入是该人物的风格画像（``PersonServiceBase.style_profile`` 的返回值），
-输出是纯文本简介。模型走 ``settings.ollama_vision_model``（与其他 AI 功能
-共用同一个本地 Ollama 实例），但调用 ``/api/chat`` 且关闭 think——这是
-纯文本任务，不需要图片，也不需要思考预算。
+输出是纯文本简介。**只使用标签画像与基础资料，不读取/不回填抖音签名**
+（2026-11-13 产品决定：从抖音博主获取简介的能力已下线）。
+模型走 ``settings.ollama_vision_model``（与其他 AI 功能共用同一个本地 Ollama
+实例），但调用 ``/api/chat`` 且关闭 think——这是纯文本任务，不需要图片，
+也不需要思考预算。
 """
 
 import logging
@@ -37,9 +39,6 @@ class PersonBioInputs(BaseModel):
     top_tags: list[dict] = []
     # style_profile 的 by_category: {category: count}
     by_category: dict[str, int] = {}
-    # 平台签名原文（来自 f2 用户库，仅当简介来源是「抖音签名」时传）：
-    # 让她自己的自我定位参与生成，模型就不用从标签硬猜风格（A4）
-    signature: str | None = None
 
 
 def _format_top_tags(top_tags: list[dict], limit: int = 12) -> str:
@@ -101,8 +100,6 @@ async def generate_person_bio(inputs: PersonBioInputs) -> str:
         "ip_location": inputs.ip_location or "未知",
         "top_tags": _format_top_tags(inputs.top_tags),
         "category_summary": _format_category_summary(inputs.by_category),
-        # 未提供签名时给占位文案，避免模板里出现「None」
-        "signature": (inputs.signature or "").strip() or "（未提供）",
     }
 
     try:

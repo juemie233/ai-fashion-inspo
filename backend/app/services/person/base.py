@@ -137,7 +137,6 @@ class PersonServiceBase:
             "following_count": getattr(person, "following_count", None),
             "aweme_count": getattr(person, "aweme_count", None),
             "total_favorited": getattr(person, "total_favorited", None),
-            "bio_source": getattr(person, "bio_source", None),
             "stats_synced_at": getattr(person, "stats_synced_at", None),
         }
 

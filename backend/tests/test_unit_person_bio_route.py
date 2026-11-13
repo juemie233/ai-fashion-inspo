@@ -3,8 +3,8 @@
 博主与模特两个路由共用这个函数，出错时前端只看得到一句话，所以三类语义必须钉住：
 
 1. **没标签就不生成**：返回 400 并说清「先去关联素材」——否则模型会凭空编风格；
-2. **签名只在该用的时候喂给模型**：`bio_source == "f2_signature"`（简介就是抖音签名）
-   才当参考；用户手填/AI 生成过的简介本身是产物，再喂回去会让模型自我引用；
+2. **只喂标签画像**：不读取抖音签名（「从抖音博主获取简介」能力已下线），
+   用户手填/AI 生成过的简介也不回喂，避免模型自我引用；
 3. **生成失败转 502**：`BioGenerationError` 是模型不可达/返回空，属于上游故障，
    不能吞成 500 或空简介。
 
@@ -41,8 +41,6 @@ def _person(**overrides):
         "name": "小葵",
         "platform": "douyin",
         "ip_location": "上海",
-        "bio": "抖音签名原文",
-        "bio_source": "f2_signature",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -68,40 +66,19 @@ def captured(monkeypatch):
 
 
 class TestSuccess:
-    async def test_signature_participates_when_bio_is_deepseek_signature(self, captured):
+    async def test_generates_from_tags_only(self, captured):
         service = _FakeService(_person(), _STYLE)
 
         result = await pb.generate_person_bio_endpoint(db=None, service=service, person_id=7)
 
-        assert result == {"bio": "生成的简介", "sources": ["signature", "tags"]}
+        assert result == {"bio": "生成的简介"}
         inputs = captured["inputs"]
         assert inputs.kind_label == "穿搭博主"
         assert inputs.name == "小葵"
         assert inputs.platform_label == "抖音"
         assert inputs.ip_location == "上海"
-        assert inputs.signature == "抖音签名原文"
         assert inputs.top_tags == _STYLE["top_tags"]
         assert inputs.by_category == {"风格": 5}
-
-    async def test_manual_bio_is_not_fed_back(self, captured):
-        """手填/曾由 AI 生成的简介不能再喂给模型（自我引用）。"""
-        service = _FakeService(_person(bio="我自己写的简介", bio_source="manual"), _STYLE)
-
-        result = await pb.generate_person_bio_endpoint(db=None, service=service, person_id=7)
-
-        assert captured["inputs"].signature is None
-        assert result["sources"] == ["tags"]
-
-    async def test_person_without_bio_source_attribute(self, captured):
-        """老数据可能没有 bio_source 字段：按「不是签名」处理，不能 AttributeError。"""
-        person = SimpleNamespace(name="无来源字段", platform="xiaohongshu", ip_location=None)
-        service = _FakeService(person, _STYLE)
-
-        result = await pb.generate_person_bio_endpoint(db=None, service=service, person_id=1)
-
-        assert captured["inputs"].signature is None
-        assert captured["inputs"].platform_label == "小红书"
-        assert result["sources"] == ["tags"]
 
 
 class TestPlatformLabel:
@@ -133,7 +110,7 @@ class TestFailures:
         assert exc_info.value.status_code == 400
         assert "还没有任何标签" in exc_info.value.detail
         assert "穿搭博主" in exc_info.value.detail  # 博主/模特文案不同，取自 service.label
-        assert "signature" not in captured  # 没调模型
+        assert captured == {}  # 没调模型
 
     async def test_missing_top_tags_key_also_raises(self, captured):
         service = _FakeService(_person(), {"by_category": {}})

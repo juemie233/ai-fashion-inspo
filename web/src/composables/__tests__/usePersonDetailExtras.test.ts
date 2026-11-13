@@ -75,7 +75,7 @@ describe('usePersonDetailExtras', () => {
   it('补齐资料成功：刷新详情 + 展示补了哪些字段', async () => {
     mocks.enrichProfile.mockResolvedValue({
       status: 'updated',
-      updated_fields: ['follower_count', 'bio'],
+      updated_fields: ['follower_count'],
     })
     const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
     const extras = makeExtras()

@@ -2,7 +2,7 @@
 
 覆盖 docs/features/人物详情页增强方案.md 里四项「数据面」能力：
 
-1. **资料卡**（A1）：从 f2 用户库离线补 IP 属地 + 粉丝/作品/获赞 + 签名（简介）；
+1. **资料卡**（A1）：从 f2 用户库离线补 IP 属地 + 粉丝/作品/获赞快照；
 2. **人脸候选**（A3a/A3b）：已匹配素材 + 未匹配人脸聚类；
 3. **素材筛选与作品分组**（B1/B2）：筛选口径必须与分页分母一致；
 4. **洞察与相似**（B3/B4/B5）：近 12 个月新增、质量构成、标签余弦相似。
@@ -57,14 +57,14 @@ def _fake_f2_db(tmp_path, rows: list[tuple]) -> object:
     conn.execute(
         """
         create table user_info_web (
-            sec_user_id text, nickname text, ip_location text, signature text,
+            sec_user_id text, nickname text, ip_location text,
             follower_count integer, following_count integer, aweme_count integer,
             total_favorited integer
         )
         """
     )
     conn.executemany(
-        "insert into user_info_web values (?,?,?,?,?,?,?,?)",
+        "insert into user_info_web values (?,?,?,?,?,?,?)",
         rows,
     )
     conn.commit()
@@ -72,18 +72,18 @@ def _fake_f2_db(tmp_path, rows: list[tuple]) -> object:
     return db_path
 
 
-def test_load_f2_profiles_includes_stats_and_signature(tmp_path):
-    """资料卡字段必须读出来（签名 + 四个统计数），不能只读 IP 属地。"""
+def test_load_f2_profiles_includes_stats(tmp_path):
+    """资料卡字段必须读出来（四个统计数），不能只读 IP 属地；签名不再读取。"""
     from scripts.f2_fetch import load_f2_profiles
 
     _fake_f2_db(
         tmp_path,
-        [("sec-1", "甲", "IP属地：浙江", " 极简穿搭｜通勤 ", 12345, 67, 890, 456789)],
+        [("sec-1", "甲", "IP属地：浙江", 12345, 67, 890, 456789)],
     )
     profiles = load_f2_profiles(tmp_path)
 
     assert profiles["sec-1"]["ip_location"] == "浙江"
-    assert profiles["sec-1"]["signature"] == "极简穿搭｜通勤"
+    assert "signature" not in profiles["sec-1"]
     assert profiles["sec-1"]["follower_count"] == 12345
     assert profiles["sec-1"]["aweme_count"] == 890
     assert profiles["sec-1"]["total_favorited"] == 456789
@@ -106,7 +106,7 @@ def test_load_f2_profiles_falls_back_when_columns_missing(tmp_path):
     assert "follower_count" not in profiles["sec-2"]
 
 
-async def test_backfill_profile_fills_stats_bio_and_keeps_existing(client):
+async def test_backfill_profile_fills_stats_and_keeps_existing(client):
     """只补空缺：IP/简介已有值不动，统计数总是刷新并记录快照时间。"""
     blogger = _create_blogger(
         client, "资料补齐", platform_user_id="sec-fill", ip_location="上海", bio="我自己的简介"
@@ -115,7 +115,6 @@ async def test_backfill_profile_fills_stats_bio_and_keeps_existing(client):
         "sec-fill": {
             "nickname": "资料补齐",
             "ip_location": "IP属地：浙江",
-            "signature": "抖音签名原文",
             "follower_count": 999,
             "following_count": 8,
             "aweme_count": 7,
@@ -128,10 +127,9 @@ async def test_backfill_profile_fills_stats_bio_and_keeps_existing(client):
         result = await enrich.backfill_douyin_profile_from_f2(db, row, profiles)
         await db.refresh(row)
         assert result["status"] == "updated"
-        # 已有 IP / 简介不被覆盖（手填优先）
+        # 已有 IP / 简介不被覆盖（手填优先），简介也不再从抖音签名回填
         assert row.ip_location == "上海"
         assert row.bio == "我自己的简介"
-        assert row.bio_source is None
         # 统计数刷新 + 快照时间
         assert row.follower_count == 999
         assert row.aweme_count == 7
@@ -139,12 +137,12 @@ async def test_backfill_profile_fills_stats_bio_and_keeps_existing(client):
         assert "follower_count" in result["updated_fields"]
 
 
-async def test_backfill_profile_writes_signature_as_bio_source(client):
-    """简介为空时才写抖音签名，并标记来源（前端据此显示「抖音签名」标签）。"""
-    blogger = _create_blogger(client, "签名回填", platform_user_id="sec-bio")
+async def test_backfill_profile_never_writes_bio(client):
+    """简介为空时也不写：抖音签名回填能力已删除。"""
+    blogger = _create_blogger(client, "不写简介", platform_user_id="sec-bio")
     profiles = {
         "sec-bio": {
-            "nickname": "签名回填",
+            "nickname": "不写简介",
             "ip_location": "",
             "signature": "签名即简介",
             "follower_count": 1,
@@ -156,11 +154,11 @@ async def test_backfill_profile_writes_signature_as_bio_source(client):
 
     async with async_session() as db:
         row = await db.get(Blogger, blogger["id"])
-        await enrich.backfill_douyin_profile_from_f2(db, row, profiles)
+        result = await enrich.backfill_douyin_profile_from_f2(db, row, profiles)
         await db.refresh(row)
 
-    assert row.bio == "签名即简介"
-    assert row.bio_source == "f2_signature"
+    assert row.bio is None
+    assert "bio" not in result["updated_fields"]
 
 
 async def test_backfill_profile_skips_without_uid_or_profile(client):
@@ -187,7 +185,6 @@ async def test_backfill_profile_reports_nothing_to_fill(client, monkeypatch):
         "sec-empty": {
             "nickname": "空资料账号",
             "ip_location": "",
-            "signature": "",
             "follower_count": None,
             "following_count": None,
             "aweme_count": None,
@@ -211,7 +208,6 @@ def test_enrich_profile_endpoint_returns_blogger_and_rejects_model(client, monke
             "sec-api": {
                 "nickname": "接口补齐",
                 "ip_location": "IP属地：浙江",
-                "signature": "签名",
                 "follower_count": 42,
                 "following_count": 1,
                 "aweme_count": 2,
@@ -228,8 +224,8 @@ def test_enrich_profile_endpoint_returns_blogger_and_rejects_model(client, monke
     body = resp.json()
     assert body["status"] == "updated"
     assert body["blogger"]["follower_count"] == 42
-    assert body["blogger"]["bio"] == "签名"
-    assert body["blogger"]["bio_source"] == "f2_signature"
+    assert body["blogger"]["bio"] is None
+    assert "bio_source" not in body["blogger"]
 
     resp = client.post("/api/bloggers/999999/enrich-profile")
     assert resp.status_code == 404
@@ -510,7 +506,6 @@ async def test_backfill_keeps_existing_stats_when_f2_value_missing(client):
         "sec-partial": {
             "nickname": "统计不丢",
             "ip_location": "",
-            "signature": "",
             "follower_count": None,  # f2 这一列没有值
             "following_count": 7,
             "aweme_count": None,

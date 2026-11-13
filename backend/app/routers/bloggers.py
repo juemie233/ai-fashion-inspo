@@ -559,13 +559,14 @@ async def blogger_face_candidates(blogger_id: int, db: AsyncSession = Depends(ge
 async def enrich_blogger_profile_api(
     blogger_id: int, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """按 f2 用户库补齐单个博主的资料卡（离线：IP 属地 + 粉丝/关注/作品/获赞 + 签名）。
+    """按 f2 用户库补齐单个博主的资料卡（离线：IP 属地 + 粉丝/关注/作品/获赞快照）。
 
     为什么要这个单条入口：批量「一键补全」解决的是存量，详情页需要的是「我看这一个人，
     现在就把 TA 的资料补上」。**与批量共用同一个 service 函数**，避免两套口径漂移。
 
-    写入策略（见 ``backfill_douyin_profile_from_f2``）：IP 属地与简介只补空缺（手填优先），
-    四个统计数总是刷新并写 ``stats_synced_at`` 快照时间。
+    写入策略（见 ``backfill_douyin_profile_from_f2``）：IP 属地只补空缺（手填优先），
+    四个统计数总是刷新并写 ``stats_synced_at`` 快照时间；**不回填简介**（抖音签名
+    简介能力已下线，2026-11-13）。
 
     Returns:
         ``{"status": "updated"|"skipped", "updated_fields": [...], "reason"?}`` +

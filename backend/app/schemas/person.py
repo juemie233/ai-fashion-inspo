@@ -118,8 +118,6 @@ class BloggerOut(_PersonOutFields):
     following_count: int | None = None
     aweme_count: int | None = None
     total_favorited: int | None = None
-    # 简介来源：f2_signature / ai / manual（None = 早期数据，来源未知）
-    bio_source: str | None = None
     stats_synced_at: datetime | None = None
 
     @field_serializer("stats_synced_at")

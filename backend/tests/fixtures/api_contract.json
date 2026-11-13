@@ -9,7 +9,6 @@
     "avatar_path",
     "aweme_count",
     "bio",
-    "bio_source",
     "created_at",
     "face_match_threshold",
     "face_registered",

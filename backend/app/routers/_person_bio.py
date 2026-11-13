@@ -2,6 +2,9 @@
 
 博主与模特是两张独立表/路由，但生成简介的流程完全一致：取人物 → 拉风格画像 →
 调用模型 → 返回文本。这里提供一个共享函数，两个路由都用它，避免两份重复实现。
+
+简介**只基于标签画像**生成，不读取抖音签名；「从抖音博主获取简介」的能力已下线
+（2026-11-13 产品决定）。
 """
 
 from fastapi import HTTPException
@@ -33,10 +36,6 @@ async def generate_person_bio_endpoint(
             detail=f"该{kind_label}还没有任何标签，请先关联/采集带标签的素材后再生成简介",
         )
 
-    # 只有「简介就是抖音签名」时才把它当作生成参考：用户手填/AI 生成过的简介
-    # 本身就是产物，再喂回去会让模型自我引用（A4：来源要能说清）
-    signature = person.bio if getattr(person, "bio_source", None) == "f2_signature" else None
-
     inputs = PersonBioInputs(
         kind_label=service.label,
         name=person.name,
@@ -44,7 +43,6 @@ async def generate_person_bio_endpoint(
         ip_location=person.ip_location,
         top_tags=top_tags,
         by_category=style_profile.get("by_category") or {},
-        signature=signature,
     )
 
     try:
@@ -52,8 +50,4 @@ async def generate_person_bio_endpoint(
     except BioGenerationError as e:
         raise HTTPException(status_code=502, detail=str(e)) from None
 
-    # sources 让前端说清「这段简介参考了什么」（A4）：标签必有，签名看情况
-    sources = ["tags"]
-    if signature:
-        sources.insert(0, "signature")
-    return {"bio": bio, "sources": sources}
+    return {"bio": bio}
