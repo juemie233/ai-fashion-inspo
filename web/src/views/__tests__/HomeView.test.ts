@@ -101,6 +101,17 @@ function lastParams() {
 }
 
 describe('HomeView 交互路径', () => {
+  it('页头「随机评分」跳转随机评分页', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const button = wrapper.findAll('button').find((b) => b.text() === '随机评分')
+    expect(button).toBeTruthy()
+    await button!.trigger('click')
+    expect(mocks.routerPush).toHaveBeenCalledWith('/random-rating')
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.clear()

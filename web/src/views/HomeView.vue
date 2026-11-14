@@ -227,6 +227,7 @@ loadPage(currentPage.value)
         </a-tag>
       </div>
       <div class="header-right">
+        <a-button size="small" @click="router.push('/random-rating')">随机评分</a-button>
         <a-button size="small" @click="openSaveCollection">保存为合集</a-button>
         <a-button size="small" :loading="checkingQuality" @click="handleBatchQualityCheck"
           >批量审核</a-button

@@ -115,6 +115,12 @@ const router = createRouter({
       meta: { title: '任务管理' },
     },
     {
+      path: '/random-rating',
+      name: 'random-rating',
+      component: () => import('@/views/RandomRatingView.vue'),
+      meta: { title: '随机评分' },
+    },
+    {
       // 404 兜底：未知路径重定向首页，避免白屏
       path: '/:pathMatch(.*)*',
       redirect: '/',
