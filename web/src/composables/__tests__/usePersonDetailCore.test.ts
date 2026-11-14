@@ -68,6 +68,7 @@ function inspiration(id: string, overrides: Record<string, unknown> = {}) {
     file_path: `images/${id}.jpg`,
     thumbnail_path: `thumbs/${id}.jpg`,
     media_type: 'image',
+    confidence: 0.9,
     created_at: '2026-01-01T00:00:00Z',
     ...overrides,
   }
