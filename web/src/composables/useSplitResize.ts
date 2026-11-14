@@ -1,4 +1,8 @@
-/** 可拖拽分栏：返回容器引用、左栏宽度百分比与拖拽控制。 */
+/** 可拖拽分栏：返回容器引用、左栏宽度百分比与指针拖拽控制。
+ *
+ * 用 Pointer Events 而不是 mousemove：iPad/触控笔同样能拖动分栏线；
+ * 分隔线在触屏上由调用方放大命中区（见 TagManageView 的 .divider 样式）。
+ */
 
 import { ref, onUnmounted } from 'vue'
 
@@ -20,7 +24,7 @@ export function useSplitResize(options: SplitResizeOptions = {}) {
   const leftWidth = ref(initial)
   const isDragging = ref(false)
 
-  function onDrag(e: MouseEvent) {
+  function onDrag(e: PointerEvent) {
     if (!containerRef.value) return
     const rect = containerRef.value.getBoundingClientRect()
     const pct = ((e.clientX - rect.left) / rect.width) * 100
@@ -29,15 +33,17 @@ export function useSplitResize(options: SplitResizeOptions = {}) {
 
   function stopDrag() {
     isDragging.value = false
-    document.removeEventListener('mousemove', onDrag)
-    document.removeEventListener('mouseup', stopDrag)
+    document.removeEventListener('pointermove', onDrag)
+    document.removeEventListener('pointerup', stopDrag)
+    document.removeEventListener('pointercancel', stopDrag)
   }
 
-  function startDrag(e: MouseEvent) {
+  function startDrag(e: PointerEvent) {
     e.preventDefault()
     isDragging.value = true
-    document.addEventListener('mousemove', onDrag)
-    document.addEventListener('mouseup', stopDrag)
+    document.addEventListener('pointermove', onDrag)
+    document.addEventListener('pointerup', stopDrag)
+    document.addEventListener('pointercancel', stopDrag)
   }
 
   onUnmounted(stopDrag)

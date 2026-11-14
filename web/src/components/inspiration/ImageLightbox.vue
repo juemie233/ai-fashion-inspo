@@ -3,6 +3,7 @@
 
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
+import { lockMainScroll } from '@/utils/pageScroll'
 
 const props = defineProps<{
   /** 是否打开 */
@@ -103,7 +104,9 @@ function clampOffset() {
   offsetY.value = Math.min(maxY, Math.max(-maxY, offsetY.value))
 }
 
-// ===== 拖拽平移 =====
+// ===== 指针拖拽 / 双指缩放 =====
+/** 当前按下的指针（鼠标/触控/笔）：pointerId → 坐标 */
+const activePointers = new Map<number, { x: number; y: number }>()
 let dragging = false
 /** 拖拽进行中（用于临时禁用 transform 过渡，避免平移卡顿） */
 const isPanning = ref(false)
@@ -113,8 +116,36 @@ let dragStartX = 0
 let dragStartY = 0
 let dragOriginX = 0
 let dragOriginY = 0
+/** 双指缩放起始距离与起始倍率 */
+let pinchStartDistance = 0
+let pinchStartScale = 1
 
-function onDragStart(e: MouseEvent) {
+function pointerDistance(): number {
+  const points = [...activePointers.values()]
+  if (points.length < 2) return 0
+  return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
+}
+
+/** 统一 Pointer Events：鼠标、触控、触控笔共用一套拖拽/缩放逻辑 */
+function onPointerDown(e: PointerEvent) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+  // 第二根手指按下：进入双指缩放，停止单指平移
+  if (activePointers.size === 2) {
+    dragging = false
+    isPanning.value = false
+    dragMoved = true
+    pinchStartDistance = pointerDistance()
+    pinchStartScale = scale.value
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+    e.preventDefault()
+    return
+  }
+
+  // 单指/鼠标在 1x 时不拖拽：交给背景点击关闭，不被平移吞掉
   if (scale.value <= 1) return
   dragging = true
   isPanning.value = true
@@ -123,14 +154,26 @@ function onDragStart(e: MouseEvent) {
   dragStartY = e.clientY
   dragOriginX = offsetX.value
   dragOriginY = offsetY.value
-  // 拖拽期间把移动/释放监听挂到 window：光标拖出图片窗口也能持续平移，
-  // 一次拖拽即可把放大图平移到边缘（此前事件挂在 wrap 上，光标离开后平移被提前截断）
-  window.addEventListener('mousemove', onDragMove)
-  window.addEventListener('mouseup', onDragEnd)
+  // 拖拽期间把移动/释放监听挂到 window：指针拖出图片窗口也能持续平移
+  window.addEventListener('pointermove', onPointerMove)
+  window.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('pointercancel', onPointerUp)
   e.preventDefault()
 }
 
-function onDragMove(e: MouseEvent) {
+function onPointerMove(e: PointerEvent) {
+  if (!activePointers.has(e.pointerId)) return
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+  if (activePointers.size >= 2) {
+    if (pinchStartDistance <= 0) return
+    const next = pinchStartScale * (pointerDistance() / pinchStartDistance)
+    scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, +next.toFixed(2)))
+    clampOffset()
+    e.preventDefault()
+    return
+  }
+
   if (!dragging) return
   // 位移超过 3px 视为拖拽（而非原地点击）
   if (
@@ -142,15 +185,32 @@ function onDragMove(e: MouseEvent) {
   offsetX.value = dragOriginX + (e.clientX - dragStartX)
   offsetY.value = dragOriginY + (e.clientY - dragStartY)
   clampOffset()
+  e.preventDefault()
 }
 
-function onDragEnd() {
-  if (!dragging) return
+function onPointerUp(e: PointerEvent) {
+  activePointers.delete(e.pointerId)
+
+  // 双指缩放后先松开一根：把剩余手指重新作为平移起点，避免图片跳变
+  if (activePointers.size === 1 && scale.value > 1) {
+    const [point] = [...activePointers.values()]
+    dragging = true
+    isPanning.value = true
+    dragStartX = point.x
+    dragStartY = point.y
+    dragOriginX = offsetX.value
+    dragOriginY = offsetY.value
+    return
+  }
+
+  if (activePointers.size > 0) return
   dragging = false
   isPanning.value = false
-  window.removeEventListener('mousemove', onDragMove)
-  window.removeEventListener('mouseup', onDragEnd)
-  // click 事件在 mouseup 之后派发：等 click 处理完毕再复位标记，
+  pinchStartDistance = 0
+  window.removeEventListener('pointermove', onPointerMove)
+  window.removeEventListener('pointerup', onPointerUp)
+  window.removeEventListener('pointercancel', onPointerUp)
+  // click 事件在 pointerup 之后派发：等 click 处理完毕再复位标记，
   // 让松手在背景上产生的 click 被抑制，且不影响之后正常点击关闭
   window.setTimeout(() => {
     dragMoved = false
@@ -201,6 +261,8 @@ function onImageLoad() {
 let prevBodyOverflow = ''
 /** 当前是否由本组件锁定了 body 滚动 */
 let bodyLocked = false
+/** 固定外壳下锁主内容区滚动：body 已不可滚，只锁 body 挡不住背景滚动 */
+let unlockMainScroll: (() => void) | null = null
 /** 打开前的焦点元素：关闭时归还焦点，键盘/读屏用户不会丢失位置 */
 let previouslyFocused: HTMLElement | null = null
 /** 关闭按钮引用：打开时把焦点移入对话框 */
@@ -234,6 +296,7 @@ watch(
       bodyLocked = true
       prevBodyOverflow = document.body.style.overflow
       document.body.style.overflow = 'hidden'
+      unlockMainScroll = lockMainScroll()
       const len = imageList.value.length
       currentIndex.value = Math.max(0, Math.min(props.initialIndex ?? 0, Math.max(len - 1, 0)))
       resetZoom()
@@ -250,9 +313,17 @@ watch(
         document.body.style.overflow = prevBodyOverflow
         bodyLocked = false
       }
+      activePointers.clear()
+      dragging = false
+      isPanning.value = false
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
       document.removeEventListener('keydown', onKeydown)
       previouslyFocused?.focus?.()
       previouslyFocused = null
+      unlockMainScroll?.()
+      unlockMainScroll = null
     }
   },
   // 挂载时 show 即 true 也要生效：加 immediate 确保初始打开就锁定滚动并注册键盘监听
@@ -262,8 +333,12 @@ watch(
 // 组件被卸载（如灯箱未关闭直接路由跳走）时也要移除监听器并恢复滚动
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
-  window.removeEventListener('mousemove', onDragMove)
-  window.removeEventListener('mouseup', onDragEnd)
+  window.removeEventListener('pointermove', onPointerMove)
+  window.removeEventListener('pointerup', onPointerUp)
+  window.removeEventListener('pointercancel', onPointerUp)
+  activePointers.clear()
+  unlockMainScroll?.()
+  unlockMainScroll = null
   if (bodyLocked) {
     document.body.style.overflow = prevBodyOverflow
     bodyLocked = false
@@ -287,7 +362,7 @@ onUnmounted(() => {
           ref="wrapRef"
           class="lightbox-img-wrap"
           @dblclick="onDblClick"
-          @mousedown="onDragStart"
+          @pointerdown="onPointerDown"
           @wheel.prevent="onWheel"
         >
           <a-spin v-if="currentImage" :loading="imageLoading" class="lightbox-loading" :size="32">
@@ -382,12 +457,16 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 主屏幕 PWA / 横屏时避开刘海、圆角与 Home 指示条 */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  box-sizing: border-box;
 }
 
 .lightbox-content {
   position: relative;
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -398,17 +477,19 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100dvh - 64px);
   overflow: hidden;
   cursor: zoom-in;
+  /* 灯箱内自己处理缩放/平移，禁止 Safari 把双指手势当成页面缩放 */
+  touch-action: none;
 }
 
 .lightbox-img {
   /* display:block 消除行内 img 的基线空隙，保证与 flex 居中完全一致（像素级居中） */
   display: block;
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100dvh - 64px);
   object-fit: contain;
   border-radius: 4px;
   transition: transform 0.2s ease;
@@ -440,7 +521,7 @@ onUnmounted(() => {
 
 .zoom-controls {
   position: absolute;
-  bottom: 20px;
+  bottom: max(12px, calc(env(safe-area-inset-bottom) + 8px));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -475,7 +556,7 @@ onUnmounted(() => {
 
 .close-btn {
   position: absolute;
-  top: -16px;
-  right: -16px;
+  top: 8px;
+  right: 8px;
 }
 </style>

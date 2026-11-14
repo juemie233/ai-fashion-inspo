@@ -26,6 +26,8 @@ const emit = defineEmits<{
   (e: 'update:dragOverId', id: number | null): void
   (e: 'drag-start', id: number): void
   (e: 'drop', id: number): void
+  /** 触屏替代：一级合集上移/下移（二级跟随） */
+  (e: 'move', id: number, direction: 'up' | 'down'): void
   /** 新建手动合集 / 新建智能合集 / 在某一级下新建二级收藏夹 */
   (e: 'create-manual'): void
   (e: 'create-smart'): void
@@ -68,7 +70,7 @@ function itemMeta(c: CollectionOut): string {
 
     <a-spin :loading="loading" style="display: block">
       <!-- 两级：每个一级渲染成组，二级紧随其下（缩进 + 折角） -->
-      <template v-for="c in rootCollections" :key="c.id">
+      <template v-for="(c, rootIndex) in rootCollections" :key="c.id">
         <div
           class="collection-item"
           :class="{ active: c.id === currentId, 'drag-over': dragOverId === c.id }"
@@ -93,6 +95,24 @@ function itemMeta(c: CollectionOut): string {
             <div class="collection-name" :title="c.name">{{ c.name }}</div>
             <div class="collection-meta">{{ itemMeta(c) }}</div>
           </div>
+          <span class="collection-move" @click.stop>
+            <a-button
+              size="mini"
+              :disabled="rootIndex === 0"
+              aria-label="上移合集"
+              title="上移"
+              @click="emit('move', c.id, 'up')"
+              >↑</a-button
+            >
+            <a-button
+              size="mini"
+              :disabled="rootIndex === rootCollections.length - 1"
+              aria-label="下移合集"
+              title="下移"
+              @click="emit('move', c.id, 'down')"
+              >↓</a-button
+            >
+          </span>
         </div>
 
         <template v-if="!collapsed.has(c.id)">
@@ -119,7 +139,7 @@ function itemMeta(c: CollectionOut): string {
         description="暂无合集，点击上方按钮新建"
       />
     </a-spin>
-    <div class="drag-hint">拖动一级合集调整顺序；二级收藏夹由抖音同步维护</div>
+    <div class="drag-hint">拖动一级合集调整顺序；触屏可用 ↑↓；二级收藏夹由抖音同步维护</div>
   </aside>
 </template>
 
@@ -156,6 +176,12 @@ function itemMeta(c: CollectionOut): string {
   cursor: pointer;
   border: 1px solid transparent;
   margin-bottom: 2px;
+}
+
+.collection-move {
+  display: flex;
+  gap: 2px;
+  flex: none;
 }
 .collection-item:hover {
   background: #f5f7fa;
@@ -223,5 +249,22 @@ function itemMeta(c: CollectionOut): string {
 /* 列表区撑满剩余高度，让「拖动调整」提示稳定贴底 */
 .collection-list :deep(.arco-spin) {
   flex: 1;
+}
+
+/* 平板竖屏 / 分屏：侧栏不再固定 260px，改到内容上方，避免右侧只剩 200~400px */
+@media (max-width: 900px) {
+  .collection-list {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    max-height: 240px;
+    position: static;
+    overflow-y: auto;
+  }
+
+  .collection-move :deep(.arco-btn-size-mini) {
+    min-width: 36px;
+    min-height: 36px;
+  }
 }
 </style>

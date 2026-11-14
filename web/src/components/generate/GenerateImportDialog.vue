@@ -169,6 +169,7 @@ function confirm(): void {
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   max-height: 58vh;
+  max-height: 58dvh;
   overflow-y: auto;
 }
 

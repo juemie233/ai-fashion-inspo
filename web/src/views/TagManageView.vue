@@ -60,6 +60,7 @@ const {
   togglePin,
   onDrop,
   onTagDrop,
+  onTagMove,
 } = useTagManage()
 
 // ===== 重复标签图片对比弹窗 =====
@@ -264,13 +265,14 @@ async function handleExport() {
             @delete="handleDelete"
             @drop-category="onDrop"
             @tag-drop="onTagDrop"
+            @move-tag="onTagMove"
           />
         </a-spin>
       </div>
       <!-- /left-panel -->
 
       <!-- 可拖拽间隔线 -->
-      <div class="divider" :class="{ dragging: isDragging }" @mousedown="startDrag" />
+      <div class="divider" :class="{ dragging: isDragging }" @pointerdown="startDrag" />
 
       <!-- ===== 右面板：选中标签的素材网格 ===== -->
       <div class="right-panel">
@@ -349,6 +351,7 @@ async function handleExport() {
   max-width: 100%;
   margin: 0 auto;
   height: calc(100vh - 120px);
+  height: calc(100dvh - 120px);
   display: flex;
   flex-direction: column;
 }
@@ -386,6 +389,7 @@ async function handleExport() {
   flex-shrink: 0;
   cursor: col-resize;
   position: relative;
+  touch-action: none;
 }
 .divider::after {
   content: '';
@@ -410,9 +414,22 @@ async function handleExport() {
   padding-left: 12px;
 }
 
+@media (pointer: coarse) {
+  .divider {
+    width: 16px;
+  }
+  .divider::after {
+    left: 7px;
+    right: 7px;
+  }
+}
+
 @media (max-width: 900px) {
   .split-layout {
     flex-direction: column;
+  }
+  .divider {
+    display: none;
   }
   .left-panel,
   .right-panel {

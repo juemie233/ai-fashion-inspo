@@ -713,7 +713,7 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
           <span style="white-space: nowrap">{{ formatDateTime(record.created_at) }}</span>
         </template>
       </a-table-column>
-      <a-table-column title="操作" :width="380">
+      <a-table-column title="操作" :width="380" fixed="right">
         <template #cell="{ record }">
           <a-button
             v-if="!isGroupRow(record)"

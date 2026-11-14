@@ -124,27 +124,35 @@ const menuKey = computed(() => {
 </template>
 
 <style scoped>
-/* 外壳：flex 布局，占据全屏 */
+/* 外壳：固定视口高度，滚动交给 .main-content。
+ * 不能只用 min-height：长页面会把外壳一起撑高，body 滚动、侧栏跟着滚走。 */
 .app-shell {
   display: flex;
   width: 100%;
-  min-height: 100vh;
+  height: 100vh;
   /* iPad Safari 地址栏收放时 100vh 会溢出到屏幕外，动态视口高度更稳 */
-  min-height: 100dvh;
-  /* 全屏（添加到主屏幕）时避开 iPad 底部 Home 指示条 */
+  height: 100dvh;
+  overflow: hidden;
+  /* 全屏（添加到主屏幕）时避开 iPad 四边安全区 */
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
   box-sizing: border-box;
 }
 
-/* 侧边栏：固定宽度 */
+/* 侧边栏：固定宽度，自身高度随外壳，菜单在内部滚动 */
 .sidebar {
   width: 200px;
   min-width: 200px;
+  height: 100%;
+  min-height: 0;
   flex-shrink: 0;
   border-right: 1px solid #e5e7eb;
   background: #fff;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* 让菜单占据剩余空间，连接状态固定在侧边栏底部 */
@@ -180,13 +188,15 @@ const menuKey = computed(() => {
   background: #c9cdd4;
 }
 
-/* 主内容区：占据剩余空间，可垂直滚动 */
+/* 主内容区：外壳内独立滚动；min-height:0 是 flex 子项能真正滚动的关键 */
 .main-content {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   padding: 24px;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   background: #f9fafb;
   box-sizing: border-box;
 }

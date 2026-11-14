@@ -743,6 +743,7 @@ const columns = computed<TableColumnData[]>(() => [
 .hover-preview-panel {
   max-width: 90vw;
   max-height: 88vh;
+  max-height: 88dvh;
   border-radius: 12px;
   overflow: hidden;
   background: #fff;
@@ -754,6 +755,7 @@ const columns = computed<TableColumnData[]>(() => [
   display: block;
   max-width: 90vw;
   max-height: 88vh;
+  max-height: 88dvh;
   object-fit: contain;
 }
 

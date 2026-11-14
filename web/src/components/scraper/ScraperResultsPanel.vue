@@ -138,6 +138,7 @@ function previewSrc(item: ResultItem): string {
   grid-template-columns: repeat(6, 1fr);
   gap: 12px;
   max-height: 72vh;
+  max-height: 72dvh;
   overflow-y: auto;
   padding: 4px;
 }

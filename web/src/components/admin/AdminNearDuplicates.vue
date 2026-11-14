@@ -671,6 +671,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
 /* 图片容器：高度 ≥70vh，图片等比完整显示（不裁切） */
 .dup-img-wrap {
   height: 70vh;
+  height: 70dvh;
   min-height: 420px;
   background: #111;
   border-radius: 8px;

@@ -30,11 +30,12 @@ vi.mock('@/api/tags', () => ({
   createAlias: vi.fn(),
 }))
 
-import { fetchTagsGrouped, fetchTagStats } from '@/api/tags'
+import { fetchTagsGrouped, fetchTagStats, reorderTags } from '@/api/tags'
 import { useTagManage } from '../useTagManage'
 
 const mockFetchGroups = fetchTagsGrouped as unknown as ReturnType<typeof vi.fn>
 const mockFetchStats = fetchTagStats as unknown as ReturnType<typeof vi.fn>
+const mockReorderTags = reorderTags as unknown as ReturnType<typeof vi.fn>
 
 /** 构造标签分组数据（两个风格标签：id=1 法式 / id=2 韩系） */
 function makeGroups() {
@@ -145,6 +146,20 @@ describe('useTagManage URL 浏览状态持久化', () => {
     t.sortMode.value = 'usage'
     await nextTick()
     expect(routeState.replace).toHaveBeenCalledWith({ query: {} })
+  })
+
+  it('触屏上移/下移：自定义排序下交换相邻标签并提交 sort_order', async () => {
+    routeState.query = { sort: 'custom' }
+    mockReorderTags.mockResolvedValue({ updated: 2 })
+    const t = useTagManage()
+    await t.loadAll()
+
+    await t.onTagMove(t.groups.value[0].tags[1], 'up')
+
+    expect(mockReorderTags).toHaveBeenCalledWith([
+      { id: 2, sort_order: 0 },
+      { id: 1, sort_order: 1 },
+    ])
   })
 
   it('loadAll 刷新后选中标签按 id 替换引用并保持 URL 同步', async () => {

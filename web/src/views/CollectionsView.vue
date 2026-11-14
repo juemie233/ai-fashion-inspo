@@ -210,15 +210,23 @@ async function handleBatchRemove() {
 
 // ── 拖拽排序：合集列表（实现见 composables/useCollectionListDnd.ts）──
 
-const { dragOverId, onCollectionDragStart, onCollectionDrop } = useCollectionListDnd({
-  collections,
-  loadCollections,
-})
+const { dragOverId, onCollectionDragStart, onCollectionDrop, onCollectionMove } =
+  useCollectionListDnd({
+    collections,
+    loadCollections,
+  })
 
 // ── 拖拽排序：合集内素材（实现见 composables/useCollectionItemOrdering.ts）──
 
-const { ordering, orderedItems, onItemDragStart, enterOrdering, onItemDrop, saveItemOrder } =
-  useCollectionItemOrdering({ current, total, loadContent })
+const {
+  ordering,
+  orderedItems,
+  onItemDragStart,
+  enterOrdering,
+  onItemDrop,
+  onItemMove,
+  saveItemOrder,
+} = useCollectionItemOrdering({ current, total, loadContent })
 
 // ── 条件摘要 ──
 
@@ -250,6 +258,7 @@ onMounted(() => {
       :loading="listLoading"
       @drag-start="onCollectionDragStart"
       @drop="onCollectionDrop"
+      @move="onCollectionMove"
       @create-manual="openCreateManual"
       @create-smart="openCreateSmartWithId"
       @create-child="openCreateChild"
@@ -313,6 +322,7 @@ onMounted(() => {
           :items="orderedItems"
           @drag-start="onItemDragStart"
           @drop="onItemDrop"
+          @move="onItemMove"
         />
 
         <!-- 瀑布流内容 -->
@@ -458,6 +468,17 @@ onMounted(() => {
   max-width: 1800px;
   margin: 0 auto;
   align-items: flex-start;
+}
+
+/* iPad 竖屏/分屏：合集列表移到顶部，内容区拿回完整宽度 */
+@media (max-width: 900px) {
+  .collections-page {
+    flex-direction: column;
+  }
+
+  .collection-content {
+    width: 100%;
+  }
 }
 
 /* 右侧内容 */

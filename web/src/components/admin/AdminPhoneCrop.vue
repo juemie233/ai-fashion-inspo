@@ -484,6 +484,7 @@ async function handleApply() {
       <div
         style="
           max-height: 72vh;
+          max-height: 72dvh;
           overflow-y: auto;
           background: #111;
           border-radius: 8px;
@@ -721,6 +722,7 @@ async function handleApply() {
 
 .dup-img-wrap {
   height: 52vh;
+  height: 52dvh;
   max-height: 480px;
   background: #111;
   border-radius: 8px;

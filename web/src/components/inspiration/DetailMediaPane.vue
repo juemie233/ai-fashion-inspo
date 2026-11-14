@@ -87,6 +87,7 @@ const cropOpen = defineModel<boolean>('cropOpen', { required: true })
   cursor: zoom-in;
   object-fit: contain;
   max-height: 85vh;
+  max-height: 85dvh;
   background: #f5f5f5;
 }
 </style>

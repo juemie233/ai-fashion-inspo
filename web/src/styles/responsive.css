@@ -1,0 +1,84 @@
+/** iPad / 触屏全局兜底样式。
+ *
+ * 这里只放**跨页面**的规则；单个组件的宽度/手势仍由组件自己负责。
+ * 目标：弹层不超出视口、动态视口不遮挡、文字缩放不破版、触屏点击区域有下限。
+ */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* 固定外壳：滚动交给 .main-content；body 不再产生第二条滚动条 */
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+/* Arco 弹层：默认只有固定 width，没有 max-width；900+ 弹层在 iPad/窄窗口会被裁掉右侧 */
+.arco-modal {
+  max-width: calc(100vw - 32px);
+}
+
+/* 弹层内容自己滚，避免高度不够时按钮被顶出屏幕 */
+.arco-modal-body {
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
+}
+
+.arco-drawer {
+  max-width: 100vw;
+}
+
+.arco-drawer-body {
+  overscroll-behavior: contain;
+}
+
+/* 弹层底部按钮避开主屏幕 Home 指示条 */
+.arco-modal-footer,
+.arco-drawer-footer {
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+
+@media (max-width: 1024px) {
+  .arco-drawer,
+  .arco-modal {
+    max-height: calc(100dvh - 32px);
+  }
+}
+
+/* 弹层打开时，固定外壳下的主内容区也要停止滚动（body 本身已经不可滚）。
+ * 不能直接 :has(.arco-modal-container)：Arco 会给未打开的弹层也渲染一个
+ * display:none 的容器，那样会把所有页面的主内容区永久锁死。 */
+body:has(.arco-modal-mask:not([style*='display: none'])) .main-content,
+body:has(.arco-drawer-mask:not([style*='display: none'])) .main-content {
+  overflow: hidden;
+}
+
+/* 触屏 / 触控笔：mini 按钮命中区不低于 36px；高频按钮由组件提升到 44px */
+@media (pointer: coarse) {
+  .arco-btn-size-mini {
+    min-height: 36px;
+    min-width: 36px;
+  }
+
+  .arco-btn-size-small {
+    min-height: 36px;
+  }
+
+  .arco-table .arco-btn-size-mini {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* 平板上减少横向滚动条带来的整页抖动 */
+.main-content {
+  overscroll-behavior: contain;
+}

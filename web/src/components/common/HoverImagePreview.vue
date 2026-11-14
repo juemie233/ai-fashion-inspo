@@ -37,12 +37,17 @@ const props = withDefaults(
 
 /** 浮层是否显示 */
 const visible = ref(false)
+/** 只有真正支持 hover 的设备才启用预览；iPad 摸到 mouseenter 时不弹层 */
+const canHover =
+  typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+    ? true
+    : window.matchMedia('(hover: hover)').matches
 /** 停留计时器 */
 let timer: number | null = null
 
 function start() {
   clear()
-  if (!props.largeSrc) return
+  if (!canHover || !props.largeSrc) return
   timer = window.setTimeout(() => {
     visible.value = true
   }, props.delay)

@@ -47,7 +47,10 @@ function onUrlInput(value: string | null) {
   <div class="upload-zone" :class="{ 'has-queue': hasQueue }">
     <div class="upload-icon-wrap">📤</div>
     <p class="upload-title">上传穿搭素材</p>
-    <p class="upload-desc">拖拽文件到此处、Ctrl+V 粘贴、或点击下方按钮</p>
+    <p class="upload-desc">
+      <span class="upload-desc-hover">拖拽文件到此处、Ctrl+V 粘贴、或点击下方按钮</span>
+      <span class="upload-desc-touch">点「选择文件」从相册/文件导入，或直接点按钮</span>
+    </p>
     <p class="upload-formats">
       JPG / PNG / WebP / GIF / MP4 · 单次最多 {{ MAX_UPLOAD_QUEUE_SIZE }} 个
     </p>
@@ -135,6 +138,20 @@ function onUrlInput(value: string | null) {
   margin: 0 0 4px;
   font-size: 14px;
   color: #9ca3af;
+}
+
+.upload-desc-touch {
+  display: none;
+}
+
+@media (hover: none) {
+  .upload-desc-hover {
+    display: none;
+  }
+
+  .upload-desc-touch {
+    display: inline;
+  }
 }
 
 .upload-formats {

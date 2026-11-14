@@ -16,6 +16,7 @@ import 'cropperjs/dist/cropper.css'
 import { Message } from '@arco-design/web-vue'
 import { cropInspirationRegion, getFileUrl } from '@/api/inspirations'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { lockMainScroll } from '@/utils/pageScroll'
 
 const props = defineProps<{
   /** 是否打开裁剪弹窗 */
@@ -197,16 +198,21 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 // 打开时初始化 Cropper 并锁定 body 滚动，关闭时销毁实例并恢复
+let unlockMainScroll: (() => void) | null = null
+
 watch(
   () => props.visible,
   (val) => {
     if (val) {
       document.addEventListener('keydown', onKeydown)
       document.body.style.overflow = 'hidden'
+      unlockMainScroll = lockMainScroll()
       initCropper()
     } else {
       document.removeEventListener('keydown', onKeydown)
       document.body.style.overflow = ''
+      unlockMainScroll?.()
+      unlockMainScroll = null
       destroyCropper()
     }
   },
@@ -217,6 +223,8 @@ watch(
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown)
   document.body.style.overflow = ''
+  unlockMainScroll?.()
+  unlockMainScroll = null
   destroyCropper()
 })
 </script>
@@ -289,6 +297,7 @@ onBeforeUnmount(() => {
 .crop-modal-panel {
   width: min(92vw, 900px);
   max-height: 92vh;
+  max-height: 92dvh;
   background: #fff;
   border-radius: 12px;
   display: flex;
@@ -326,6 +335,7 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100%;
   height: min(62vh, 560px);
+  height: min(62dvh, 560px);
   background: #1a1a1a;
   border-radius: 8px;
   overflow: hidden;

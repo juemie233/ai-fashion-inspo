@@ -94,6 +94,17 @@ export function useCollectionItemOrdering(opts: CollectionItemOrderingDeps) {
       .filter((i): i is InspirationOut => !!i)
   }
 
+  /** 触屏替代：把某张素材上移/下移一位（不依赖 HTML5 拖拽） */
+  function onItemMove(id: string, direction: 'up' | 'down') {
+    const idx = orderedItems.value.findIndex((item) => item.id === id)
+    if (idx < 0) return
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= orderedItems.value.length) return
+    const next = [...orderedItems.value]
+    ;[next[idx], next[targetIdx]] = [next[targetIdx], next[idx]]
+    orderedItems.value = next
+  }
+
   async function saveItemOrder() {
     const c = current.value
     if (!c) return
@@ -116,6 +127,7 @@ export function useCollectionItemOrdering(opts: CollectionItemOrderingDeps) {
     onItemDragStart,
     enterOrdering,
     onItemDrop,
+    onItemMove,
     saveItemOrder,
   }
 }

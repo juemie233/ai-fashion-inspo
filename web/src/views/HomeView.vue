@@ -16,6 +16,7 @@ import { useBatchSelection } from '@/composables/useBatchSelection'
 import { useInspirationFilters } from '@/composables/useInspirationFilters'
 import { useHomeActions } from '@/composables/useHomeActions'
 import { buildBrowseParams, storedBrowsePageSize, PAGE_SIZE_STORAGE_KEY } from '@/utils/browseQuery'
+import { scrollPageToTop } from '@/utils/pageScroll'
 import type { GridDensity } from '@/constants/gridDensity'
 
 const router = useRouter()
@@ -126,7 +127,7 @@ function loadPage(page: number) {
   currentPage.value = page
   store.load(buildParams(page))
   syncUrl()
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  scrollPageToTop()
 }
 
 // ── 筛选/排序变更时重新加载第一页 ──

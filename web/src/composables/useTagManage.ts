@@ -280,6 +280,16 @@ export function useTagManage() {
   }
 
   // ===== 自定义排序拖拽 =====
+  async function saveTagOrder(tags: TagItem[]) {
+    try {
+      await reorderTags(tags.map((t, i) => ({ id: t.id, sort_order: i })))
+      Message.success('排序已更新')
+      await loadAll()
+    } catch {
+      Message.error('排序失败')
+    }
+  }
+
   async function onTagDrop(target: TagItem, dragged: TagItem) {
     if (sortMode.value !== 'custom') return
     if (hasActiveFilter.value) {
@@ -297,13 +307,20 @@ export function useTagManage() {
     const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx
     const [moved] = tags.splice(fromIdx, 1)
     tags.splice(insertIdx, 0, moved)
-    try {
-      await reorderTags(tags.map((t, i) => ({ id: t.id, sort_order: i })))
-      Message.success('排序已更新')
-      await loadAll()
-    } catch {
-      Message.error('排序失败')
-    }
+    await saveTagOrder(tags)
+  }
+
+  /** 触屏替代：自定义排序下上移/下移一位（置顶标签由后端固定在前，不参与） */
+  async function onTagMove(tag: TagItem, direction: 'up' | 'down') {
+    if (sortMode.value !== 'custom' || hasActiveFilter.value || tag.pinned) return
+    const group = groups.value.find((g) => g.tags.some((t) => t.id === tag.id))
+    if (!group) return
+    const tags = [...group.tags]
+    const idx = tags.findIndex((t) => t.id === tag.id)
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (idx < 0 || targetIdx < 0 || targetIdx >= tags.length) return
+    ;[tags[idx], tags[targetIdx]] = [tags[targetIdx], tags[idx]]
+    await saveTagOrder(tags)
   }
 
   return {
@@ -335,5 +352,6 @@ export function useTagManage() {
     togglePin,
     onDrop,
     onTagDrop,
+    onTagMove,
   }
 }

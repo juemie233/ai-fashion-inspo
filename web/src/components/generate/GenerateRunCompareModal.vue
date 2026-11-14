@@ -232,6 +232,7 @@ function promptBrief(run: GenerationRun | null): string {
   align-items: center;
   justify-content: center;
   height: 44vh;
+  height: 44dvh;
   background: var(--color-fill-2);
   border-radius: 6px;
   overflow: hidden;

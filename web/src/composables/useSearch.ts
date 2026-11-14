@@ -1,6 +1,7 @@
 /** 高级搜索页的核心状态与逻辑：关键词、多维筛选、排序、向量搜索、搜索历史。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
+import { scrollPageToTop } from '@/utils/pageScroll'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
@@ -186,7 +187,7 @@ export function useSearch() {
       results.value = data.items
       total.value = data.total
       syncUrl()
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      scrollPageToTop()
     } catch {
       if (seq === searchSeq) Message.error('搜索失败')
     } finally {
@@ -230,7 +231,7 @@ export function useSearch() {
       results.value = data.items.map((i) => i.inspiration)
       total.value = data.total
       addToHistory(text)
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      scrollPageToTop()
     } catch (e) {
       if (seq === searchSeq)
         Message.error(getApiErrorMessage(e, '语义搜索失败，请确认后端向量服务已就绪'))
@@ -257,7 +258,7 @@ export function useSearch() {
       vectorQueryLabel.value = file.name
       results.value = data.items.map((i) => i.inspiration)
       total.value = data.total
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      scrollPageToTop()
     } catch (err) {
       if (seq === searchSeq)
         Message.error(getApiErrorMessage(err, '以图搜图失败，请确认已安装 CLIP 图像模型'))

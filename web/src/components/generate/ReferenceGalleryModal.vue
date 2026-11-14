@@ -127,6 +127,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   align-items: center;
   justify-content: center;
   height: 60vh;
+  height: 60dvh;
   background: var(--color-fill-2);
   border-radius: 6px;
   overflow: hidden;

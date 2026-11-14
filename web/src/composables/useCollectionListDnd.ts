@@ -27,22 +27,26 @@ export function useCollectionListDnd(opts: CollectionListDndDeps) {
   const dragOverId = ref<number | null>(null)
   let draggingCollectionId: number | null = null
 
-  function onCollectionDragStart(id: number) {
-    draggingCollectionId = id
+  /** 按当前顺序生成完整 id 列表（一级后面紧跟它的二级，保持父子不拆散） */
+  function fullOrderIds(): number[] {
+    const byParent = new Map<number | null, CollectionOut[]>()
+    for (const item of collections.value) {
+      const list = byParent.get(item.parent_id) ?? []
+      list.push(item)
+      byParent.set(item.parent_id, list)
+    }
+    const roots = byParent.get(null) ?? []
+    return roots.flatMap((root) => [
+      root.id,
+      ...(byParent.get(root.id) ?? []).map((child) => child.id),
+    ])
   }
 
-  async function onCollectionDrop(targetId: number) {
-    const from = draggingCollectionId
-    draggingCollectionId = null
-    dragOverId.value = null
-    if (from === null || from === targetId) return
-    const ids = collections.value.map((c) => c.id)
-    const fromIdx = ids.indexOf(from)
-    const toIdx = ids.indexOf(targetId)
-    if (fromIdx === -1 || toIdx === -1) return
-    ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0])
-    // 乐观更新 + 后端持久化
-    collections.value.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id))
+  async function persistOrder(ids: number[]) {
+    const byId = new Map(collections.value.map((item) => [item.id, item]))
+    collections.value = ids
+      .map((id) => byId.get(id))
+      .filter((item): item is CollectionOut => !!item)
     try {
       await reorderCollections(ids)
       await loadCollections()
@@ -52,5 +56,41 @@ export function useCollectionListDnd(opts: CollectionListDndDeps) {
     }
   }
 
-  return { dragOverId, onCollectionDragStart, onCollectionDrop }
+  function onCollectionDragStart(id: number) {
+    draggingCollectionId = id
+  }
+
+  async function onCollectionDrop(targetId: number) {
+    const from = draggingCollectionId
+    draggingCollectionId = null
+    dragOverId.value = null
+    if (from === null || from === targetId) return
+    const ids = fullOrderIds()
+    const fromIdx = ids.indexOf(from)
+    const toIdx = ids.indexOf(targetId)
+    if (fromIdx === -1 || toIdx === -1) return
+    ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0])
+    await persistOrder(ids)
+  }
+
+  /** 触屏替代：把一级合集整体上移/下移一位（二级收藏夹跟着走） */
+  async function onCollectionMove(id: number, direction: 'up' | 'down') {
+    const roots = collections.value.filter((item) => item.parent_id === null)
+    const idx = roots.findIndex((root) => root.id === id)
+    if (idx < 0) return
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= roots.length) return
+    const rootIds = roots.map((root) => root.id)
+    ;[rootIds[idx], rootIds[targetIdx]] = [rootIds[targetIdx], rootIds[idx]]
+    const byParent = new Map<number, number[]>()
+    for (const item of collections.value) {
+      if (item.parent_id == null) continue
+      const list = byParent.get(item.parent_id) ?? []
+      list.push(item.id)
+      byParent.set(item.parent_id, list)
+    }
+    await persistOrder(rootIds.flatMap((rootId) => [rootId, ...(byParent.get(rootId) ?? [])]))
+  }
+
+  return { dragOverId, onCollectionDragStart, onCollectionDrop, onCollectionMove }
 }

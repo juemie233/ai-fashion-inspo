@@ -351,6 +351,7 @@ function confirmMulti(): void {
   grid-template-columns: repeat(5, 1fr);
   gap: 10px;
   max-height: 62vh;
+  max-height: 62dvh;
   overflow-y: auto;
 }
 

@@ -489,11 +489,28 @@ function openDetail() {
     opacity: 1;
   }
 
+  .card-overlay :deep(.arco-btn-size-mini) {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .card-rate {
+    font-size: 20px;
+    padding: 6px;
+  }
+
   .view-detail-btn {
     opacity: 1;
     /* 手指点得准的最小尺寸（原 26px 偏小） */
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .select-checkbox {
+    width: 44px;
+    height: 44px;
   }
 }
 

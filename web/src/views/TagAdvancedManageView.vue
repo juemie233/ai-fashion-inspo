@@ -87,6 +87,7 @@ const currentPanel = computed(() => PANELS[activeTab.value])
   display: flex;
   flex-direction: column;
   height: calc(100vh - 120px);
+  height: calc(100dvh - 120px);
   /* 与其他管理页一致：宽屏下内容居中，避免左侧贴边留大片空白 */
   max-width: 1100px;
   margin: 0 auto;
@@ -143,5 +144,42 @@ const currentPanel = computed(() => PANELS[activeTab.value])
   border-radius: 8px;
   padding: 16px;
   overflow-y: auto;
+}
+
+/* iPad 竖屏 / 分屏：左侧 Tab 改成顶部横向滚动，工作区占满宽度 */
+@media (max-width: 900px) {
+  .adv-page {
+    height: auto;
+    min-height: calc(100dvh - 120px);
+  }
+
+  .adv-body {
+    flex-direction: column;
+  }
+
+  .adv-nav {
+    width: 100%;
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    overflow-x: auto;
+  }
+
+  .adv-nav-item {
+    flex: none;
+    padding: 10px 12px;
+    border-left: none;
+    border-bottom: 3px solid transparent;
+    white-space: nowrap;
+  }
+
+  .adv-nav-item.active {
+    border-bottom-color: #2a78d6;
+  }
+
+  .adv-workspace {
+    width: 100%;
+    min-height: 0;
+  }
 }
 </style>

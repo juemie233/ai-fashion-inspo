@@ -73,43 +73,43 @@ describe('useSplitResize', () => {
   it('拖拽按容器宽度计算百分比', async () => {
     const { result } = setup({ initial: 50 })
     result.containerRef.value = mockRect(1000)
-    result.startDrag({ preventDefault: () => {} } as MouseEvent)
+    result.startDrag({ preventDefault: () => {} } as PointerEvent)
     await nextTick()
 
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 250 }))
+    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 250 }))
     expect(result.leftWidth.value).toBeCloseTo(25, 5)
 
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 750 }))
+    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 750 }))
     expect(result.leftWidth.value).toBeCloseTo(75, 5)
   })
 
   it('边界 clamp：超出 min/max 被限制', async () => {
     const { result } = setup({ min: 20, max: 80 })
     result.containerRef.value = mockRect(1000)
-    result.startDrag({ preventDefault: () => {} } as MouseEvent)
+    result.startDrag({ preventDefault: () => {} } as PointerEvent)
     await nextTick()
 
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 10 }))
+    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 10 }))
     expect(result.leftWidth.value).toBe(20)
 
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 990 }))
+    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 990 }))
     expect(result.leftWidth.value).toBe(80)
   })
 
-  it('mouseup 停止拖拽并移除监听', () => {
+  it('pointerup 停止拖拽并移除监听', () => {
     const { result } = setup()
-    result.startDrag({ preventDefault: () => {} } as MouseEvent)
+    result.startDrag({ preventDefault: () => {} } as PointerEvent)
     expect(result.isDragging.value).toBe(true)
 
-    document.dispatchEvent(new MouseEvent('mouseup'))
+    document.dispatchEvent(new MouseEvent('pointerup'))
     expect(result.isDragging.value).toBe(false)
   })
 
   it('容器未挂载时不计算', async () => {
     const { result } = setup({ initial: 50 })
-    result.startDrag({ preventDefault: () => {} } as MouseEvent)
+    result.startDrag({ preventDefault: () => {} } as PointerEvent)
     await nextTick()
-    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 300 }))
+    document.dispatchEvent(new MouseEvent('pointermove', { clientX: 300 }))
     expect(result.leftWidth.value).toBe(50)
   })
 })

@@ -17,15 +17,16 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'drag-start', id: string): void
   (e: 'drop', id: string): void
+  (e: 'move', id: string, direction: 'up' | 'down'): void
 }>()
 </script>
 
 <template>
   <div class="ordering-strip">
-    <p class="ordering-tip">拖动缩略图调整展示顺序，完成后点击「保存顺序」。</p>
+    <p class="ordering-tip">拖动缩略图调整展示顺序（触屏用 ↑↓），完成后点击「保存顺序」。</p>
     <div class="ordering-grid">
       <div
-        v-for="it in items"
+        v-for="(it, index) in items"
         :key="it.id"
         class="ordering-card"
         draggable="true"
@@ -34,6 +35,24 @@ const emit = defineEmits<{
         @drop.prevent="emit('drop', it.id)"
       >
         <img :src="getFileUrl(it.thumbnail_path ?? it.file_path)" alt="" />
+        <span class="ordering-move" @click.stop>
+          <a-button
+            size="mini"
+            :disabled="index === 0"
+            aria-label="上移素材"
+            title="上移"
+            @click="emit('move', it.id, 'up')"
+            >↑</a-button
+          >
+          <a-button
+            size="mini"
+            :disabled="index === items.length - 1"
+            aria-label="下移素材"
+            title="下移"
+            @click="emit('move', it.id, 'down')"
+            >↓</a-button
+          >
+        </span>
       </div>
     </div>
   </div>
@@ -62,6 +81,18 @@ const emit = defineEmits<{
   cursor: grab;
   border: 2px solid transparent;
   background: #f2f3f5;
+  position: relative;
+}
+
+.ordering-move {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  padding: 2px;
 }
 .ordering-card:active {
   cursor: grabbing;

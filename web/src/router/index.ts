@@ -1,7 +1,9 @@
 /** Vue Router 路由配置。 */
 
 import { createRouter, createWebHistory } from 'vue-router'
+import { nextTick } from 'vue'
 import { resolveDocumentTitle } from '@/utils/pageTitle'
+import { getMainContentEl, scrollPageToTop } from '@/utils/pageScroll'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -126,6 +128,19 @@ const router = createRouter({
       redirect: '/',
     },
   ],
+  // AppLayout 把滚动容器从 body 改成了 .main-content；Vue Router 默认只滚 window，
+  // 这里接管：新页面回顶部，浏览器前进/后退尽量恢复原来的主内容滚动位置。
+  scrollBehavior(_to, _from, savedPosition) {
+    void nextTick(() => {
+      const main = getMainContentEl()
+      if (savedPosition && main) {
+        main.scrollTo({ top: savedPosition.top, behavior: 'auto' })
+      } else {
+        scrollPageToTop('auto')
+      }
+    })
+    return false
+  },
 })
 
 // 更新页面标题：页面[-子页面] + 站点名。

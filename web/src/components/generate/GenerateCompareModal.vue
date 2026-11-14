@@ -268,6 +268,7 @@ const refOptions = computed(() =>
   display: block;
   width: 100%;
   height: 58vh;
+  height: 58dvh;
   object-fit: contain;
   background: #f2f3f5;
 }
@@ -276,12 +277,14 @@ const refOptions = computed(() =>
   align-items: center;
   justify-content: center;
   height: 58vh;
+  height: 58dvh;
   font-size: 13px;
   color: #8a8f99;
 }
 .cmp-overlay {
   position: relative;
   height: 62vh;
+  height: 62dvh;
   border: 1px solid #e5e6eb;
   border-radius: 4px;
   background: #f2f3f5;

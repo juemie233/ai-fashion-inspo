@@ -25,6 +25,8 @@ const emit = defineEmits<{
   delete: [tagId: number, tagName: string]
   'drop-category': [tag: TagItem, category: string]
   'tag-drop': [target: TagItem, dragged: TagItem]
+  /** 触屏替代：自定义排序上移/下移 */
+  'move-tag': [tag: TagItem, direction: 'up' | 'down']
 }>()
 
 // ===== 拖拽状态（改类别 / 自定义排序共用） =====
@@ -56,6 +58,14 @@ function onTagDrop(target: TagItem) {
   const tag = dragTag.value
   dragTag.value = null
   if (tag) emit('tag-drop', target, tag)
+}
+
+/** 自定义排序下，是否还能上移/下移（置顶标签由后端固定在前，不参与） */
+function canMoveTag(group: TagCategoryGroup, tag: TagItem, direction: 'up' | 'down'): boolean {
+  if (tag.pinned || props.sortMode !== 'custom' || props.hasActiveFilter) return false
+  const index = group.tags.findIndex((item) => item.id === tag.id)
+  if (index < 0) return false
+  return direction === 'up' ? index > 0 : index < group.tags.length - 1
 }
 
 // 来源颜色
@@ -252,6 +262,26 @@ onUnmounted(() => {
               >{{ tag.name }}</span
             >
             <span class="row-actions">
+              <template v-if="sortMode === 'custom' && !hasActiveFilter">
+                <button
+                  class="row-act row-move"
+                  :disabled="!canMoveTag(group, tag, 'up')"
+                  title="上移"
+                  aria-label="上移标签"
+                  @click.stop="emit('move-tag', tag, 'up')"
+                >
+                  ↑
+                </button>
+                <button
+                  class="row-act row-move"
+                  :disabled="!canMoveTag(group, tag, 'down')"
+                  title="下移"
+                  aria-label="下移标签"
+                  @click.stop="emit('move-tag', tag, 'down')"
+                >
+                  ↓
+                </button>
+              </template>
               <button class="row-act" @click="emit('edit', tag)">编辑</button>
               <button class="row-act" @click="emit('alias', tag)">别名</button>
               <button class="row-act" @click="emit('merge', tag)">合并</button>
@@ -395,5 +425,27 @@ onUnmounted(() => {
 .row-act.confirming {
   color: #fff;
   background: #d03050;
+}
+
+.row-move {
+  min-width: 28px;
+  font-size: 14px;
+}
+
+.row-move:disabled {
+  color: #c9cdd4;
+  cursor: not-allowed;
+}
+
+/* 触屏没有 hover：操作按钮必须常显，且行内按钮命中区补到 36px */
+@media (hover: none) {
+  .row-actions {
+    opacity: 1;
+  }
+
+  .row-act {
+    min-height: 36px;
+    padding: 6px 8px;
+  }
 }
 </style>

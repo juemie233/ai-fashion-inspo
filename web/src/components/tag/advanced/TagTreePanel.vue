@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 层级树面板：a-tree 懒加载（按需展开）+ 拖拽移动子树（循环预检 + 后端校验）。 */
 
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { TreeNodeData } from '@arco-design/web-vue'
 import { IconFolder, IconTag } from '@arco-design/web-vue/es/icon'
@@ -135,6 +135,74 @@ function expandAll() {
   loadRoot()
 }
 
+// ── 触屏替代：选中节点后用下拉选择新父级（不依赖 HTML5 拖拽）──
+const selectedKey = ref<number | null>(null)
+/** 0 = 根级；其余为父节点 key */
+const moveParentId = ref(0)
+
+function collectKeys(nodes: TreeNode[], out: number[] = []): number[] {
+  for (const node of nodes) {
+    out.push(node.key)
+    collectKeys(node.children ?? [], out)
+  }
+  return out
+}
+
+function descendantsOf(key: number): Set<number> {
+  const result = new Set<number>()
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.key === key) {
+        for (const childKey of collectKeys(node.children ?? [])) result.add(childKey)
+        return
+      }
+      walk(node.children ?? [])
+    }
+  }
+  walk(treeData.value)
+  return result
+}
+
+const parentOptions = computed(() => {
+  const blocked = selectedKey.value == null ? new Set<number>() : descendantsOf(selectedKey.value)
+  const all: TreeNode[] = []
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      all.push(node)
+      walk(node.children ?? [])
+    }
+  }
+  walk(treeData.value)
+  const options = all
+    .filter((node) => node.key !== selectedKey.value && !blocked.has(node.key))
+    .map((node) => ({ label: node.title, value: node.key }))
+  return [{ label: '根级（移出层级）', value: 0 }, ...options]
+})
+
+function onTreeSelect(keys: Array<string | number>) {
+  const key = keys[0]
+  selectedKey.value = key === undefined ? null : Number(key)
+  moveParentId.value = 0
+}
+
+async function moveSelected() {
+  if (selectedKey.value == null) return
+  const parentId = moveParentId.value === 0 ? null : moveParentId.value
+  if (parentId === selectedKey.value) return
+  try {
+    const data = await moveTags([{ tag_id: selectedKey.value, parent_id: parentId }])
+    if (data.moved === 1) {
+      Message.success('已移动')
+      selectedKey.value = null
+      loadRoot()
+    } else if (data.errors.length) {
+      Message.warning(data.errors.map((e) => e.message).join('；'))
+    }
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '移动失败'))
+  }
+}
+
 onMounted(() => {
   loadRoot()
 })
@@ -143,13 +211,24 @@ onMounted(() => {
 <template>
   <div class="tree-panel">
     <div class="tree-toolbar">
-      <a-space>
+      <a-space wrap>
         <a-button size="small" :loading="loadingRoot" @click="loadRoot">刷新</a-button>
         <a-button size="small" @click="expandAll">展开/收起</a-button>
+        <a-select
+          v-model="moveParentId"
+          size="small"
+          style="width: 170px"
+          :options="parentOptions"
+          :disabled="selectedKey == null"
+          placeholder="选择新父级"
+        />
+        <a-button size="small" :disabled="selectedKey == null" @click="moveSelected">
+          移动选中节点
+        </a-button>
       </a-space>
-      <span class="tree-hint"
-        >拖拽标签可移动到其它标签下；移动到根需拖到空白处（后端按「移到根」处理）</span
-      >
+      <span class="tree-hint">
+        拖拽标签可移动到其它标签下；触屏请先点选节点，再用上方下拉选择父级
+      </span>
     </div>
 
     <a-spin :loading="loadingRoot" class="tree-spin">
@@ -159,10 +238,12 @@ onMounted(() => {
         :data="treeData"
         :load-more="onLoadMore"
         :expanded-keys="expandedKeys"
+        :selected-keys="selectedKey == null ? [] : [selectedKey]"
         draggable
         block-node
         show-line
         @drop="onDrop"
+        @select="onTreeSelect"
       >
         <template #icon="{ isLeaf }">
           <IconFolder v-if="!isLeaf" style="color: #d97706" />

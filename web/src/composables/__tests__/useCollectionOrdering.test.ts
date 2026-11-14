@@ -150,6 +150,29 @@ describe('useCollectionItemOrdering（合集内成员排序）', () => {
     expect(mocks.reorderCollectionItems).not.toHaveBeenCalled()
   })
 
+  it('触屏上移/下移：直接交换相邻素材，不发请求', async () => {
+    const { api } = mountOrdering(3)
+    api.enterOrdering()
+    await vi.waitFor(() => expect(api.orderedItems.value).toHaveLength(3))
+
+    api.onItemMove('b', 'up')
+    expect(api.orderedItems.value.map((i) => i.id)).toEqual(['b', 'a', 'c'])
+
+    api.onItemMove('b', 'down')
+    expect(api.orderedItems.value.map((i) => i.id)).toEqual(['a', 'b', 'c'])
+    expect(mocks.reorderCollectionItems).not.toHaveBeenCalled()
+  })
+
+  it('触屏排序到边界时不动', async () => {
+    const { api } = mountOrdering(3)
+    api.enterOrdering()
+    await vi.waitFor(() => expect(api.orderedItems.value).toHaveLength(3))
+
+    api.onItemMove('a', 'up')
+    api.onItemMove('c', 'down')
+    expect(api.orderedItems.value.map((i) => i.id)).toEqual(['a', 'b', 'c'])
+  })
+
   it('保存成功：提交当前顺序 + 退出排序模式 + 刷新内容', async () => {
     const ok = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
     const { api, loadContent } = mountOrdering(3)
@@ -240,5 +263,21 @@ describe('useCollectionListDnd（合集列表拖拽）', () => {
     await api.onCollectionDrop(2)
 
     expect(api.dragOverId.value).toBeNull()
+  })
+
+  it('触屏上移/下移：一级合集连同二级收藏夹整体移动', async () => {
+    const child = { ...collection(11), parent_id: 1 }
+    const collections = ref([collection(1), child, collection(2), collection(3)])
+    const api = useCollectionListDnd({
+      collections,
+      loadCollections: vi.fn().mockResolvedValue(undefined),
+    })
+
+    await api.onCollectionMove(2, 'up')
+    expect(collections.value.map((c) => c.id)).toEqual([2, 1, 11, 3])
+    expect(mocks.reorderCollections).toHaveBeenCalledWith([2, 1, 11, 3])
+
+    await api.onCollectionMove(2, 'down')
+    expect(collections.value.map((c) => c.id)).toEqual([1, 11, 2, 3])
   })
 })

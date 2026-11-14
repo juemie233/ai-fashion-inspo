@@ -7,10 +7,34 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { nextTick } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import ImageLightbox from '../ImageLightbox.vue'
 
 let wrapper: VueWrapper | null = null
+
+/** jsdom 没有 PointerEvent 构造器时，用 Event + 自定义属性模拟 */
+function pointerEvent(
+  type: string,
+  pointerId: number,
+  clientX: number,
+  clientY: number,
+  pointerType = 'touch',
+): PointerEvent {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent
+  Object.defineProperties(event, {
+    pointerId: { value: pointerId },
+    clientX: { value: clientX },
+    clientY: { value: clientY },
+    pointerType: { value: pointerType },
+    button: { value: 0 },
+  })
+  return event
+}
+
+function wrapEl(): HTMLElement {
+  return document.body.querySelector('.lightbox-img-wrap') as HTMLElement
+}
 
 function mountBox(props: Record<string, unknown>): void {
   wrapper = mount(ImageLightbox, {
@@ -49,5 +73,17 @@ describe('ImageLightbox 图片 URL 解析', () => {
     mountBox({ imagePath: url, urlResolver: (p: string) => p })
     const img = document.body.querySelector('.lightbox-img')
     expect(img?.getAttribute('src')).toBe(url)
+  })
+
+  it('双指手势按间距缩放图片（触摸端 pinch）', async () => {
+    mountBox({ imagePath: 'images/a.jpg' })
+    const target = wrapEl()
+
+    target.dispatchEvent(pointerEvent('pointerdown', 1, 0, 0))
+    target.dispatchEvent(pointerEvent('pointerdown', 2, 100, 0))
+    window.dispatchEvent(pointerEvent('pointermove', 2, 200, 0))
+    await nextTick()
+
+    expect(document.body.querySelector('.zoom-level')?.textContent).toBe('200%')
   })
 })

@@ -24,7 +24,34 @@ export default defineConfig({
     viewport: { width: 1600, height: 1100 },
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      // iPad 专用布局用例只在两个 iPad project 里跑，避免桌面 project 重复执行
+      testIgnore: /ipad\.spec\.ts/,
+    },
+    {
+      name: 'ipad-portrait',
+      testMatch: /ipad\.spec\.ts/,
+      use: {
+        viewport: { width: 768, height: 1024 },
+        deviceScaleFactor: 2,
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
+    {
+      name: 'ipad-landscape',
+      testMatch: /ipad\.spec\.ts/,
+      use: {
+        viewport: { width: 1024, height: 768 },
+        deviceScaleFactor: 2,
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
+  ],
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:17777',
