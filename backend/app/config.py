@@ -196,6 +196,12 @@ class Settings(BaseSettings):
     # P1-5：负数没有意义（0 = 关闭看门狗）；上限 7 天防止误填成毫秒/天数值导致
     # 看门狗形同关闭。启动即拒绝，避免配置笔误静默失效。
     task_stall_timeout_seconds: int = Field(default=1800, ge=0, le=7 * 24 * 3600)
+    # worker 心跳间隔与「心跳超时」阈值：默认 10s / 90s。
+    # 两者主要为了让系统测试能缩短故障恢复验证时间（临时库/进程，不影响生产默认值）；
+    # 调小后 worker 心跳更频繁，stale 判定更快，但会略微增加 SQLite 写次数。
+    # 可在 .env 用 WORKER_HEARTBEAT_INTERVAL_SECONDS / WORKER_STALE_HEARTBEAT_THRESHOLD_SECONDS 覆盖
+    worker_heartbeat_interval_seconds: float = Field(default=10.0, ge=0.1, le=60)
+    worker_stale_heartbeat_threshold_seconds: float = Field(default=90.0, ge=1, le=3600)
     # 批内分析并发度：批量分析/组合分析/质量审核任务内部同时分析的素材数
     # （原写死常量 _ANALYZE_CONCURRENCY=1）。注意 worker 与 API 进程
     # （routers/ai_shared.py 的独立信号量=2）互不感知，最坏并发出路为

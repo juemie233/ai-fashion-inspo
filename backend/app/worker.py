@@ -54,11 +54,15 @@ logger = logging.getLogger(__name__)
 # 轮询间隔（秒）：无任务时多久检查一次
 _POLL_INTERVAL = 1.0
 
-# 心跳间隔（秒）：worker 定期写入服务心跳并刷新 running 任务的心跳时间
-_HEARTBEAT_INTERVAL = 10.0
+# 心跳间隔（秒）：worker 定期写入服务心跳并刷新 running 任务的心跳时间。
+# 可由 WORKER_HEARTBEAT_INTERVAL_SECONDS 覆盖（默认 10s；系统测试会调小以加快验证）。
+_HEARTBEAT_INTERVAL = float(getattr(settings, "worker_heartbeat_interval_seconds", 10.0))
 
-# 心跳超时阈值（秒）：running 任务心跳超过该时长未更新，视为「认领它的 worker 已死」
-_STALE_HEARTBEAT_THRESHOLD = 90.0
+# 心跳超时阈值（秒）：running 任务心跳超过该时长未更新，视为「认领它的 worker 已死」。
+# 可由 WORKER_STALE_HEARTBEAT_THRESHOLD_SECONDS 覆盖（默认 90s）。
+_STALE_HEARTBEAT_THRESHOLD = float(
+    getattr(settings, "worker_stale_heartbeat_threshold_seconds", 90.0)
+)
 
 # 任务看门狗检查间隔（秒）：低频扫「本 worker 认领的 running 任务是否长时间没进度」
 _STALL_CHECK_INTERVAL = 30.0
