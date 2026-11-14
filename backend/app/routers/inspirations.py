@@ -250,6 +250,7 @@ async def list_inspirations(
         None, description="只看某个出图批次入库的素材（生成历史「已入库」反查）"
     ),
     rating_min: int | None = Query(None, ge=1, le=5, description="评分下限（评分 >= 该值）"),
+    unrated: bool = Query(False, description="仅未评分素材（rating 为空或 0）"),
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
 ) -> InspirationListOut:
@@ -279,6 +280,7 @@ async def list_inspirations(
         ids=id_list,
         generation_run_id=generation_run_id,
         rating_min=rating_min,
+        unrated=unrated,
         sort=sort,
     )
     return InspirationListOut(

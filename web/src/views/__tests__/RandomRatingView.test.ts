@@ -68,7 +68,12 @@ describe('RandomRatingView', () => {
     await flushPromises()
 
     expect(mocks.fetchInspirations).toHaveBeenCalledWith(
-      expect.objectContaining({ size: 1, sort: 'random', media_type: 'image' }),
+      expect.objectContaining({
+        size: 1,
+        sort: 'random',
+        media_type: 'image',
+        unrated: true,
+      }),
     )
     expect(wrapper.find('.rate-image').exists()).toBe(true)
     expect(wrapper.find('.rate-image').attributes('src')).toContain('images/2026-11/a.jpg')

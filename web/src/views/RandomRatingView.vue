@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 随机评分页：每次随机抽一张图片素材，1-5 星评分后自动换下一张。 */
 
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getFileUrl } from '@/api/inspirations'
 import AsyncState from '@/components/common/AsyncState.vue'
@@ -10,7 +10,19 @@ import { formatDate } from '@/utils/format'
 import { sourceLabel } from '@/utils/sourceLabel'
 
 const router = useRouter()
-const { item, total, loading, saving, ratedCount, error, loadRandom, rate } = useRandomRating()
+const {
+  item,
+  total,
+  showingUnrated,
+  loading,
+  saving,
+  deleting,
+  ratedCount,
+  error,
+  loadRandom,
+  rate,
+  removeCurrent,
+} = useRandomRating()
 
 /** 当前图片大图地址（评分看原图，避免缩略图看不清细节） */
 const imageUrl = computed(() => (item.value ? getFileUrl(item.value.file_path) : ''))
@@ -55,9 +67,24 @@ async function handleRate(value: number): Promise<void> {
 }
 
 function nextImage(): void {
-  if (saving.value) return
+  if (saving.value || deleting.value) return
   clearNextTimer()
   void loadRandom()
+}
+
+/** 删除当前图片（软删除到垃圾桶）并抽下一张 */
+const deleteTargetId = ref<string | null>(null)
+
+function openDeleteConfirm(): void {
+  deleteTargetId.value = item.value?.id ?? null
+  clearNextTimer()
+}
+
+async function handleDelete(): Promise<void> {
+  const targetId = deleteTargetId.value
+  deleteTargetId.value = null
+  if (!targetId || saving.value || deleting.value) return
+  if (await removeCurrent(targetId)) await loadRandom()
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -95,9 +122,11 @@ onUnmounted(() => {
       <a-button type="text" @click="router.push('/')">← 返回素材库</a-button>
       <div class="rate-title-wrap">
         <h2>随机评分</h2>
-        <span class="rate-subtitle">仅图片素材 · 本次已评 {{ ratedCount }} 张</span>
+        <span class="rate-subtitle">仅图片素材 · 优先未评分 · 本次已评 {{ ratedCount }} 张</span>
       </div>
-      <span v-if="total > 0" class="rate-total">图片素材 {{ total }} 张</span>
+      <span v-if="total > 0" class="rate-total">
+        {{ showingUnrated ? `待评分 ${total} 张` : `已评分图片 ${total} 张` }}
+      </span>
     </div>
 
     <a-alert v-if="error && item" type="warning" class="rate-error" closable @close="error = null">
@@ -139,12 +168,29 @@ onUnmounted(() => {
             />
             <span class="rate-hint">点击星星评分，按 1-5 也可</span>
           </div>
-          <a-button type="primary" :loading="loading" :disabled="saving" @click="nextImage"
-            >换一张 →</a-button
-          >
+          <div class="rate-actions">
+            <a-popconfirm
+              content="移入垃圾桶？删除后可在垃圾桶恢复"
+              ok-text="移入"
+              cancel-text="取消"
+              @ok="handleDelete"
+              @cancel="deleteTargetId = null"
+            >
+              <a-button
+                status="danger"
+                :disabled="saving || loading"
+                :loading="deleting"
+                @click="openDeleteConfirm"
+                >删除</a-button
+              >
+            </a-popconfirm>
+            <a-button type="primary" :loading="loading" :disabled="saving" @click="nextImage"
+              >换一张 →</a-button
+            >
+          </div>
         </div>
 
-        <div class="rate-keyboard-hint">空格 / → 换一张 · Esc 返回素材库</div>
+        <div class="rate-keyboard-hint">空格 / → 换一张 · Esc 返回素材库 · 删除会移入垃圾桶</div>
       </div>
     </AsyncState>
   </div>
@@ -250,6 +296,12 @@ onUnmounted(() => {
 
 .rate-stars :deep(.arco-rate) {
   font-size: 30px;
+}
+
+.rate-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .rate-hint,

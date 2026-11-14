@@ -138,6 +138,7 @@ async def list_inspirations(
     ids: list[str] | None = None,           # 精确 ID 过滤（定位跳转用，与其他筛选条件叠加）
     generation_run_id: int | None = None,   # 只看某出图批次入库的素材
     rating_min: int | None = None,          # 评分下限（评分 >= 该值，0 表示未评分也通过）
+    unrated: bool = False,                  # 仅未评分（rating 为空或 0）
     sort: str = "newest",
 ) -> tuple[list[Inspiration], int]:
     """分页查询灵感列表，支持多维筛选和排序。
@@ -179,6 +180,9 @@ async def list_inspirations(
     if rating_min is not None:
         # 评分筛选：rating >= rating_min；rating_min=0 时所有未删除素材（含未评分 0）都通过
         query = query.where(Inspiration.rating >= rating_min)
+    if unrated:
+        # 随机评分页优先取未评分素材；历史数据里 rating 可能是 NULL，不能只判 == 0
+        query = query.where(or_(Inspiration.rating.is_(None), Inspiration.rating == 0))
     if dominant_color:
         query = query.where(Inspiration.dominant_colors.contains(dominant_color))
     if date_from:

@@ -304,6 +304,8 @@ export async function fetchInspirations(
     date_to?: string
     ids?: string
     rating_min?: number
+    /** 仅未评分素材（rating 为空或 0），随机评分页优先抽未评分图 */
+    unrated?: boolean
     sort?: string
   } = {},
 ) {

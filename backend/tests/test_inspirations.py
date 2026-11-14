@@ -200,6 +200,29 @@ def test_rating_filter_and_sort(client, upload):
     assert {i["id"] for i in unrated} == {a, b, c}
 
 
+def test_unrated_filter(client, upload):
+    """unrated=True 只返回未评分素材（rating=0），供随机评分页优先抽题。"""
+    a = upload(color=(200, 100, 50)).json()["id"]  # 默认 0 分
+    b = upload(color=(30, 40, 50)).json()["id"]
+    c = upload(color=(90, 10, 200)).json()["id"]
+    client.patch(f"/api/inspirations/{b}", json={"rating": 5})
+    client.patch(f"/api/inspirations/{c}", json={"rating": 1})
+
+    r = client.get("/api/inspirations", params={"unrated": True}).json()
+    assert r["total"] == 1
+    assert {i["id"] for i in r["items"]} == {a}
+    assert r["items"][0]["rating"] == 0
+
+    # 与 media_type 等其他筛选叠加，且 unrated=False 不改变原列表
+    assert (
+        client.get(
+            "/api/inspirations", params={"unrated": True, "media_type": "image"}
+        ).json()["total"]
+        == 1
+    )
+    assert client.get("/api/inspirations", params={"unrated": False}).json()["total"] == 3
+
+
 def test_physical_delete(client, upload):
     """物理删除后列表与垃圾桶均不再包含。"""
     insp_id = upload().json()["id"]
