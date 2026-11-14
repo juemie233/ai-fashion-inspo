@@ -177,6 +177,7 @@ async def search_inspirations(
         base_query = base_query.where(and_(*conditions))
 
     # 应用标签筛选
+    include_ids: list[int] = []
     if include_list:
         include_tag_ids = select(Tag.id).where(Tag.name.in_(include_list))
         tag_result = await db.execute(include_tag_ids)
