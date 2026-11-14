@@ -12,6 +12,7 @@ import {
   moveToTrash,
   updateRating,
   type InspirationOut,
+  type TrashReason,
 } from '@/api/inspirations'
 import { getApiErrorMessage } from '@/utils/apiError'
 
@@ -106,12 +107,12 @@ export function useRandomRating() {
   }
 
   /** 把指定图片（缺省为当前图）移入垃圾桶；返回是否成功 */
-  async function removeCurrent(targetId?: string): Promise<boolean> {
+  async function removeCurrent(targetId?: string, reason?: TrashReason): Promise<boolean> {
     const id = targetId ?? item.value?.id
     if (!id || deleting.value) return false
     deleting.value = true
     try {
-      await moveToTrash(id)
+      await moveToTrash(id, reason)
       Message.success('已移入垃圾桶')
       return true
     } catch (e) {

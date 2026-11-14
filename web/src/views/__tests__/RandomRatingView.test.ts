@@ -7,6 +7,7 @@ import ArcoVue from '@arco-design/web-vue'
 const mocks = vi.hoisted(() => ({
   fetchInspirations: vi.fn(),
   updateRating: vi.fn(),
+  moveToTrash: vi.fn(),
   routerPush: vi.fn(),
 }))
 
@@ -20,6 +21,7 @@ vi.mock('@/api/inspirations', async () => {
     ...actual,
     fetchInspirations: mocks.fetchInspirations,
     updateRating: mocks.updateRating,
+    moveToTrash: mocks.moveToTrash,
   }
 })
 
@@ -47,7 +49,9 @@ beforeEach(() => {
   vi.useFakeTimers()
   mocks.fetchInspirations.mockReset()
   mocks.updateRating.mockReset()
+  mocks.moveToTrash.mockReset()
   mocks.routerPush.mockReset()
+  mocks.moveToTrash.mockResolvedValue({})
   let seq = 0
   mocks.fetchInspirations.mockImplementation(async () => ({
     items: [{ ...ITEM, id: `insp-${++seq}` }],
@@ -106,6 +110,26 @@ describe('RandomRatingView', () => {
 
     expect(wrapper.find('.rate-image').exists()).toBe(false)
     expect(wrapper.text()).toContain('还没有可评分的图片素材')
+    wrapper.unmount()
+  })
+
+  it('删除必须先选择原因，确认后才移入垃圾桶并抽下一张', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const deleteButton = wrapper.findAll('button').find((b) => b.text() === '删除')
+    await deleteButton!.trigger('click')
+    await flushPromises()
+
+    const modal = wrapper.findComponent({ name: 'TrashReasonModal' })
+    expect(modal.props('visible')).toBe(true)
+    expect(mocks.moveToTrash).not.toHaveBeenCalled()
+
+    modal.vm.$emit('confirm', '不喜欢')
+    await flushPromises()
+
+    expect(mocks.moveToTrash).toHaveBeenCalledWith('insp-1', '不喜欢')
+    expect(mocks.fetchInspirations).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 

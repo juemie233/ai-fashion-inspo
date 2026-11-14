@@ -36,6 +36,9 @@ const ITEM = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.fetchInspirations.mockReset()
+  mocks.moveToTrash.mockReset()
+  mocks.updateRating.mockReset()
   mocks.moveToTrash.mockResolvedValue({})
 })
 
@@ -80,7 +83,7 @@ describe('useRandomRating', () => {
     const ok = await api.removeCurrent()
 
     expect(ok).toBe(true)
-    expect(mocks.moveToTrash).toHaveBeenCalledWith('img-1')
+    expect(mocks.moveToTrash).toHaveBeenCalledWith('img-1', undefined)
     expect(mocks.message.success).toHaveBeenCalledWith('已移入垃圾桶')
 
     await api.loadRandom()

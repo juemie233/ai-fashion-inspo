@@ -3,8 +3,9 @@
 
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getFileUrl } from '@/api/inspirations'
+import { getFileUrl, type TrashReason } from '@/api/inspirations'
 import AsyncState from '@/components/common/AsyncState.vue'
+import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import { useRandomRating } from '@/composables/useRandomRating'
 import { formatDate } from '@/utils/format'
 import { sourceLabel } from '@/utils/sourceLabel'
@@ -67,28 +68,40 @@ async function handleRate(value: number): Promise<void> {
 }
 
 function nextImage(): void {
-  if (saving.value || deleting.value) return
+  if (saving.value || deleting.value || trashModalOpen.value) return
   clearNextTimer()
   void loadRandom()
 }
 
-/** 删除当前图片（软删除到垃圾桶）并抽下一张 */
+/** 删除当前图片：先弹公共「选择删除原因」弹窗，确认后软删除并抽下一张 */
+const trashModalOpen = ref(false)
 const deleteTargetId = ref<string | null>(null)
 
 function openDeleteConfirm(): void {
   deleteTargetId.value = item.value?.id ?? null
+  if (!deleteTargetId.value) return
   clearNextTimer()
+  trashModalOpen.value = true
 }
 
-async function handleDelete(): Promise<void> {
+async function confirmTrash(reason: TrashReason): Promise<void> {
+  trashModalOpen.value = false
   const targetId = deleteTargetId.value
   deleteTargetId.value = null
   if (!targetId || saving.value || deleting.value) return
-  if (await removeCurrent(targetId)) await loadRandom()
+  if (await removeCurrent(targetId, reason)) await loadRandom()
 }
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.repeat) return
+  if (trashModalOpen.value) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      trashModalOpen.value = false
+      deleteTargetId.value = null
+    }
+    return
+  }
   if (event.key === 'Escape') {
     event.preventDefault()
     router.push('/')
@@ -169,30 +182,25 @@ onUnmounted(() => {
             <span class="rate-hint">点击星星评分，按 1-5 也可</span>
           </div>
           <div class="rate-actions">
-            <a-popconfirm
-              content="移入垃圾桶？删除后可在垃圾桶恢复"
-              ok-text="移入"
-              cancel-text="取消"
-              @ok="handleDelete"
-              @cancel="deleteTargetId = null"
+            <a-button
+              status="danger"
+              :disabled="saving || loading"
+              :loading="deleting"
+              @click="openDeleteConfirm"
+              >删除</a-button
             >
-              <a-button
-                status="danger"
-                :disabled="saving || loading"
-                :loading="deleting"
-                @click="openDeleteConfirm"
-                >删除</a-button
-              >
-            </a-popconfirm>
             <a-button type="primary" :loading="loading" :disabled="saving" @click="nextImage"
               >换一张 →</a-button
             >
           </div>
         </div>
 
-        <div class="rate-keyboard-hint">空格 / → 换一张 · Esc 返回素材库 · 删除会移入垃圾桶</div>
+        <div class="rate-keyboard-hint">空格 / → 换一张 · Esc 返回素材库 · 删除需选择原因</div>
       </div>
     </AsyncState>
+
+    <!-- 删除原因必选（复用素材库公共组件），确认后软删除到垃圾桶 -->
+    <TrashReasonModal v-model:visible="trashModalOpen" :count="1" @confirm="confirmTrash" />
   </div>
 </template>
 
