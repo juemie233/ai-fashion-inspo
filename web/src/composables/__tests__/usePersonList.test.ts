@@ -265,10 +265,10 @@ describe('usePersonList', () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('表头排序：只有「素材数」列可排序，其余列点击不改变排序', async () => {
+  it('表头排序：素材数列与博主作品评分列可点击，其余列不改变排序', async () => {
     const { store, onSorterChange } = await load()
 
-    onSorterChange('name', 'ascend') // 非素材数列：忽略
+    onSorterChange('name', 'ascend') // 非排序列：忽略
     await Promise.resolve()
     expect(store.sort).toBe('count')
 
@@ -280,6 +280,14 @@ describe('usePersonList', () => {
     onSorterChange('inspiration_count', 'descend')
     await Promise.resolve()
     expect(store.order).toBe('desc')
+
+    onSorterChange('rating_average', 'descend') // 降序 = 高分在前
+    await Promise.resolve()
+    expect(store.sort).toBe('rating')
+
+    onSorterChange('rating_average', 'ascend') // 升序 = 低分在前
+    await Promise.resolve()
+    expect(store.sort).toBe('rating_asc')
   })
 })
 
@@ -323,7 +331,21 @@ describe('usePersonList 作品评分（博主）', () => {
     expect(blogger.sortOptions.value.map((o) => o.value)).toContain('rating_asc')
     expect(blogger.ratingOptions.map((o) => o.value)).toEqual(['', 3, 4, 5])
 
+    // 作品评分列必须可点击排序，并随当前排序方向回显箭头
+    const ratingColumn = () => blogger.columns.value.find((c) => c.dataIndex === 'rating_average')
+    const ratingSortOrder = () => {
+      const sortable = ratingColumn()?.sortable
+      return typeof sortable === 'object' ? sortable?.sortOrder : undefined
+    }
+    expect(ratingColumn()?.sortable).toBeTruthy()
+    expect(ratingSortOrder()).toBe('')
+    blogger.store.sort = 'rating'
+    expect(ratingSortOrder()).toBe('descend')
+    blogger.store.sort = 'rating_asc'
+    expect(ratingSortOrder()).toBe('ascend')
+
     const model = mod.usePersonList('model')
     expect(model.sortOptions.value.map((o) => o.value)).toEqual(['count', 'newest', 'name'])
+    expect(model.columns.value.some((c) => c.dataIndex === 'rating_average')).toBe(false)
   })
 })

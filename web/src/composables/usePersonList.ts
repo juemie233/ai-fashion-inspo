@@ -330,9 +330,11 @@ export function usePersonList(kind: PersonKind) {
       width: 96,
       // 表头可点击排序：升序找「素材最少」（常用于发现空人物），降序找高频人物。
       // sortOrder 是受控回显（刷新/往返详情后箭头仍指向当前方向）；点击由 onSorterChange 接管。
-      sortable: { sortDirections: ['descend', 'ascend'] },
-      sortOrder:
-        store.sort === 'count' ? (store.order === 'asc' ? 'ascend' : 'descend') : undefined,
+      sortable: {
+        sortDirections: ['descend', 'ascend'],
+        // Arco 只在 sortable.sortOrder 里受控回显；放在列顶层不会生效
+        sortOrder: store.sort === 'count' ? (store.order === 'asc' ? 'ascend' : 'descend') : '',
+      },
       render: ({ record }) => h('span', String((record as Person).inspiration_count ?? 0)),
     },
     // 「来源」列仅职业模特展示（穿搭博主不显示该列，其余能力不受影响）
@@ -342,6 +344,13 @@ export function usePersonList(kind: PersonKind) {
             title: '作品评分',
             dataIndex: 'rating_average',
             width: 120,
+            // 表头可点击排序：降序=高分博主在前，升序=低分（但样本足够）在前；
+            // sort=rating / rating_asc 由后端统一把「不足 5 张已评」的排到最后。
+            sortable: {
+              sortDirections: ['descend', 'ascend'],
+              sortOrder:
+                store.sort === 'rating' ? 'descend' : store.sort === 'rating_asc' ? 'ascend' : '',
+            },
             render: ({ record }) => {
               const row = record as Person
               const rated = row.rated_count ?? 0
@@ -488,9 +497,15 @@ export function usePersonList(kind: PersonKind) {
     store.reload()
   }
 
-  /** 表头点击排序：目前只有「素材数」列可排序，方向由后端 order 参数控制。
-   *  升序用于找「素材最少」（例如发现空仓人物），降序用于找高频人物。 */
+  /** 表头点击排序：素材数 + 博主作品评分。
+   *  - 素材数：方向由后端 order 参数控制，升序用于找「素材最少」（例如发现空仓人物）；
+   *  - 作品评分：升序 = rating_asc（低分在前），降序 = rating（高分在前）。 */
   function onSorterChange(dataIndex: string, direction: string) {
+    if (dataIndex === 'rating_average') {
+      store.sort = direction === 'ascend' ? 'rating_asc' : 'rating'
+      void loadAndSync()
+      return
+    }
     if (dataIndex !== 'inspiration_count') return
     store.sort = 'count'
     // Arco 传来的是 'ascend' | 'descend' | null（签名标成 string）；非 ascend 一律降序
