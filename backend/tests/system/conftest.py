@@ -169,6 +169,115 @@ def fake_ollama() -> _OllamaStub:
         thread.join(timeout=5)
 
 
+# ── 上游桩：ComfyUI（出图系统测试用：提交 → 轮询 → 取图全走 HTTP）──
+
+
+class _ComfyStub:
+    def __init__(self) -> None:
+        self.base_url = ""
+        self.prompt_count = 0
+        self.image_seq = 0
+
+
+class _ComfyStubHandler(BaseHTTPRequestHandler):
+    stub: _ComfyStub
+
+    def log_message(self, *_args):
+        return
+
+    def _send_json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _image_bytes(self) -> bytes:
+        """每次 /view 返回**不同内容**的图。
+
+        素材入库有「内容哈希全局去重」：桩若每次都返回同一张图，确认入库时第二张
+        会被判「已存在（内容重复）」——系统测试要验证的是入库条数，所以每张必须不同。
+        """
+        import io
+
+        from PIL import Image
+
+        self.stub.image_seq += 1
+        color = (120 + self.stub.image_seq % 100, 90, 160)
+        buffer = io.BytesIO()
+        Image.new("RGB", (64, 64), color).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def do_GET(self):  # noqa: N802
+        if self.path.startswith("/system_stats"):
+            self._send_json(
+                {
+                    "system": {},
+                    "devices": [
+                        {"vram_total": 24 * 2**30, "vram_free": 20 * 2**30, "name": "stub-gpu"}
+                    ],
+                }
+            )
+        elif self.path.startswith("/history/"):
+            prompt_id = self.path.rsplit("/", 1)[-1]
+            self._send_json(
+                {
+                    prompt_id: {
+                        "status": {"status_str": "success", "completed": True},
+                        "outputs": {
+                            "9": {
+                                "images": [
+                                    {
+                                        "filename": "stub_out.png",
+                                        "subfolder": "",
+                                        "type": "output",
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                }
+            )
+        elif self.path.startswith("/view"):
+            data = self._image_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self._send_json({"error": "not found"}, status=404)
+
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        if self.path.startswith("/prompt"):
+            self.stub.prompt_count += 1
+            self._send_json({"prompt_id": f"stub-{self.stub.prompt_count}"})
+        elif self.path.startswith("/upload/image"):
+            self._send_json({"name": "uploaded.png"})
+        else:
+            self._send_json({"error": "not found"}, status=404)
+
+
+@pytest.fixture(scope="session")
+def fake_comfyui() -> _ComfyStub:
+    stub = _ComfyStub()
+    _ComfyStubHandler.stub = stub
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ComfyStubHandler)
+    stub.base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    thread = threading.Thread(target=server.serve_forever, name="fake-comfyui", daemon=True)
+    thread.start()
+    try:
+        yield stub
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 # ── 后端服务子进程 ──
 
 
@@ -207,7 +316,9 @@ def _wait_health(base_url: str, *, timeout: float = 120.0) -> None:
 
 
 @pytest.fixture(scope="session")
-def server_env(system_root: Path, fake_ollama: _OllamaStub) -> dict:
+def server_env(
+    system_root: Path, fake_ollama: _OllamaStub, fake_comfyui: _ComfyStub
+) -> dict:
     """后端/worker 子进程共用的环境变量（临时 DB/存储 + 上游桩）。"""
     db_path = system_root / "db.sqlite"
     storage_root = system_root / "storage"
@@ -235,8 +346,7 @@ def server_env(system_root: Path, fake_ollama: _OllamaStub) -> dict:
             # 系统测试专用：心跳更快、stale 阈值更短，便于验证故障恢复
             "WORKER_HEARTBEAT_INTERVAL_SECONDS": "0.5",
             "WORKER_STALE_HEARTBEAT_THRESHOLD_SECONDS": "3",
-            # ComfyUI 指到不可用端口：确保本阶段不会有任何真实出图请求
-            "COMFYUI_BASE_URL": "http://127.0.0.1:1",
+            "COMFYUI_BASE_URL": fake_comfyui.base_url,
             "SEEDREAM_DAILY_BUDGET_CNY": "0",
             "PYTHONUNBUFFERED": "1",
             "PYTHONIOENCODING": "utf-8",
