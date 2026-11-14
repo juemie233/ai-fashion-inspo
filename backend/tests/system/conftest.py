@@ -120,7 +120,11 @@ class _OllamaStubHandler(BaseHTTPRequestHandler):
                 {"model": _VISION_MODEL, "message": {"role": "assistant", "content": _ANALYSIS_JSON}, "done": True}
             )
         elif self.path.startswith("/api/embed"):
-            self._send_json({"embeddings": [[0.0] * 8]})
+            # 新接口批量形式；维度与 settings.lancedb_text_dim 默认一致（1024）
+            self._send_json({"embeddings": [[0.0] * 1024]})
+        elif self.path.startswith("/api/embeddings"):
+            # 老接口单条形式
+            self._send_json({"embedding": [0.0] * 1024})
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -256,6 +260,55 @@ def backend_server(system_root: Path, server_env: dict):
     # 失败排查线索：日志与临时根路径
     print(f"\n[system-test] temp root: {system_root}")
     print(f"[system-test] uvicorn log: {log_path}")
+
+
+def _wait_worker_heartbeat(db_path: Path, *, timeout: float = 90.0) -> None:
+    """等 worker 写第一条心跳（证明它已连上同一临时库并开始轮询）。"""
+    import sqlite3
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM service_heartbeats WHERE service_type = 'worker' LIMIT 1"
+                ).fetchone()
+            if row:
+                return
+        except sqlite3.Error:
+            pass
+        time.sleep(0.3)
+    raise RuntimeError(f"worker 未在 {timeout}s 内上报心跳")
+
+
+@pytest.fixture(scope="session")
+def worker_process(system_root: Path, server_env: dict, backend_server: str):
+    """起真 worker 子进程（与 API 共用临时 DB/存储与上游桩）。
+
+    依赖 `backend_server`：必须先由 API 进程跑完 Alembic 迁移，worker 再
+    `create_all` 兜底，避免 worker 先建表导致迁移报「table already exists」。
+    """
+    log_path = system_root / "logs" / "worker.log"
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+
+    with open(log_path, "ab") as log_file:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "app.worker"],
+            cwd=str(BACKEND_DIR),
+            env=server_env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            creationflags=creationflags,
+        )
+        try:
+            _wait_worker_heartbeat(system_root / "db.sqlite")
+            yield proc
+        finally:
+            _terminate_process(proc)
+
+    print(f"\n[system-test] worker log: {log_path}")
 
 
 @pytest.fixture()
