@@ -256,7 +256,7 @@ chrome_debug_port: int = 9222
 
 ### 门禁与测试体系（10-20）
 
-- `scripts/ci/test.sh` 现在是 **14 项**门禁：ruff、pytest+覆盖率+关键模块地板、迁移链空库自检、ORM/库漂移、**脚本规范（`scripts/ci/check_scripts.py`：只读连接 + argparse 入口）**、vue-tsc、vitest+覆盖率、eslint、死代码基线、改动文件格式、移动端 tsc+jest+覆盖率、子项目测试；`--e2e` 为可选附加档。
+- `scripts/ci/test.sh` 现在是 **15 项**门禁：ruff、pytest+覆盖率+关键模块地板、迁移链空库自检、ORM/库漂移、**脚本规范（`scripts/ci/check_scripts.py`：只读连接 + argparse 入口）**、vue-tsc、vitest+覆盖率、eslint、死代码基线、改动文件格式、移动端 tsc+jest+覆盖率、子项目测试、**文档生成物一致性（`scripts/data/gen_docs_from_code.py --check`）**；`--e2e` 为可选附加档。
 - **覆盖率棘轮** 67 → **69**（当前 70%）；**mypy 棘轮** 9 个模块（`check_types.py`）；**eslint 警告** 73 → 34（`--max-warnings 34`）；**死代码基线** 279 → **275** 条（`MAX_BASELINE` 上限，只降不升；跨平台路径归一化两次修正：`1b34a1c`、`8d74fd6`）。
 - 测试补齐：垃圾桶服务层 10 条（覆盖率 30%→91%）、素材创建 8 条（48%→63%）、标签 CRUD/打标/更新 11 条（顺带修「归一化后重名」500）。
 
@@ -1532,12 +1532,12 @@ bash scripts/ops/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --al
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store / 视图交互）+ Playwright e2e 冒烟（真实浏览器跑页面，需前后端都起着）。
 
-**一键运行全部门禁**（14 项：后端 pytest+覆盖率+关键模块地板 / ruff / vulture / mypy 棘轮 / 迁移链空库自检 / ORM-库漂移 / 脚本规范 / vue-tsc / vitest+覆盖率 / eslint / 死代码基线 / 改动文件格式 / 移动端 tsc+jest+覆盖率 / 子项目测试；数字以 `test.sh` 输出为准）：
+**一键运行全部门禁**（15 项：后端 pytest+覆盖率+关键模块地板 / ruff / vulture / mypy 棘轮 / 迁移链空库自检 / ORM-库漂移 / 脚本规范 / vue-tsc / vitest+覆盖率 / eslint / 死代码基线 / 改动文件格式 / 移动端 tsc+jest+覆盖率 / 子项目测试 / 文档生成物一致性；数字以 `test.sh` 输出为准）：
 
 ```bash
-bash scripts/ci/test.sh          # 常规（14 项）
+bash scripts/ci/test.sh          # 常规（15 项）
 bash scripts/ci/test.sh --cov    # 后端额外输出覆盖率报告
-bash scripts/ci/test.sh --e2e    # 跑完 14 项后再跑 Playwright（需后端在跑；可作 nightly）
+bash scripts/ci/test.sh --e2e    # 跑完 15 项后再跑 Playwright（需后端在跑；可作 nightly）
 ```
 
 ### 后端（pytest；当前约 3,000 条，具体以收集数为准；覆盖率棘轮 ≥82.9%）

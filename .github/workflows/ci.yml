@@ -4,6 +4,7 @@ name: CI
 #   前端 job：ESLint（棘轮）+ vitest + vue-tsc + 死代码基线（ts-prune，只拦新增）
 #   后端 job：ruff（零告警）+ vulture（死代码）+ mypy 棘轮 + 迁移链自检（空库 → 与 ORM 一致）
 #             + 脚本规范（只读连接 / argparse）+ pytest 全量 + 覆盖率棘轮（≥82.9%）+ 关键模块地板
+#             + 文档生成物一致性（docs/overview 的 API参考 / 数据模型 / 配置项参考）
 #   移动端 job：tsc 类型检查 + jest-expo 单测（含「非 <Text> 节点下不许有裸字符串」的断言，
 #             专门防只有原生 RN 才会拦的白屏；Jest 里不校验，所以用自建断言补齐）
 # 任何一步失败即标红，把「人肉漏检」变成「机器必抓」。
@@ -150,6 +151,13 @@ jobs:
       - name: 脚本规范（只读连接 / CLI 入口）
         working-directory: ${{ github.workspace }}
         run: python scripts/ci/check_scripts.py
+
+      # 文档生成物：docs/overview 下的 API参考 / 数据模型 / 配置项参考 由代码生成。
+      # 手改文档、或改了 router/model/config 却忘了重跑生成器，都会在这里红。
+      # 同样必须把工作目录指到仓库根（本 job 默认 backend，直接跑会找不到脚本）。
+      - name: 文档生成物一致性（API / 数据模型 / 配置项）
+        working-directory: ${{ github.workspace }}
+        run: python scripts/data/gen_docs_from_code.py --check
 
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。

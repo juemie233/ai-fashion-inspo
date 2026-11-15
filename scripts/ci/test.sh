@@ -2,7 +2,7 @@
 # 一键跑全部质量门禁（与 .github/workflows/ci.yml 对齐：本地先绿，再推）。
 #   bash scripts/ci/test.sh          全部门禁
 #   bash scripts/ci/test.sh --cov    后端额外输出行级覆盖率报告（term-missing）
-#   bash scripts/ci/test.sh --e2e    跑完 14 项后再跑 Playwright（需后端在跑，可选/nightly）
+#   bash scripts/ci/test.sh --e2e    跑完 15 项后再跑 Playwright（需后端在跑，可选/nightly）
 #
 # 门禁清单（顺序即输出编号）：
 #    1. 后端 pytest 全量 + 覆盖率棘轮 ≥82.9% + 关键模块地板（临时库/临时存储）
@@ -19,6 +19,7 @@
 #   12. 前端格式（只查本次改动文件；全库检查会因约 45 个历史文件永远为红）
 #   13. 移动端类型检查（tsc）+ 单元测试（jest-expo + RNTL，含覆盖率门槛）
 #   14. 子项目最低测试（browser-extension 纯函数；face-service 存储层，无 venv 时跳过）
+#   15. 文档生成物与代码一致（docs/overview 的 API参考 / 数据模型 / 配置项参考）
 #
 # 依赖：Python 3.12+（可用 PYTHON_BIN 覆盖，如 PYTHON_BIN=py）、Node 20+、web/node_modules。
 # 前端一律用 node 直接调用本地二进制，规避 npx/npm 包装脚本在受限 PowerShell 下的执行策略问题。
@@ -129,6 +130,14 @@ else
   echo "[skip] face-service/.venv 不存在；CI 的 subprojects job 会覆盖该测试"
 fi
 
+echo ""
+echo "===== 15/15 文档生成物与代码一致（API / 数据模型 / 配置项）====="
+cd "$ROOT"
+# 这三份文档由代码生成（scripts/data/gen_docs_from_code.py），手改会被判「与代码不一致」。
+# 放在最后：它最便宜，但前面的门禁更重要——先让真问题先报，别让文档 diff 掩盖测试失败。
+# 报红时按提示重跑：python scripts/data/gen_docs_from_code.py
+"$PY" scripts/data/gen_docs_from_code.py --check
+
 if [[ "$RUN_E2E" == "1" ]]; then
   echo ""
   echo "===== 附加：端到端 E2E（需后端在跑）====="
@@ -138,7 +147,7 @@ fi
 
 echo ""
 if [[ "$RUN_E2E" == "1" ]]; then
-  echo "✅ 14 项门禁 + E2E 全部通过"
+  echo "✅ 15 项门禁 + E2E 全部通过"
 else
-  echo "✅ 14 项门禁全部通过"
+  echo "✅ 15 项门禁全部通过"
 fi
