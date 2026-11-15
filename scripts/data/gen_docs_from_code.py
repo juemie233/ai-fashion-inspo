@@ -390,11 +390,16 @@ def main() -> int:
 
     docs = ((OUT_API, api_md), (OUT_MODEL, model_md), (OUT_CONFIG, config_md))
     stale = []
+
+    def _strip_status_line(text: str) -> str:
+        """忽略生成的日期注释行，避免「只因为换了天」就判文档过期。"""
+        return chr(10).join(
+            line for line in text.splitlines() if not line.startswith("> **状态**：自动生成")
+        )
+
     for path, content in docs:
         current = path.read_text(encoding="utf-8") if path.exists() else ""
-        # 忽略日期行，避免「只因为换了天」就判过期
-        strip = lambda s: "\n".join(l for l in s.splitlines() if not l.startswith("> **状态**：自动生成"))
-        if strip(current) != strip(content):
+        if _strip_status_line(current) != _strip_status_line(content):
             stale.append(path)
         if not args.check:
             path.write_text(content, encoding="utf-8")
