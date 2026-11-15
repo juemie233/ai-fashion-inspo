@@ -202,6 +202,8 @@ export interface BackupStatus {
   running: boolean
   latest_success_at: string | null
   latest_success_dir: string | null
+  /** 成功备份保留份数（默认 3；失败备份另留 3 份排障） */
+  keep_count: number
   history: BackupHistoryItem[]
   log_tail: string[]
 }

@@ -2,11 +2,12 @@
 # AI 穿搭素材库 — 数据备份脚本（增强版）
 #
 # 用法:
-#   bash scripts/ops/backup_data.sh <目标目录> [--allow-same-disk] [--verify-hash] [--verify-sample N]
+#   bash scripts/ops/backup_data.sh <目标目录> [--allow-same-disk] [--verify-hash] [--verify-sample N] [--keep N]
 #
 # 示例:
 #   bash scripts/ops/backup_data.sh E:/fashion-inspo-backups           # 推荐：异盘
 #   bash scripts/ops/backup_data.sh D:/backups --verify-hash           # 全量 SHA-256 校验
+#   bash scripts/ops/backup_data.sh E:/fashion-inspo-backups --keep 5  # 保留最近 5 份成功备份
 #   bash scripts/ops/backup_data.sh backups --allow-same-disk          # 临时同盘备份
 #
 # 能力（对应 docs/wayfinder/backup-disaster-recovery/T3/T4/T6/T7）:
@@ -22,7 +23,8 @@
 #     自动清除，见下方 LOCK_MAX_AGE_HOURS
 #   - 素材存储根跟随 app.config 的 storage_root（.env 的 STORAGE_ROOT），
 #     数据盘迁移后不会备份到旧树
-#   - rotation：日备留 7 份 + 周备（周日）留 4 份
+#   - rotation：成功备份保留最近 N 份（默认 3，可用 --keep / BACKUP_KEEP_COUNT 配置），
+#     超过后删除最旧的；失败备份独立保留最近 3 份
 #   - 容量预检：目标盘剩余空间不足（DB+5GB）直接失败，低于 30GB 告警
 #
 # 退出码:
@@ -76,6 +78,7 @@ esac
 TARGET=""
 ALLOW_SAME_DISK=0
 VERIFY_HASH=0
+KEEP_COUNT=""
 # 抽样哈希数量：默认 200。只校验「大小相同但内容不同」的静默损坏，
 # 成本约 N×单文件（200 张图≈数十 MB），比全量 --verify-hash 便宜几个数量级。
 VERIFY_SAMPLE=200
@@ -86,8 +89,11 @@ while [ $# -gt 0 ]; do
     --verify-sample)
       [ $# -ge 2 ] || { echo "--verify-sample 需要参数"; exit 1; }
       VERIFY_SAMPLE="$2"; shift 2 ;;
+    --keep)
+      [ $# -ge 2 ] || { echo "--keep 需要参数"; exit 1; }
+      KEEP_COUNT="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,30p' "$0"; exit 0 ;;
+      sed -n '2,32p' "$0"; exit 0 ;;
     -*)
       echo "未知参数: $1"; exit 1 ;;
     *)
@@ -99,6 +105,26 @@ done
 case "$VERIFY_SAMPLE" in
   ''|*[!0-9]*) echo "错误：--verify-sample 必须是非负整数（当前：$VERIFY_SAMPLE）"; exit 1 ;;
 esac
+
+# 保留份数优先级：--keep > BACKUP_KEEP_COUNT 环境变量 > backend/.env 的
+# backup_keep_count > 3。脚本由 schtasks 和启动补备两条通道调用，读 settings
+# 才能让两边的 .env 配置一致生效。
+if [ -z "$KEEP_COUNT" ]; then
+  KEEP_COUNT="${BACKUP_KEEP_COUNT:-}"
+fi
+if [ -z "$KEEP_COUNT" ] && command -v python >/dev/null 2>&1; then
+  KEEP_COUNT="$(cd backend 2>/dev/null && python -c 'from app.config import settings; print(settings.backup_keep_count)' 2>/dev/null)"
+fi
+# Python 不可用时的最终兜底；正常情况下 Settings 默认值就是 3
+[ -z "$KEEP_COUNT" ] && KEEP_COUNT=3
+case "$KEEP_COUNT" in
+  ''|*[!0-9]*) echo "错误：备份保留份数必须是非负整数（当前：${KEEP_COUNT:-空}）"; exit 1 ;;
+esac
+if [ "$KEEP_COUNT" -lt 1 ]; then
+  echo "错误：备份保留份数必须 >= 1（当前：$KEEP_COUNT）"
+  exit 1
+fi
+echo "保留策略：成功备份保留最近 $KEEP_COUNT 份，超出后删除最旧"
 
 if [ -z "$TARGET" ]; then
   echo "错误：必须指定备份目标目录。"
@@ -701,63 +727,12 @@ du -sh "$DEST" 2>/dev/null | sed 's/^/总大小: /'
 echo "SUCCESS 标记已写入。"
 echo ""
 
-# ── rotation（仅成功后执行）：日备 7 份 + 周日周备 4 份 ──
-echo ">>> 清理旧备份（日备留 7 份 + 周备留 4 份）..."
-python - "$TARGET_ROOT" 7 4 <<'PYEOF'
-import datetime
-import os
-import re
-import shutil
-import sys
-
-root, daily_keep, weekly_keep = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-failed_keep = 3  # 失败备份独立留最近 3 份作排障证据，更早的优先清理
-pat = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
-
-deleted: list[str] = []
-success_entries, failed_entries = [], []
-for name in os.listdir(root):
-    p = os.path.join(root, name)
-    if not os.path.isdir(p) or not pat.match(name):
-        continue
-    try:
-        dt = datetime.datetime.strptime(name, "%Y-%m-%d_%H%M%S")
-    except ValueError:
-        continue
-    if os.path.exists(os.path.join(p, "SUCCESS")):
-        success_entries.append((dt, name, p))
-    elif os.path.exists(os.path.join(p, "FAILED")):
-        failed_entries.append((dt, name, p))
-    else:
-        # 被中断、既无 SUCCESS 也无 FAILED 的半截备份：无留证价值，立即清理
-        shutil.rmtree(p, ignore_errors=True)
-        deleted.append(name + " (中断)")
-
-success_entries.sort(key=lambda x: x[0], reverse=True)
-failed_entries.sort(key=lambda x: x[0], reverse=True)
-
-# 成功备份：最近 daily_keep 份全留（日备）；更早的周日备份留 weekly_keep 份（周备）
-daily = success_entries[:daily_keep]
-rest = success_entries[daily_keep:]
-weekly = [item for item in rest if item[0].weekday() == 6]  # 周日
-weekly_keep_ids = {id(x) for x in weekly[:weekly_keep]}
-for item in rest:
-    if id(item) not in weekly_keep_ids:
-        shutil.rmtree(item[2], ignore_errors=True)
-        deleted.append(item[1])
-kept_names = [x[1] for x in daily] + [x[1] for x in weekly[:weekly_keep]]
-
-# 失败备份：不占用日/周备名额，独立保留最近 failed_keep 份，更早的删除（T7：优先删失败的）
-for i, (_, name, p) in enumerate(failed_entries):
-    if i < failed_keep:
-        kept_names.append(name + " (FAILED)")
-    else:
-        shutil.rmtree(p, ignore_errors=True)
-        deleted.append(name + " (FAILED)")
-
-print(f"  删除 {len(deleted)} 份: {', '.join(deleted) if deleted else '无'}")
-print(f"  保留 {len(kept_names)} 份: {', '.join(kept_names) if kept_names else '无'}")
-PYEOF
+# ── rotation（仅成功后执行）：成功备份保留最近 KEEP_COUNT 份，失败备份另留 3 份 ──
+echo ">>> 清理旧备份（成功备份保留最近 ${KEEP_COUNT} 份，失败备份另留 3 份）..."
+python "$PROJECT_ROOT/backend/scripts/backup_retention.py" "$TARGET_ROOT" "$KEEP_COUNT"
+if [ $? -ne 0 ]; then
+  echo "⚠ 保留策略执行失败（备份本身已成功，请检查备份目录权限）"
+fi
 
 echo ""
 echo "提醒：本备份含 .env（密钥），请勿放入未加密的网盘/公共位置。"

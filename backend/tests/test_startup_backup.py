@@ -4,7 +4,7 @@
 subprocess 验证，不真跑备份脚本。
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -126,6 +126,7 @@ def test_build_backup_status_basic(tmp_path):
     assert st["running"] is False
     assert st["latest_success_dir"] == "2026-08-26_030000"
     assert st["latest_success_at"] == "2026-08-26T03:00:00"
+    assert st["keep_count"] == 3
     # 倒序：最新在前；失败备份也列出但 success=False
     names = [h["name"] for h in st["history"]]
     assert names == ["2026-08-26_030000", "2026-08-25_030000", "2026-08-20_030000"]
@@ -201,6 +202,8 @@ async def test_spawn_backup_calls_script(monkeypatch, tmp_path):
     assert Path(captured["args"][0]).name.lower() in ("bash", "bash.exe")
     assert str(captured["args"][1]).endswith("backup_data.sh")
     assert captured["args"][2] == "E:/fashion-inspo-backups"
+    # 保留份数显式传给脚本，启动补备与 .env 的 BACKUP_KEEP_COUNT 保持一致
+    assert captured["args"][3:5] == ("--keep", "3")
     # stderr 合并到 stdout；cwd 为项目根（与仓库目录名无关，CI 上目录名
     # 可能是 fashion-inspo 或 ai-fashion-inspo，直接对比 PROJECT_ROOT）
     assert captured["kwargs"]["stderr"] == backup_service.asyncio.subprocess.STDOUT

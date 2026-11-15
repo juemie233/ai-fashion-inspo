@@ -56,6 +56,9 @@ onMounted(load)
               status.configured ? status.target_path : '未配置'
             }}</span>
           </a-descriptions-item>
+          <a-descriptions-item label="保留份数">
+            <span>{{ status.keep_count ?? 3 }} 份成功备份（失败备份另留 3 份）</span>
+          </a-descriptions-item>
         </a-descriptions>
 
         <div v-if="status.history.length" class="backup-history">

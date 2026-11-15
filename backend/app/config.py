@@ -298,6 +298,9 @@ class Settings(BaseSettings):
     backup_startup_delay_minutes: int = 10  # 启动后延迟多久再检查（避开迁移/初始化竞争）
     backup_min_interval_hours: int = 20  # 距上次成功备份小于此时长则跳过
     backup_tick_hours: int = 6  # 常驻循环的检查周期
+    # 成功备份保留份数（默认 3）：脚本在写 SUCCESS 后删除最旧的超出部分；
+    # 失败备份另保留最近 3 份供排障，不占这个名额
+    backup_keep_count: int = Field(default=3, ge=1, le=100)
 
     @model_validator(mode="after")
     def _derive_storage_dirs(self) -> "Settings":

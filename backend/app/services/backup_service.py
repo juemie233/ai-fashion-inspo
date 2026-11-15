@@ -129,6 +129,7 @@ def build_backup_status(
     - running：是否正在备份（目标根下 .backup.lock 并发锁存在，与
       backup_data.sh 的锁机制一致，双通道（计划任务/启动补备）都可见）
     - latest_success_at / latest_success_dir：最近一次成功备份的时间与目录名
+    - keep_count：成功备份保留份数（来自 settings.backup_keep_count，默认 3）
     - history：目标根下时间戳备份目录列表（最新在前，至多 limit 条），
       含 success 标记（目录内是否有 SUCCESS 文件）
     - log_tail：storage/logs/backup.log 末尾若干行
@@ -171,6 +172,7 @@ def build_backup_status(
         "running": bool(root and (root / ".backup.lock").is_dir()),
         "latest_success_at": latest.isoformat() if latest else None,
         "latest_success_dir": latest.strftime("%Y-%m-%d_%H%M%S") if latest else None,
+        "keep_count": settings.backup_keep_count,
         "history": history,
         "log_tail": _read_log_tail(log),
     }
@@ -190,7 +192,13 @@ async def _spawn_backup(target: str) -> int:
     log_path = settings.storage_root / "logs" / "backup.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [bash_exe, str(BACKUP_SCRIPT), target]
+    cmd = [
+        bash_exe,
+        str(BACKUP_SCRIPT),
+        target,
+        "--keep",
+        str(settings.backup_keep_count),
+    ]
     logger.info(f"[启动补备] 执行: {' '.join(cmd)}")
 
     with open(log_path, "a", encoding="utf-8") as log_f:
