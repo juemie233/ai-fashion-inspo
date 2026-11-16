@@ -223,7 +223,8 @@ function refreshOnTagChange() {
 }
 
 onMounted(() => {
-  runScan()
+  // 扫描由用户点「开始扫描 / 重新扫描」手动触发：此前每次进入高级管理页
+  // 都会自动跑一次健康度任务，重复访问会堆出多条 task_queue 记录。
   onTagChanged(refreshOnTagChange, ['updated', 'merged', 'batch-edited', 'deleted'])
 })
 
@@ -259,7 +260,9 @@ onBeforeUnmount(() => {
         <div class="chip-name">{{ HEALTH_ISSUE_LABELS[t] }}</div>
         <div class="chip-count">{{ issueCounts[t] }}</div>
       </div>
-      <a-button type="primary" :loading="running" @click="runScan"> 重新扫描 </a-button>
+      <a-button type="primary" :loading="running" @click="runScan">
+        {{ scannedAt ? '重新扫描' : '开始扫描' }}
+      </a-button>
     </div>
 
     <!-- 类别概览：各类别总量/使用/长尾率（长尾率 >70% 标红提示建议治理） -->
