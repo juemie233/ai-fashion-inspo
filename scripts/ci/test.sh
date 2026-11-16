@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # 一键跑全部质量门禁（与 .github/workflows/ci.yml 对齐：本地先绿，再推）。
-#   bash scripts/ci/test.sh          全部门禁
+#   bash scripts/ci/test.sh          全部门禁（后端默认排除 slow / system 用例）
 #   bash scripts/ci/test.sh --cov    后端额外输出行级覆盖率报告（term-missing）
+#   bash scripts/ci/test.sh --slow   后端把 slow 长耗时用例加回本次运行（system 仍排除）
 #   bash scripts/ci/test.sh --e2e    跑完 15 项后再跑 Playwright（需后端在跑，可选/nightly）
 #
 # 门禁清单（顺序即输出编号）：
-#    1. 后端 pytest 全量 + 覆盖率棘轮 ≥82.9% + 关键模块地板（临时库/临时存储）
+#    1. 后端 pytest 日常集（默认 `not slow and not system`，与 CI 一致；`--slow` 时为 `not system`）
+#       + 覆盖率棘轮 ≥82.9% + 关键模块地板（临时库/临时存储）
 #    2. 后端 ruff（零告警）
 #    3. 后端 vulture（死代码，--min-confidence 80 必须 0 条）
 #    4. 后端 mypy 棘轮（只查已清零的模块，列表只增不减）
@@ -31,88 +33,101 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PY="${PYTHON_BIN:-python}"
 COV=""
 RUN_E2E=0
+SLOW=0
 for arg in "$@"; do
   case "$arg" in
     --cov) COV="--cov" ;;
+    --slow) SLOW=1 ;;
     --e2e) RUN_E2E=1 ;;
-    *) echo "未知参数：$arg（支持 --cov / --e2e）" >&2; exit 2 ;;
+    *) echo "未知参数：$arg（支持 --cov / --slow / --e2e）" >&2; exit 2 ;;
   esac
 done
 
-echo "===== 1/14 后端测试 + 覆盖率棘轮（≥82.9%）+ 关键模块地板 ====="
+# pytest marker 分层：日常集与 CI 一致（不含 slow / system）；`--slow` 只把 slow
+# 长耗时用例加回来，system 仍然排除——L2 系统测试会起真 uvicorn/worker 子进程，
+# 只能通过 `bash scripts/ci/system-test.sh` 手动跑。
+# 这里显式写 marker（而不是依赖 pytest.ini 的 addopts）：历史上 `-m ""` 覆盖过 ini，
+# 把 system 带进了第 1 步且与 CI 的测试集/覆盖率分母不一致（2026-11-16 修正）。
+if [[ "$SLOW" == "1" ]]; then
+  MARKER="not system"
+else
+  MARKER="not slow and not system"
+fi
+
+echo "===== 1/15 后端测试 + 覆盖率棘轮（≥82.9%）+ 关键模块地板 ====="
 cd "$ROOT/backend"
 # 覆盖率底线是**棘轮**：只能往上调。当前 83.02%（2026-11-04 实测），本轮提到 82.9。
 # 注意 backend/.coveragerc 的 precision=2：不设它时覆盖率按整数四舍五入比较，
 # 门槛会「看起来没过、退出码却是 0」（门禁放水）。
 # --cov 参数只影响报告详略（不传则只看被跳过的文件），阈值始终生效。
 if [[ "$COV" == "--cov" ]]; then
-  TZ=UTC "$PY" -m pytest -m "" --cov --cov-fail-under=82.9 --cov-report=term-missing
+  TZ=UTC "$PY" -m pytest -m "$MARKER" --cov --cov-fail-under=82.9 --cov-report=term-missing
 else
-  TZ=UTC "$PY" -m pytest -m "" --cov --cov-fail-under=82.9 --cov-report=term:skip-covered
+  TZ=UTC "$PY" -m pytest -m "$MARKER" --cov --cov-fail-under=82.9 --cov-report=term:skip-covered
 fi
 # 全局覆盖率会掩盖关键模块的薄弱：worker/出图/搜索/AI 设置单独设地板
 "$PY" scripts/check_module_coverage.py
 
 echo ""
-echo "===== 2/14 后端 lint（ruff，零告警：app + 脚本目录）====="
+echo "===== 2/15 后端 lint（ruff，零告警：app + 脚本目录）====="
 cd "$ROOT/backend"
 # 脚本目录也纳入：2026-10-28 在 fetch_xhs_following.py 里发现「def 被注释吞掉」的
 # 真损坏（模块能导入、函数却不存在），正是「脚本不 lint」才会潜伏下来的问题
 "$PY" -m ruff check app scripts ../scripts
 
 echo ""
-echo "===== 3/14 后端死代码（vulture，置信度 80 必须 0 条）====="
+echo "===== 3/15 后端死代码（vulture，置信度 80 必须 0 条）====="
 cd "$ROOT/backend"
 "$PY" -m vulture app --min-confidence 80
 
 echo ""
-echo "===== 4/14 后端类型（mypy 棘轮）====="
+echo "===== 4/15 后端类型（mypy 棘轮）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_types.py
 
 echo ""
-echo "===== 5/14 迁移链自检（空库 → 与 ORM 一致）====="
+echo "===== 5/15 迁移链自检（空库 → 与 ORM 一致）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_fresh_migrations.py
 
 echo ""
-echo "===== 6/14 库结构漂移（ORM ↔ 现有库）====="
+echo "===== 6/15 库结构漂移（ORM ↔ 现有库）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_alembic_drift.py
 
 echo ""
-echo "===== 7/14 脚本规范（只读连接 / CLI 入口）====="
+echo "===== 7/15 脚本规范（只读连接 / CLI 入口）====="
 cd "$ROOT"
 "$PY" scripts/ci/check_scripts.py
 
 echo ""
-echo "===== 8/14 前端类型检查（vue-tsc）====="
+echo "===== 8/15 前端类型检查（vue-tsc）====="
 cd "$ROOT/web"
 node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
 
 echo ""
-echo "===== 9/14 前端测试（vitest + 覆盖率）====="
+echo "===== 9/15 前端测试（vitest + 覆盖率）====="
 cd "$ROOT/web"
 node node_modules/vitest/vitest.mjs run --coverage
 
 echo ""
-echo "===== 10/14 前端 lint（eslint，棘轮 34）====="
+echo "===== 10/15 前端 lint（eslint，棘轮 34）====="
 cd "$ROOT/web"
 node node_modules/eslint/bin/eslint.js . --max-warnings 34
 
 echo ""
-echo "===== 11/14 前端死代码基线（ts-prune + Vue 组件引用）====="
+echo "===== 11/15 前端死代码基线（ts-prune + Vue 组件引用）====="
 cd "$ROOT"
 node scripts/ci/check-web-dead-code.mjs
 node scripts/ci/check-web-unused-components.mjs
 
 echo ""
-echo "===== 12/14 前端格式（只查改动文件）====="
+echo "===== 12/15 前端格式（只查改动文件）====="
 cd "$ROOT"
 node scripts/ci/check-web-format.mjs
 
 echo ""
-echo "===== 13/14 移动端（tsc + jest）====="
+echo "===== 13/15 移动端（tsc + jest）====="
 cd "$ROOT/mobile"
 # 移动端没有独立的 lint 脚本，类型检查用 tsc；测试含「非 <Text> 节点下不许有裸字符串」
 # 的断言，专门防只有原生 RN 才会拦的白屏（见 CLAUDE.md）
@@ -120,7 +135,7 @@ node node_modules/typescript/bin/tsc --noEmit
 node node_modules/jest/bin/jest.js --ci --coverage
 
 echo ""
-echo "===== 14/14 子项目最低测试（浏览器插件 / 人脸子服务）====="
+echo "===== 14/15 子项目最低测试（浏览器插件 / 人脸子服务）====="
 cd "$ROOT"
 node --test browser-extension/test-extract-images.mjs
 if [[ -x "$ROOT/face-service/.venv/Scripts/python.exe" ]]; then
