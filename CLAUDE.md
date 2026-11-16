@@ -6,7 +6,7 @@
 2. **注释和文档**：全部使用中文
 3. **用户界面文案**：所有页面提示、警告、错误信息、状态标签、按钮文字、空状态引导等，一律使用中文
 4. **数据内容**（标签名、AI prompt 等）：使用中文
-5. **禁止启动子代理**：项目内的一切开发工作（含代码迁移、重构、批量修改等）均由主会话直接完成，**不得启动 subagent / 子代理 / 并行代理**。需要并行或拆解的工作，改为在主会话内顺序执行或自行批量处理，保证每个改动的上下文完整、可追溯。
+5. **子代理并行上限**：允许按需启动 subagent / 子代理 / 并行代理，但**同一时刻最多 4 个**（不含主会话）。派发任务时必须明确各自的写作用域，避免多个子代理同时改同一文件；超过 4 个的任务应排队或改为顺序执行。子代理的改动由主会话统一审查、运行门禁、提交并推送，保证每个改动的上下文完整、可追溯。
 6. **服务启停由用户手动执行**：**禁止自动执行一键重启/启动脚本**（`scripts/ops/restart.sh`、`scripts/ops/ensure-services.sh` 等涉及服务启停的脚本）。当代码改动需要重启后端/前端/worker 才能生效时，**不得自行执行脚本**，只需明确提示用户「需要重启服务」，由用户手动执行。
 7. **时间列单行显示**：所有表格/列表中的时间列必须保持单行（`white-space: nowrap`），禁止换行；新增或修改时间列时同样遵守（Arco 表格单元格默认 `word-break: break-all`，时间字符串在窄列下会被断行，需显式加 nowrap）。实现约定：render 函数列统一用 `web/src/utils/format.ts` 的 `renderTimeCell(text, extra?)`（内部包 nowrap span，extra 可附加颜色/class）；模板列包 `<span style="white-space: nowrap">`。
 8. **新建文件位置受限**：**新文件的落点必须是「已登记」的位置**——即本文档 [项目结构](#项目结构) 与 [前端文件拆分约定](#前端文件拆分约定) 列出的目录，加上仓库中既有的约定目录（`backend/app/**`（含 `services/task_runners`）、`backend/{scripts,tests,alembic}`、`web/src/{views,components,composables,stores,api,types,utils,router,constants,styles,assets}`、`mobile/`、`browser-extension/`、`shared/types/`、`docs/{overview,mobile,features,pose,ops,archive}`、`scripts/{ops,ci,data,sync,oneoff,archive}`（各目录职责见 `scripts/脚本索引.md`））。**禁止**在仓库根目录散落文件、随手新建目录、或把产物写到仓库之外的路径（系统临时目录、桌面、其他盘）。
