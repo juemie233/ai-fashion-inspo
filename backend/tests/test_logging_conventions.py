@@ -73,6 +73,15 @@ SILENT_ALLOWLIST = {
     "app/config.py",
     "app/logging_config.py",
     "app/utils/daily_log.py",
+    # f2 采集实现从 backend/scripts 迁入：目录/文件探测、子进程失败等大量
+    # 历史「预期降级」静默分支保持原行为；后续按模块逐步补 logger.debug。
+    "app/services/f2/apply.py",
+    "app/services/f2/collects.py",
+    "app/services/f2/common.py",
+    "app/services/f2/fetch.py",
+    "app/services/f2/hash_cache.py",
+    "app/services/f2/rollback.py",
+    "app/services/f2/video_thumbnail.py",
 }
 
 

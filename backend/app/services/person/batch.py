@@ -29,7 +29,7 @@ from app.services.person.services import blogger_service
 
 logger = logging.getLogger(__name__)
 
-"""自动登记来源常量：与 ``scripts.f2_common.AUTO_BLOGGER_SOURCE`` 同值。
+"""自动登记来源常量：与 ``app.services.f2.common.AUTO_BLOGGER_SOURCE`` 同值。
 
 这里写字面量而不是 import 脚本模块：app 侧不应该为了一个常量去依赖 ``scripts``。
 """

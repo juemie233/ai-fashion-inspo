@@ -74,7 +74,7 @@ def _fake_f2_db(tmp_path, rows: list[tuple]) -> object:
 
 def test_load_f2_profiles_includes_stats(tmp_path):
     """资料卡字段必须读出来（四个统计数），不能只读 IP 属地；签名不再读取。"""
-    from scripts.f2_fetch import load_f2_profiles
+    from app.services.f2.fetch import load_f2_profiles
 
     _fake_f2_db(
         tmp_path,
@@ -91,7 +91,7 @@ def test_load_f2_profiles_includes_stats(tmp_path):
 
 def test_load_f2_profiles_falls_back_when_columns_missing(tmp_path):
     """旧版 f2 库没有统计列：只回填昵称/属地，不能整批报错。"""
-    from scripts.f2_fetch import load_f2_profiles
+    from app.services.f2.fetch import load_f2_profiles
 
     db_path = tmp_path / "douyin_users.db"
     conn = sqlite3.connect(db_path)

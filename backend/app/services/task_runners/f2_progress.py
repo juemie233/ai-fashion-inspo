@@ -153,7 +153,7 @@ async def _watch_download(
     Returns:
         ``(future 的返回值, 结束时的目录统计)``；future 抛异常时原样抛出，由调用方处理。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     started = time.monotonic()
     while True:

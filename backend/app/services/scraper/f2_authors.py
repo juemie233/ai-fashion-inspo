@@ -36,7 +36,7 @@ async def _material_counts(db: AsyncSession) -> dict[str, int]:
     ``source_author`` 在 f2 导入时写入的就是归一化作者名，这里再归一化一次是为了
     兼容历史行（早期导入可能写的是带 `√`/编号的目录名）。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     rows = (
         await db.execute(
@@ -89,7 +89,7 @@ async def get_f2_authors(db: AsyncSession) -> dict:
         表示库里一个抖音博主都没登记，此时白名单不生效（全部账号都会被处理），
         前端据此说明——否则「全都是已登记」看起来像数据不对。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     f2_dir = f2.DEFAULT_F2_DIR
     authors = await asyncio.to_thread(f2.load_f2_authors, f2_dir)

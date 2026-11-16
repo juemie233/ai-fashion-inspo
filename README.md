@@ -642,6 +642,7 @@ fashion-inspo/
 │   │   │   └── ws.py             # WebSocket
 │   │   ├── services/             # 业务逻辑（按领域拆分，主服务为兼容转发层）
 │   │   │   ├── ai_service/       # AI 编排（analyze 分析 / quality 审核 / outfit_summary 大标签 / common）
+│   │   │   ├── f2/               # 抖音 f2 链路共享实现（common / plan / apply / fetch / collects / rollback）
 │   │   │   ├── ai_parser.py      # AI 响应解析/修复（畸形处理）
 │   │   │   ├── ai_tag_saver.py   # 标签标准化/保存/关联
 │   │   │   ├── ai_analysis_service.py  # 分析/队列/历史业务逻辑

@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings  # noqa: E402
 # 复用采集脚本族的公共工具（独立脚本直跑，backend 已在 sys.path，可绝对导入）
+from app.utils.ip_location import parse_ip_location  # noqa: E402
 from scripts.scraper_common import (  # noqa: E402
     _rdsleep,
     ensure_platform_login,
@@ -91,23 +92,6 @@ def extract_user_id_from_href(href: str | None) -> str | None:
         return None
     m = re.search(r"/user/profile/([0-9a-zA-Z]+)", href)
     return m.group(1) if m else None
-
-
-def parse_ip_location(text: str) -> str:
-    """从文本中解析 IP 属地（如「IP属地：浙江」→ 浙江）。
-
-    仅识别带「IP属地：」前缀的写法，避免把昵称等其它文本误判为属地。
-
-    Args:
-        text: 卡片或页面文本。
-
-    Returns:
-        属地字符串；未识别到返回空字符串。
-    """
-    if not text:
-        return ""
-    m = re.search(r"IP属地[:：]\s*([^\s，,；;()（）]+)", text)
-    return m.group(1).strip() if m else ""
 
 
 def parse_xhs_id(text: str) -> str:

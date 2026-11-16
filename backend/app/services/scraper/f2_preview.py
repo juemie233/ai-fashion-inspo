@@ -84,7 +84,7 @@ def preview_import_sync(
         ``{"root", "files", "files_to_import", "works", "skipped", "deferred_works",
         "authors_scope", "has_any"}``；``skipped`` 是 ``{原因: 数量}``。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     scan_root = root or _scan_root(f2, fetch_mode)
     files = f2.scan_directory(scan_root)

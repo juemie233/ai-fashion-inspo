@@ -127,7 +127,7 @@ async def backfill_douyin_ids_from_f2(
     """
     from collections import Counter, defaultdict
 
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     stmt = select(Blogger).where(
         Blogger.platform == "douyin",
@@ -307,7 +307,7 @@ def load_f2_profile_map() -> dict[str, dict]:
     阻塞式文件读取（sqlite 只读）：调用方放线程池；f2 目录/库缺失时返回空 dict，
     由调用方按「f2 用户库不可用」处理（全部记为跳过并说明原因）。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     try:
         return f2.load_f2_profiles(f2.DEFAULT_F2_DIR)
@@ -479,7 +479,7 @@ async def backfill_douyin_from_f2(
 #  抖音：按「作品 ID」反查作者 sec_user_id（按需，单博主一次）
 # ═══════════════════════════════════════════════════════════════
 
-"""抖音作品 ID 形态：19 位数字（与 ``scripts.f2_plan.platform_id_for`` 的新口径一致）。
+"""抖音作品 ID 形态：19 位数字（与 ``app.services.f2.plan.platform_id_for`` 的新口径一致）。
 
 **必须是数字**：历史素材存的是 12 位十六进制短哈希（``f2:184ef89706bf#image2``），
 那是文件名合成的，追不回作者——按位数挡掉，别拿去给 f2 当作品 ID。
@@ -609,7 +609,7 @@ async def resolve_douyin_profile(
     3. **按作品 ID 让 f2 反查**（联网，约 20~40 秒）：拿库里这个博主某个素材的真实
        作品 ID 跑一次 ``f2 -M one``，f2 会拉到作品详情（内含作者 ``sec_user_id``）并把
        作者资料写进它自己的用户库，我们把新增的那一行取回来（细节见
-       ``scripts.f2_fetch.resolve_f2_author_by_aweme``）。
+       ``app.services.f2.fetch.resolve_f2_author_by_aweme``）。
 
     ⚠ **第 3 条必须交叉验证昵称**：f2 反查回来的是「这个作品的作者」，如果它与博主名
     归一化后不一致，说明素材归属本身可能有问题（或作品已失效被替换）——此时**不写库**，
@@ -631,7 +631,7 @@ async def resolve_douyin_profile(
     """
     import asyncio
 
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     detail: dict = {
         "ok": False,

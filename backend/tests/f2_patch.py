@@ -1,26 +1,21 @@
-"""f2 导入脚本的 monkeypatch 辅助（配合 scripts/import_f2_downloads.py 的模块拆分）。
+"""f2 应用模块的 monkeypatch 辅助。
 
-``scripts/import_f2_downloads`` 现在只是**转发壳**：符号真正归属在 ``scripts.f2_*``
-子模块里，子模块内部的调用走的是**自己命名空间**里的名字。所以 monkeypatch 必须
-同时覆盖两处，才等价于拆分前单模块里的全局替换：
-
-1. 转发壳（``scripts.import_f2_downloads``）——app 侧代码通过 ``f2.X`` 读取时生效；
-2. 所有**引用了该名字**的子模块——子模块内部的调用点生效。
-
-判定「引用了该名字」用 ``hasattr``：子模块只要读过这个名字（自己定义或从兄弟模块
-导入），其命名空间里就有它。
+实现已迁到 ``app.services.f2.*``；``scripts/import_f2_downloads`` 只是旧路径转发壳。
+monkeypatch 必须同时覆盖**实现模块**与旧转发壳，才等价于拆分前单模块里的全局替换。
 """
 
-from scripts import (
-    f2_apply,
-    f2_cli,
-    f2_common,
-    f2_fetch,
-    f2_hash_cache,
-    f2_plan,
-    f2_report,
-    f2_rollback,
+from app.services.f2 import (
+    apply as f2_apply,
+    collects as f2_collects,
+    common as f2_common,
+    fetch as f2_fetch,
+    hash_cache as f2_hash_cache,
+    plan as f2_plan,
+    report as f2_report,
+    rollback as f2_rollback,
 )
+from app.services import f2 as f2_app
+from scripts import f2_cli
 from scripts import import_f2_downloads as f2
 
 _SUBMODULES = (
@@ -32,6 +27,7 @@ _SUBMODULES = (
     f2_plan,
     f2_report,
     f2_rollback,
+    f2_collects,
 )
 
 
@@ -44,6 +40,7 @@ def patch_f2(monkeypatch, name: str, value) -> None:
         value: 替换值。
     """
     monkeypatch.setattr(f2, name, value)
+    monkeypatch.setattr(f2_app, name, value)
     for module in _SUBMODULES:
         if hasattr(module, name):
             monkeypatch.setattr(module, name, value)

@@ -55,7 +55,7 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
             扫描结果先按它过滤：没勾的夹即使文件早就躺在硬盘上也不入库。这是「我只勾了
             两个夹」这句承诺的另一半——下载阶段只下勾选的夹，入库阶段必须同样只看它们。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     scan_root = (
         _personal_scan_root(f2, fetch_mode)
@@ -155,7 +155,7 @@ async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list
     """阶段 3：入库（同步 sqlite 放线程；进度 watcher + 状态检查）。
 
     返回 (apply_import 结果, 进度 holder)。"""
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     holder = {"done": 0, "total": len(to_import), "stop": False}
     finished = asyncio.Event()
@@ -216,7 +216,7 @@ async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list
 async def _register_personal_bloggers_stage(db: AsyncSession, task: TaskQueue, result: dict,
                               personal_mode: bool, register_bloggers: bool) -> dict | None:
     """阶段 3b：「我的喜欢 / 我的收藏」补登记来源作者博主（失败不影响已入库素材）。"""
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     bloggers_stats: dict | None = None
     if personal_mode and register_bloggers and result.get("batch_file"):

@@ -213,7 +213,7 @@ def f2_import_status() -> dict:
           取初值——否则前端会硬编码一个默认值并随请求下发，把 .env 里的配置顶掉。
     """
     from app.config import settings
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     like_user = str(settings.f2_like_user or "")
     info: dict[str, Any] = {
@@ -518,7 +518,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     """
 
     from app.config import settings
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     # 只取创建任务时写入的参数键：暂停/恢复后 task.result 里会残留上一次的
     # stage/fetch/plan/import 字段，整包当 opts 传下去会把旧产物混进新结果

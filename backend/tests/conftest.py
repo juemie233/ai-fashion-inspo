@@ -202,14 +202,14 @@ def guard_f2_merge_off_real_roots(tmp_path, monkeypatch):
     """禁止测试让「跨模式重复合并」碰到真实下载目录（越界即失败）。
 
     为什么需要（实测踩坑）：个人列表模式（like / collection）下载结束后会自动跑一次
-    跨模式重复合并（``scripts.f2_common.merge_personal_duplicates``），它按**默认值**
+    跨模式重复合并（``app.services.f2.common.merge_personal_duplicates``），它按**默认值**
     读 ``DEFAULT_F2_LIKE_ROOT`` / ``DEFAULT_F2_COLLECT_ROOT``。用例只 patch 一侧
     （「我的喜欢」的用例都只 patch like 根）时，另一侧就指向用户**真实的**
     ``Download/douyin`` —— 测试会去扫真实目录（慢），并在名字、大小、内容恰好相同时
     **改动真实文件**（硬链接替换）。这里给合并函数套一层断言：任何越出 ``tmp_path``
     的根目录立刻让用例失败；根目录本身由各测试模块自己 patch 到临时目录。
     """
-    from scripts import f2_common
+    from app.services.f2 import common as f2_common
     from scripts import import_f2_downloads as f2_shell
 
     real_merge = f2_common.merge_personal_duplicates

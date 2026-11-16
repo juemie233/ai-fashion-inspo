@@ -47,7 +47,7 @@ async def register_batch_bloggers(db: AsyncSession, entries: list[dict]) -> dict
          "linked": 新增关联的素材数, "existing": 已有（本次跳过）的素材数,
          "failed": 素材已不存在而绑定失败的条数}
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     # 只处理「未绑定 + 有来源作者」的条目：已绑定的在导入阶段就已匹配到已登记博主
     grouped: dict[str, list[str]] = defaultdict(list)

@@ -313,7 +313,7 @@ async def f2_collects() -> dict:
     YAML 解析（不是截 `cookie:` 那一行——那样只有 172 字符的残缺登录态，接口会返回
     「200 但内容为空」）。同步返回：收藏夹清单通常 1~2 页，2~5 秒。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     try:
         data = await asyncio.to_thread(f2.list_collect_folders)
@@ -522,7 +522,7 @@ async def set_f2_like_user(
     """
     from app.config import settings
     from app.routers.ai_shared import _update_env_file
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     raw = (like_user or "").strip()
     if raw and (len(raw) < 4 or any(ch.isspace() for ch in raw)):

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import f2_common
+from app.services.f2 import common as f2_common
 
 """所有跟着 storage_root 走的子目录（与 Settings 里的字段一一对应）。"""
 STORAGE_SUBDIRS = (
@@ -126,7 +126,7 @@ def test_db_file_path_follows_database_url_not_storage_parent(clean_storage_env,
 
 def test_library_db_path_uses_the_same_single_source(monkeypatch, tmp_path):
     """f2 判重/入库用的库路径必须与 app 的库文件口径一致（单一口径）。"""
-    from scripts import f2_plan
+    from app.services.f2 import plan as f2_plan
 
     db = tmp_path / 'same-source' / 'fashion_inspo.db'
     settings = _fresh_settings(

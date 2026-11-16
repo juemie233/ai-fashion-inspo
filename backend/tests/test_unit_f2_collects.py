@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import f2_collects
+from app.services.f2 import collects as f2_collects
 from scripts import import_f2_downloads as f2
 
 
@@ -315,7 +315,7 @@ def test_download_writes_collect_folder_map(fake_runtime, monkeypatch, tmp_path)
     by_name = {e["name"]: e["aweme_ids"] for e in payload["folders"].values()}
     assert by_name == {"秘书OL": ["a1", "a2"], "股票": ["b1"]}
     # 清单是 json、文件名不符合 f2 命名模板 → 不会被扫描/入库当成素材
-    from scripts.f2_common import parse_media_filename
+    from app.services.f2.common import parse_media_filename
 
     assert parse_media_filename(map_path) is None
 

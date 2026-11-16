@@ -64,7 +64,7 @@ async def _fetch_personal_stage(
     合并成硬链接，见 :func:`f2.merge_personal_duplicates`），再交给阶段 2 扫描。
 
     返回 True 表示任务已被取消/暂停（收尾已落库，调用方直接返回）。"""
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     label = _personal_label(fetch_mode)
     if not like_user:
@@ -183,7 +183,7 @@ async def _fetch_collects_by_folder_stage(
        真正生效（平铺模式走 f2 子进程，取消要等整条命令跑完）
 
     返回 True 表示任务已被取消/暂停（收尾已落库，调用方直接返回）。"""
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     label = f"我的收藏（{len(collect_ids)} 个收藏夹）"
     if not like_user:
@@ -367,7 +367,7 @@ def _select_post_targets(
 
     两类「一个都下不了」的情况都**响亮失败**（见各 raise 的注释），不再出现
     下载 0 个作者却报 success 的静默失败。"""
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     if profiles:
         # 按博主全量：**显式点名**的博主直接下，不要求它先出现在 f2 用户库里
@@ -427,7 +427,7 @@ async def _fetch_posts_stage(
     """阶段 1b：发布模式——逐作者串行下载（子进程放线程）。
 
     返回 True 表示任务已被取消/暂停（已落库，调用方直接返回）。"""
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     fetch_summary["total"] = len(targets)
     task.total = len(targets)
@@ -553,7 +553,7 @@ async def _resolve_named_profile_keys(
     下单后 f2 已把新账号写进用户库，此时才能按 sec_user_id 反查昵称——入库白名单
     是按**归一化昵称**匹配的，缺了它就会「下载成功、入库 0」。反查不到任何昵称说明
     这批博主没下成：响亮失败，而不是报成功 + 入库 0。"""
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     resolved = await asyncio.to_thread(
         f2.resolve_profile_nicknames,

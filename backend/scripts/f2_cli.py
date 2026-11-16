@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.config import settings  # noqa: E402
 
-from .f2_apply import apply_import  # noqa: E402
-from .f2_common import (  # noqa: E402
+from app.services.f2.apply import apply_import  # noqa: E402
+from app.services.f2.common import (  # noqa: E402
     DEFAULT_F2_DIR,
     DEFAULT_F2_DOWNLOAD_ROOT,
     DEFAULT_F2_ROOT,
@@ -21,19 +21,19 @@ from .f2_common import (  # noqa: E402
     normalize_author,
     scan_directory,
 )
-from .f2_fetch import (  # noqa: E402
+from app.services.f2.fetch import (  # noqa: E402
     f2_available,
     load_f2_authors,
     profile_author,
     resolve_profile_nicknames,
     run_fetch,
 )
-from .f2_hash_cache import (  # noqa: E402
+from app.services.f2.hash_cache import (  # noqa: E402
     HashCache,
     _finish_cache,
     open_hash_cache,
 )
-from .f2_plan import (  # noqa: E402
+from app.services.f2.plan import (  # noqa: E402
     IMPORT_BATCH_DIRNAME,
     build_import_plan,
     library_db_path,
@@ -41,11 +41,11 @@ from .f2_plan import (  # noqa: E402
     load_douyin_bloggers,
     select_known_authors,
 )
-from .f2_report import (  # noqa: E402
+from app.services.f2.report import (  # noqa: E402
     build_report,
     print_report,
 )
-from .f2_rollback import (  # noqa: E402
+from app.services.f2.rollback import (  # noqa: E402
     apply_rollback,
     batch_storage_root,
     latest_batch_file,

@@ -57,7 +57,7 @@ def _batch_entries(task: TaskQueue) -> tuple[list[dict], str]:
         (清单里的 imported 条目, batch_id)；清单缺失（含入库阶段未落盘/写失败）
         时返回 ([], "")，由调用方按「本批没有可浏览的结果」处理。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     result = task.result if isinstance(task.result, dict) else {}
     import_summary = result.get("import") if isinstance(result.get("import"), dict) else {}
@@ -382,7 +382,7 @@ async def _plan_rollback_for_task(
     抽出来是为了**只 plan 一次**：预览与执行各自 plan 会在大批次上白扫两遍，
     而且两次之间数据可能变化 —— 用户看到的「可删 N 条」与实际删除数就会对不上。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     task = await _load_f2_task(db, task_id)
     batch_file = _batch_file_of(task)
@@ -455,7 +455,7 @@ async def rollback_f2_task(
 
     存储根优先用批次清单里记录的导入期根（导入时用了别的盘也能找对文件）。
     """
-    from scripts import import_f2_downloads as f2
+    from app.services import f2
 
     preview, deletable = await _plan_rollback_for_task(db, task_id, force)
     if not preview["batch_file"]:
