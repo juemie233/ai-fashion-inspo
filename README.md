@@ -1521,6 +1521,8 @@ bash scripts/ops/restart.sh
 
 **前端接入**：浏览器控制台执行 `localStorage.setItem('apiKey', '<密钥>')` 后刷新页面，前端请求会自动附加 `X-API-Key` 头；或构建时设置 `VITE_API_KEY` 环境变量。
 
+**本机 Vite 开发**：可在 `web/.env.development.local` 写 `VITE_API_KEY=<密钥>`（该文件已 gitignore，仅 dev 模式加载，`npm run build` 不会读取；不要提交真实密钥）。
+
 **说明**：`X-API-Key` 为简单共享密钥认证，仅防误操作/未授权调用；不替代 HTTPS/用户体系。破坏性接口清单维护于 `backend/app/utils/auth.py` 的 `DESTRUCTIVE_ROUTES`，新增破坏性接口时在其中追加一行即可。
 
 ## 数据备份与恢复
