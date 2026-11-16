@@ -144,7 +144,7 @@ chrome_debug_port: int = 9222
 - **M2 三项能力**（`d66263e`）：**详情页可编辑**（标签编辑弹层：搜索/勾选/新建 + 已关联标签点即移除；移入垃圾桶二次确认；相似素材横向推荐，失败静默降级）、**上传多选与逐张进度**（相册多选上限 20 + 拍照，队列串行上传、逐张百分比、失败标记与重试、可移除单项）、**任务中心**（`GET /tasks` 只读 + 拉取刷新 + 取消，22 种任务类型全中文、含「已暂停」）。
   - **踩坑修复（性能）**：标签库 **22,751** 个标签（当时实测值；本轮治理时点已 22,813）若一次性渲染成 chip 墙，JS 线程直接卡死到系统弹「应用无响应」→ 改 FlatList 虚拟列表 + 默认 60 个 + 搜索上限 200 条，并补「标签库加载失败 → 重试」。
 - **M2 审查修复（5 项）**（`999abbe`）：已暂停任务在手机上**无法取消**（后端本就支持、列表还把它排最前）；任务类型中文表混进了 Web 任务中心的**筛选标签**（`scraper_tasks` 是表名不是 type），真正会出现的 `f2_import` 反而没中文名；任务页进度条不动（补 3 秒自动刷新，无活跃任务即停）；**视频素材详情白屏**（把 mp4 交给 `<Image>`，改用首帧缩略图 + 「视频封面」角标）；`setQueue` 的 updater 里弹 Alert（React 要求 updater 纯函数）。
-- 移动端测试 **377 用例 / 39 个文件**（0.9.0 P0 + P1 后）；真机验证机型 nova 7 Pro（`0.8.0` / versionCode 33 已验证，0.9.0 待验证）。
+- 移动端测试 **377 用例 / 39 个文件**（当时 0.9.0 P0 + P1 后；当前为 411 / 42，见「自动化测试」）；真机验证机型 nova 7 Pro（`0.8.0` / versionCode 33 已验证，0.9.0 待验证）。
 
 ### 人物管理：批量头像 + 五件套（10-24，8 个提交）
 
@@ -587,6 +587,9 @@ python backend/scripts/generate_image.py --dump out.json "描述"       # 导出
 
 ## 项目结构
 
+> 下面是手工维护的快速索引，**可能滞后**；完整最新的仓库分层、进程拓扑、模块归属与依赖边界见
+> [项目整体架构](docs/overview/架构总览.md)。API / 数据模型 / 配置项以 `docs/overview/` 下自动生成文档为准。
+
 ```
 fashion-inspo/
 ├── CLAUDE.md                     # 编码规范与项目标准
@@ -755,9 +758,13 @@ fashion-inspo/
 │   │   │   ├── TagAdvancedManageView.vue # 标签高级管理（健康度/聚类/网络图/效果/层级树/历史 6 面板）
 │   │   │   ├── PersonView.vue    # 人物管理（穿搭博主/职业模特双 Tab）
 │   │   │   ├── PersonDetailView.vue # 人物详情（按类型适配：风格画像 + 模特照片组）
+│   │   │   ├── FaceScanView.vue  # 人脸库扫描（批量检测/匹配/人工审核）
 │   │   │   ├── ModelManageView.vue # AI 模型管理（全功能）
 │   │   │   ├── AdminView.vue     # 素材管理（小菜单子页面：概览/疑似AI/批量清理/完整性/重复文件）
-│   │   │   └── TaskManageView.vue # 任务管理（异步任务队列列表/详情/取消）
+│   │   │   ├── GovernanceView.vue # 数据治理（批量清理/完整性/精确/近似重复）
+│   │   │   ├── InsightsView.vue  # 数据洞察（向量/报表/提示词质量）
+│   │   │   ├── TaskManageView.vue # 任务管理（异步任务队列列表/详情/取消/备份状态）
+│   │   │   └── RandomRatingView.vue # 随机评分（1–5 星 + 快捷键）
 │   │   ├── components/           # 通用组件（按域分目录）
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
@@ -805,6 +812,7 @@ fashion-inspo/
 │   ├── qualityBatch.ts        # 质量审核批量上限与耗时估算（实测均值可覆盖）
 │   └── app.json                  # Expo 配置
 │
+├── docs/                         # 方案/评估/实验/运维/审计（索引见 docs/文档索引.md）
 ├── browser-extension/            # Chrome 浏览器插件
 │   ├── manifest.json
 │   ├── background/service-worker.js
@@ -832,6 +840,8 @@ fashion-inspo/
 
 ## 系统架构
 
+> 完整运行拓扑、进程/端口、存储落点与依赖边界见 [项目整体架构](docs/overview/架构总览.md)；下图是简化示意。
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                     Local PC (Windows 11)                    │
@@ -847,15 +857,19 @@ fashion-inspo/
 │  ┌─────────────────────────────────────────────────────┐     │
 │  │               FastAPI Backend (:18888)              │     │
 │  │                                                     │     │
-│  │  REST API │ WebSocket │ Background Tasks            │     │
+│  │  REST API │ WebSocket │ 进程内周期任务               │     │
 │  │  ─────────────────────────────────────────────      │     │
 │  │  Scraper Mgr │ AI Service │ File Service            │     │
 │  │  Tag Service │ Auth Middleware                      │     │
 │  │  定时采集调度 │ 垃圾桶自动清理                       │     │
 │  └──────────────────────────┬──────────────────────────┘     │
 │                             │                                │
+│  ┌──────────────────────────▼──────────────────────────┐     │
+│  │  独立 worker：task_queue → task_runners（17 种任务） │     │
+│  └──────────────────────────┬──────────────────────────┘     │
+│                             │                                │
 │  ┌──────────────────────────┼──────────────────────────┐     │
-│  │   SQLite (元数据)        │  Storage/ (图片文件)      │    │
+│  │ SQLite/LanceDB（元数据/向量）│ Storage/（图片/视频） │    │
 │  └──────────────────────────┴──────────────────────────┘     │
 │                                                              │
 │  ┌─────────────────────────────────────────────────────┐     │
@@ -876,6 +890,9 @@ fashion-inspo/
 ```
 
 ## 数据模型
+
+> 下表是阅读摘要；34 张表 / 329 列的完整清单、字段类型与索引以
+> [数据模型](docs/overview/数据模型.md) 为准（自动生成，不要手改）。
 
 | 表                            | 说明                                    | 关键字段                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ----------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -995,6 +1012,9 @@ alembic upgrade head
 > 生成 baseline / 测试时可用环境变量 `ALEMBIC_DB_URL` 指向临时库，避免触碰真实数据。
 
 ## API 概览
+
+> 下面是按业务域整理的摘要；23 个模块 / 337 个端点的完整清单、函数名与首行说明以
+> [API参考](docs/overview/API参考.md) 为准（自动生成，改 router 后重跑生成器）。
 
 ### 素材管理
 
@@ -1540,7 +1560,7 @@ bash scripts/ci/test.sh --cov    # 后端额外输出覆盖率报告
 bash scripts/ci/test.sh --e2e    # 跑完 15 项后再跑 Playwright（需后端在跑；可作 nightly）
 ```
 
-### 后端（pytest；当前约 3,000 条，具体以收集数为准；覆盖率棘轮 ≥82.9%）
+### 后端（pytest；当前 3,450+ 条，2026-11-14 全量运行；覆盖率棘轮 ≥82.9%）
 
 
 ```bash
@@ -1567,9 +1587,9 @@ pytest -m ""          # 提交前/CI 全量（含 slow）
 
 > **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
-> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **83.08%**；门禁棘轮 `--cov-fail-under=82.9`（`precision=2`））。另有 `backend/scripts/check_module_coverage.py` 对 `worker` / `generation_service` / `seedream_client` / `search` / `ai_settings` / `ai_quality` 设模块地板，防止全局均值掩盖关键模块退化。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，依赖真实浏览器）、`vector/similarity` 深度分支、`ws.py`（WebSocket）。
+> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **约 88.3%**，2026-11-14 全量运行；门禁棘轮 `--cov-fail-under=82.9`（`precision=2`））。另有 `backend/scripts/check_module_coverage.py` 对 `worker` / `generation_service` / `seedream_client` / `search` / `ai_settings` / `ai_quality` 设模块地板，防止全局均值掩盖关键模块退化。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，依赖真实浏览器）、`vector/similarity` 深度分支、`ws.py`（WebSocket）。
 
-### 前端（vitest；当前 900+ 用例 / 100+ 文件；覆盖率门槛见 `web/vitest.config.ts`）
+### 前端（vitest；当前 1,246 用例 / 141 个测试文件；覆盖率门槛见 `web/vitest.config.ts`）
 
 ```bash
 cd web
@@ -1579,7 +1599,7 @@ npm run test:coverage # 覆盖率（utils/composables/stores/api 门槛）
 
 覆盖范围：`format` / `sourceLabel` / `taskLabel` / `browseQuery` / `ipStatsChart`（IP 属地条形图配置：**不隐藏任何一档标签**、高度随条目数增长）纯函数、`taskPresentation`（任务结果汇总 + **运行中阶段文案**：f2 下载/入库/登记博主/排队/暂停 + 「我的喜欢」实时下载计数，非 f2 任务不编造阶段；**任务行按钮矩阵** `taskRowActions`（暂停/恢复/取消/删除与后端接收矩阵同口径，含「可取消但不可暂停类型不给取消」）+ 重负载互斥组的清单内容锁定与排队说明）、`tagHistoryDiff`（操作历史 before/after 差异与值格式化）、`useSplitResize` 拖拽 / `useBatchSelection` 批量多选 composable、`useF2Import`（f2 状态解析 / 自动获取开关 / 一键获取与「我的喜欢」参数透传）、`F2LikeCard`（「我的喜欢」卡片：链接保存 / 实时下载进度文案 / 一键拉取）、`useF2Results` + `F2ResultsPanel`（批次结果分类过滤 / 移入垃圾桶与恢复）、`useF2TaskHistory`、`useScraperRoi`（采集 ROI：按窗口天数请求 / 切窗口重拉 / 空数据判定 / 失败置空 / 口径说明透传，以及 `formatRate`、`formatCount` 对「没有这个口径」与「样本为 0」都显示「—」）、`PersonAvatarPicker`（头像选择器：素材列表加载 / 上传前校验 / 结果提示）、`PersonTopList`（热门排行渲染）、`persons`（博主/模特双 store 实例 + 请求序号防乱序）/ `inspirations` / `tags` store（mock API）、`taskLabel` 任务类型/图标映射断言、`faceMedia`（人脸库扫描媒体地址：`media_type` 缺失时按后缀判视频，**悬停大图绝不返回 mp4**）、`FaceUnmatchedTab`（悬停浮层：停留后弹出、移出消失、大图取原图）、`useFaceServiceStatus`（未知态不误伤 / 探测到不可达带回中文原因 / 请求本身失败不锁死人脸功能 / 并发复用同一次探测）、`f2Authors`（博主清单表头排序：空值与字段缺失当 0 且不抛错、两方向互为相反数）、`f2CollectSelection`（收藏夹选择只保留最近一次、脏数据当无记录、恢复时只勾仍存在的夹并报告失效数量）、`AdminNearDuplicates`（逐组对比：确认删除才 emit、中途退出也提交已做的决定、可翻页改主意、全部跳过不提交空删除、连点保护）、`tagGovernance` 纯函数（用量分桶边界、重命名预览的空名/批内撞名预检与后端 400/409 同口径、相似对「合并 vs 设别名」分界）、`useTagGovernance`（颜色剥离预览→执行、观察名单翻页与本地移除、别名建议的残缺配对过滤、长尾批量合并/删除、洞察跟随标签）、`usePersonBatch`（批量纳入追踪/删除/清头像的结果如实汇报 + 同名合并以素材最多者为组主）、`useAvatarFill`（提交后立即可重复点击防护、终态计数文案）。
 
-### 移动端（jest-expo + @testing-library/react-native；当前 377 用例 / 39 个文件；utils/hooks/services 覆盖率门槛见 `mobile/package.json`）
+### 移动端（jest-expo + @testing-library/react-native；当前 411 用例 / 42 个测试套件；utils/hooks/services 覆盖率门槛见 `mobile/package.json`）
 
 ```bash
 cd mobile && npm test
@@ -1589,11 +1609,12 @@ cd mobile && npm run test:open-handles  # 手动复查定时器/句柄泄漏（r
 
 覆盖范围：**设计令牌强约束**（`theme.tokens`：扫描 `app/**`+`components/**` 断言 0 处十六进制颜色与裸圆角、字号只来自 11/12/13/15/17/22，并按 WCAG AA 校验亮/暗两套主题 16 组文字配对 ≥4.5:1）、14 个基础组件与 `MediaCard` 的契约、深色模式取色、冷启动只发一次首页请求、人物搜索 300ms 防抖（6 个字符 1 次请求）、页面渲染（画廊/搜索/详情/采集/设置/任务中心）、**裸字符串检查**（遍历渲染树断言非 `<Text>` 节点下没有字符串/数字——专治只有原生才会拦、Web 预览与普通渲染测试都发现不了的「白屏」）、API 契约（URL / 请求体形状，含 f2 专属字段）、`TagEditor`（筛选/勾选/移除/新建/**5000 标签下的渲染行数远小于总量**，防再次卡死 JS 线程）、采集页多选入队与逐张上传失败重试、详情页编辑入口/垃圾桶确认/404、任务行类型与状态映射（含「已暂停也能取消」）。
 
-### 端到端冒烟（Playwright，21 条；含数据工厂写链路，可选门禁 `test.sh --e2e`）
+### 端到端冒烟（Playwright，25 个用例 / 29 次执行；含数据工厂写链路，可选门禁 `test.sh --e2e`）
 
-真实浏览器跑 9 个核心页面与数据工厂闭环（首页 / 任务管理 / 采集管理 / 标签管理 / 质量审核 / 操作审计 /
-**本地出图 / 人物列表与详情 / 数据治理**），
+真实浏览器跑核心页面与数据工厂闭环（首页 / 任务管理 / 采集管理 / 标签管理 / 质量审核 / 操作审计 /
+**本地出图 / 人物列表与详情 / 数据治理 / 收藏合集 / 随机评分 / iPad 布局**），
 验证的是「前端 + 后端 + 真实数据」三者联通——单测（vitest）只到「组件挂载 + mock API」为止。
+桌面 21 条 + iPad 专用 4 条；iPad 4 条在 `ipad-portrait` / `ipad-landscape` 两个 project 各跑一次，所以共 29 次执行。
 
 ```bash
 # 首次：安装浏览器（约 150 MB）
@@ -1609,7 +1630,7 @@ cd web && npm run test:e2e
   不会让你对着一堆「表格空 / 接口超时」的失败去猜选择器；
 - 后端地址取 `web/.env` 的 `VITE_BACKEND_URL`，也可用 `E2E_API_BASE=<地址>` 临时覆盖；
 - **串行执行**（`workers: 1`）：并行时各页面首屏（Vite 按路由懒编译 + 统计接口）会互相抢，
-  实测同一用例单跑必过、并行偶发超时；21 条约 1.5 分钟（含长接口/完整性检查）；
+  实测同一用例单跑必过、并行偶发超时；29 次执行约 1.9 分钟（含长接口/完整性检查）；
 - **不依赖固定 sleep**：等待具体元素/启用状态；生成历史空态改用 `.gen-empty`，
   治理页无数据时跳过「批量删除」确认用例，避免真实库为空时假红；
 - 失败产物在 `web/test-results/`（`npx playwright show-trace <trace.zip>` 可回放）。
