@@ -1,8 +1,7 @@
-"""AI 分析队列跨队列去重测试。
+"""AI 分析任务队列去重测试。
 
-覆盖缺陷：内存分析队列（_active_analyses/_pending_queue）与 worker 数据库
-任务队列（batch_analyze/multi_analyze）分别去重时互不可见，导致同一素材
-可能被两个队列各分析一次。本组测试验证修复后的去重行为：
+2026-11-16（task-9）起单图分析也走 worker 的 batch_analyze 任务，API 进程内存
+分析队列已删除，去重只剩「数据库任务队列」一个真值来源。本组测试验证：
 
 - get_inflight_analysis_ids：收集未完成 batch/multi 任务认领的素材 ID
 - _inflight_excluding：排除「其它」未完成任务认领的素材（并发批处理防重复）
@@ -97,8 +96,6 @@ async def test_unanalyzed_ids_excludes_inflight(client, upload):
 
 async def test_batch_analyze_route_excludes_inflight(client, upload):
     """POST /ai/batch-analyze：进行中素材被剔除，不会重复入队。"""
-    import app.routers.ai_analysis as router_mod
-
     # 待分析素材：一个进行中（insp_busy），一个空闲（insp_free）
     insp_busy = upload().json()["id"]
     insp_free = upload().json()["id"]

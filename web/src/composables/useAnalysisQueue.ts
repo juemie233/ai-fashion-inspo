@@ -1,4 +1,11 @@
-/** AI 分析队列 composable：队列统计、活动分析、批量任务、排队素材与轮询。 */
+/** AI 分析队列 composable：队列统计、分析任务列表（batch/multi，含单图分析）与轮询。
+ *
+ * 2026-11-16（R2）：单图分析并入 worker 任务队列（POST /ai/analyze 只入队返回 task_id），
+ * API 进程内的内存分析队列已删除。因此本 composable 不再访问
+ * /ai/queue/pending、/ai/queue/pause|resume、DELETE /ai/queue/{id}、/ai/active-analyses，
+ * 数据源收敛为「/tasks?type=batch_analyze|multi_analyze + WS task_event + /ai/queue 统计」。
+ * 单图分析即以 ``total=1`` 的 batch_analyze 任务出现在任务列表里。
+ */
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { warnShape } from '@/utils/apiGuard'
@@ -22,28 +29,35 @@ export interface UseAnalysisQueueOptions {
   loadHistory?: () => void
 }
 
-/** 有活动分析时的轮询间隔（毫秒） */
+/** 有未完成任务时的轮询间隔（毫秒） */
 const ACTIVE_POLL_MS = 3000
-/** 无活动分析时的轮询间隔（毫秒） */
+/** 无未完成任务时的轮询间隔（毫秒） */
 const IDLE_POLL_MS = 15000
 /** 批量任务轮询正常间隔（毫秒） */
 const BATCH_POLL_MS = 1000
 /** 批量任务轮询失败重试间隔（毫秒） */
 const BATCH_RETRY_MS = 3000
-/** WS 已连接时的保底轮询间隔（毫秒）：单条分析完成由 ai_analysis_done 推送驱动 */
+/** WS 已连接时的保底轮询间隔（毫秒）：任务进度/终态由 task_event 推送驱动 */
 const WS_CONNECTED_POLL_MS = 15000
 
 export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   const { requestAndNotify, checkFailureAlert } = useNotification()
 
   const queueStats = ref<QueueStats>({ total: 0, analyzed: 0, unanalyzed: 0, failed: 0 })
-  const activeAnalyses = ref<Record<string, string>>({})
+  /** 「正在分析」映射：旧 /ai/active-analyses 已删除（R2），该数据源不存在。
+   *  保留空对象仅为兼容 AnalysisPanel/AnalysisQueueOverview 既有 props 契约（其区块按空值隐藏）；
+   *  单图分析现作为 batch_analyze(total=1) 任务在 analysisTasks 里展示。
+   *  类型取自 ActiveAnalysis，避免该类型定义变成死导出。 */
+  const activeAnalyses = ref<ActiveAnalysis['active_analyses']>({})
   const batchAnalyzing = ref(false)
   const batchTask = ref<TaskInfo | null>(null)
   /** 分析任务列表（batch/multi，仅 pending/running/paused 等未完成任务——
    *  完成的批量分析不再展示，避免挤占队列区；终态在「任务管理」页可查可删），按 id 倒序 */
   const analysisTasks = ref<TaskInfo[]>([])
+  /** 排队中素材：旧 GET /ai/queue/pending 已删除（R2）；保留空数组仅为兼容既有 UI props 契约 */
   const pendingQueue = ref<QueueItem[]>([])
+  /** 队列整体暂停：旧 /ai/queue/pause|resume 已删除（R2）；恒为 false，对应按钮随之隐藏。
+   *  需要暂停某次分析请用任务行级暂停（pauseTaskById）。 */
   const queuePaused = ref(false)
 
   let pollTimer: ReturnType<typeof setTimeout> | null = null
@@ -51,15 +65,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   let batchPollSeq = 0 // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
   let batchSettled = false // 批量任务终态幂等标记：WS 推送与轮询合流后副作用只执行一次
 
-  /** 加载排队中素材 */
+  /** 兼容占位：旧 GET /ai/queue/pending 已随 API 内存分析队列删除（2026-11-16 R2）。
+   *  单图/批量分析现在都以任务形式存在，统一由 loadAnalysisTasks 展示与轮询；
+   *  保留函数签名是为了不改动既有调用方（含 useAnalysisHistory 的回调注入）。 */
   async function loadPendingQueue() {
-    try {
-      const { data } = await apiClient.get<{ items: QueueItem[]; paused: boolean }>(
-        '/ai/queue/pending',
-      )
-      pendingQueue.value = data.items
-      queuePaused.value = data.paused
-    } catch {}
+    pendingQueue.value = []
   }
 
   /** 加载分析任务列表（batch_analyze + multi_analyze）。
@@ -142,7 +152,6 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         }
       }
       loadQueue()
-      loadActiveAnalyses()
     } catch (e) {
       Message.error(getApiErrorMessage(e, '取消失败'))
     }
@@ -157,34 +166,16 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 取消排队中的单个素材 */
-  async function cancelQueueItem(inspirationId: string) {
-    try {
-      await apiClient.delete(`/ai/queue/${inspirationId}`)
-      Message.success('已取消')
-      loadPendingQueue()
-      loadActiveAnalyses()
-    } catch (e) {
-      const data = (e as { response?: { data?: { detail?: string; message?: string } } })?.response
-        ?.data
-      Message.error(data?.detail || data?.message || '取消失败')
-    }
+  /** 兼容占位：旧 DELETE /ai/queue/{id} 已删除（2026-11-16 R2，按素材取消不再支持）。
+   *  单图分析现为 batch_analyze(total=1) 任务，请走任务列表的行级取消（cancelTaskById）。 */
+  async function cancelQueueItem(_inspirationId: string) {
+    Message.info('单图分析已并入任务队列，请在下方任务列表中取消')
   }
 
-  /** 暂停 / 恢复分析队列 */
+  /** 兼容占位：旧 /ai/queue/pause|resume 已删除（2026-11-16 R2，worker 队列不支持整队暂停）。
+   *  需要暂停分析请在任务列表按任务暂停（pauseTaskById）。 */
   async function togglePauseQueue() {
-    try {
-      if (queuePaused.value) {
-        await apiClient.post('/ai/queue/resume')
-        Message.success('队列已恢复')
-      } else {
-        await apiClient.post('/ai/queue/pause')
-        Message.success('队列已暂停')
-      }
-      loadPendingQueue()
-    } catch {
-      Message.error('操作失败')
-    }
+    Message.info('队列整体暂停已下线，请在任务列表中按任务暂停')
   }
 
   /** 加载队列统计 */
@@ -206,32 +197,29 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     } catch {}
   }
 
-  /** 加载正在进行的分析任务 */
+  /** 兼容占位：旧 GET /ai/active-analyses 已删除（2026-11-16 R2，API 进程不再内存分析）。
+   *  正在进行的分析现在通过 task_event 推送 + /tasks 任务列表体现，见 analysisTasks；
+   *  保留函数签名是为了不改动既有调用方（useAnalysisHistory 的 loadActiveAnalyses 注入）。 */
   async function loadActiveAnalyses() {
-    try {
-      const { data } = await apiClient.get<ActiveAnalysis>('/ai/active-analyses')
-      activeAnalyses.value = data.active_analyses || {}
-    } catch {}
+    activeAnalyses.value = {}
   }
 
-  /** 开始轮询活动分析（按是否有活动任务自动调整间隔；WS 已连接时推送驱动为主） */
+  /** 开始轮询：先拉一次未完成任务列表，再按是否有任务调度（WS 已连接时推送为主） */
   function startPolling() {
-    loadActiveAnalyses()
+    loadAnalysisTasks()
     scheduleNextPoll()
   }
 
   function scheduleNextPoll() {
-    const wasActive = Object.keys(activeAnalyses.value).length > 0
+    const wasActive = analysisTasks.value.length > 0
     const interval = isWsConnected()
       ? WS_CONNECTED_POLL_MS
       : wasActive
         ? ACTIVE_POLL_MS
         : IDLE_POLL_MS
     pollTimer = setTimeout(async () => {
-      await loadActiveAnalyses()
-      loadPendingQueue()
-      loadAnalysisTasks()
-      const isActive = Object.keys(activeAnalyses.value).length > 0
+      await loadAnalysisTasks()
+      const isActive = analysisTasks.value.length > 0
       loadQueue()
       if (isActive || wasActive) {
         options.loadHistory?.()
@@ -387,7 +375,6 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
     loadQueue()
     options.loadHistory?.()
-    loadActiveAnalyses()
     loadAnalysisTasks()
   }
 
@@ -407,12 +394,26 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     syncActiveTask()
   }
 
+  /** 未知任务事件（例如详情页 / 上传页刚创建的单图分析任务）→ 拉一次任务列表纳入展示。
+   *  在途标记避免进度事件密集时把 /tasks 请求放大成风暴。 */
+  let tasksRefreshInFlight = false
+  async function refreshTasksForUnknownEvent() {
+    if (tasksRefreshInFlight) return
+    tasksRefreshInFlight = true
+    try {
+      await loadAnalysisTasks()
+    } finally {
+      tasksRefreshInFlight = false
+    }
+  }
+
   // ── WebSocket 推送合流 ──
   // 1) task_event：与批量轮询同源的任务事件，即时合并 batchTask 进度/状态
   //    （settled 标记保证终态副作用只执行一次，与 useAdminTask 同一套模式）
   subscribeWs('task_event', (raw) => {
     const ev = raw as {
       task_id?: number
+      task_type?: string
       status?: string
       progress?: number
       done?: number
@@ -440,28 +441,44 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       if (typeof ev.done === 'number') row.done = ev.done
       if (typeof ev.total === 'number') row.total = ev.total
       if (ev.error !== undefined) row.error = ev.error
-      // 完成即从「分析任务」列表移除（不再展示已完成的批量分析）
-      if (isTaskTerminalStatus(row.status)) dropTerminalTasks()
+      // 完成即从「分析任务」列表移除（不再展示已完成的批量分析），并刷新统计/历史
+      if (isTaskTerminalStatus(row.status)) {
+        dropTerminalTasks()
+        loadQueue()
+        options.loadHistory?.()
+      }
+      return
+    }
+    // 列表里还没有该任务（其它页面刚创建的单图/批量任务）→ 拉一次列表纳入展示
+    if (ev.task_type === 'batch_analyze' || ev.task_type === 'multi_analyze') {
+      void refreshTasksForUnknownEvent()
     }
   })
-  // 2) ai_analysis_done：单素材分析完成（API 进程内广播）→ 即时刷新队列与历史
-  subscribeWs('ai_analysis_done', () => {
-    loadActiveAnalyses()
-    loadQueue()
-    options.loadHistory?.()
-  })
+  // 2) 单图分析完成不再有独立事件：R2 起单图分析就是 batch_analyze(total=1) 任务，
+  //    worker 统一广播 task_event，上面已按 task_id 合流；历史/统计由轮询兜底刷新。
+  //    （旧的 ai_analysis_done 是 API 内存队列广播，已随该队列删除，不再订阅。）
 
-  /** 单条失败记录重新加入分析队列 */
+  /** 单条失败记录重新加入分析队列（后端 /ai/retry 现返回 task_id，同样走 worker 任务队列） */
   async function retryAnalysis(id: string) {
     try {
-      const { data } = await apiClient.post<Record<string, unknown>>(`/ai/retry/${id}`)
-      if ((data as Record<string, unknown>).ollama_will_start === true) {
-        Message.warning(String((data as Record<string, unknown>).message || 'Ollama 正在启动中'))
+      const { data } = await apiClient.post<{
+        task_id?: number | null
+        message?: string
+        status?: string
+        ollama_will_start?: boolean
+      }>(`/ai/retry/${id}`)
+      if (data.ollama_will_start) {
+        Message.warning(data.message || 'Ollama 正在启动中，任务会在其恢复后自动执行')
       } else {
-        Message.success('已重新加入队列')
+        Message.success(data.message || '已重新加入队列')
       }
       loadQueue()
-      loadActiveAnalyses()
+      if (typeof data.task_id === 'number') {
+        // 重试也是「1 个素材」的 batch_analyze 任务：并入任务列表并接管轮询，
+        // 终态提示与历史刷新复用批量任务的既有逻辑
+        await loadAnalysisTasks()
+        syncActiveTask()
+      }
     } catch (e) {
       Message.error(getApiErrorMessage(e, '重试失败'))
     }

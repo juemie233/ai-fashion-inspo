@@ -128,11 +128,9 @@ async def get_inflight_analysis_ids(db: AsyncSession) -> set[str]:
     判定口径：素材 ID 出现在任一**未完成**（pending/running）的
     batch_analyze / multi_analyze 任务的 result.inspiration_ids 中。
 
-    这是跨队列去重的数据库真值——API 进程内存队列（_active_analyses /
-    _pending_queue，由 analyze_inspiration 走 _run_analysis 填充）与 worker
-    数据库任务队列（batch_analyze / multi_analyze）分别去重时互不可见，
-    导致同一素材可被两个队列各分析一次；本函数让两侧都能查到「正在跑」的集合，
-    从而避免重复分析。
+    2026-11-16（task-9）起单图分析也创建 batch_analyze 任务（不再有 API 进程内存
+    队列），本函数是「分析中」的**唯一真值来源**：单图/批量/重试各入口在调度前
+    都用它排除已在进行中的素材，避免同一素材被多个任务重复分析。
     """
     from app.models.task import TaskQueue
 
@@ -159,10 +157,9 @@ async def get_unanalyzed_ids(
     **含分析失败过的素材**（与批量任务执行时的已分析跳过条件一致，
     失败素材可被「分析全部未分析」重新纳入批量分析）。
 
-    额外排除两类「进行中」的素材，避免重复分析：
-    - ``skip_ids``：API 进程内存队列（_active_analyses/_pending_queue）里
-      正在进行/排队的素材（由路由层传入）；
-    - 已进入任一未完成 batch_analyze / multi_analyze 任务（DB 任务队列）的素材。
+    额外排除「进行中」的素材，避免重复分析：已进入任一未完成 batch_analyze /
+    multi_analyze 任务（DB 任务队列）的素材。``skip_ids`` 保留为可选的额外排除集
+    （调用方自定义），当前路由层不再传内存队列 ID。
     """
     analyzed_success_sub = (
         select(AIAnalysisLog.inspiration_id)
@@ -336,7 +333,7 @@ async def get_failed_analysis_targets(db: AsyncSession) -> list[tuple[str, str |
     """查询每个素材最新日志为失败的记录，返回 (素材 ID, 文件路径) 列表。
 
     子查询：每个素材的最新日志 ID（排除质量审核日志）。
-    视频素材的文件路径返回 None（重试时由 _run_analysis 懒解析第一关键帧）。
+    视频素材的文件路径返回 None（重试时由 worker 端 batch_analyze 执行器懒解析第一关键帧）。
     """
     latest_log = (
         select(AIAnalysisLog.inspiration_id, func.max(AIAnalysisLog.id).label("max_id"))
@@ -372,7 +369,7 @@ async def get_batch_retry_targets(
 ) -> list[tuple[str, str | None]]:
     """根据日志 ID 查询可重试的素材（图片 + 视频），返回 (素材 ID, 文件路径) 列表（去重，排除垃圾桶）。
 
-    视频素材的文件路径返回 None（重试时由 _run_analysis 懒解析第一关键帧）。
+    视频素材的文件路径返回 None（重试时由 worker 端 batch_analyze 执行器懒解析第一关键帧）。
     """
     result = await db.execute(
         select(AIAnalysisLog.inspiration_id, Inspiration.file_path, Inspiration.media_type)

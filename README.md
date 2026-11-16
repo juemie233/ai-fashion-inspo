@@ -1244,13 +1244,12 @@ alembic upgrade head
 | `PUT`    | `/api/ai/models/active`           | 切换活跃视觉模型                                                                                                |
 | `PUT`    | `/api/ai/models/embedding-active` | 切换文本嵌入模型（向量检索文本侧）                                                                              |
 | `DELETE` | `/api/ai/models/{name}`           | 删除模型                                                                                                        |
-| `POST`   | `/api/ai/analyze/{id}`            | 触发单个分析（视频素材传 `None` 路径，由后台任务懒解析关键帧）                                                  |
+| `POST`   | `/api/ai/analyze/{id}`            | 触发单个分析：创建 1 个素材的 `batch_analyze` 任务（priority=10），由 worker 执行并受 GPU 互斥，返回 task_id |
 | `POST`   | `/api/ai/batch-analyze`           | 批量分析（创建异步任务，返回 task_id；支持 `models` × `prompt_ids` 多模型多提示词组合批量执行）                 |
 | `POST`   | `/api/ai/outfit-tags/suggest`     | AI 建议穿搭大标签（只建议不入库）                                                                               |
 | `POST`   | `/api/ai/retry/{id}`              | 重试失败分析                                                                                                    |
 | `GET`    | `/api/ai/queue`                   | 分析队列统计                                                                                                    |
 | `GET`    | `/api/ai/unanalyzed-ids`          | 未分析素材 ID 列表                                                                                              |
-| `GET`    | `/api/ai/active-analyses`         | 正在分析的任务                                                                                                  |
 | `GET`    | `/api/ai/history`                 | 分析历史（分页/筛选）                                                                                           |
 | `GET`    | `/api/ai/history/{id}`            | 分析详情（含标签、结构化快照、质量审核、版本信息）                                                              |
 | `DELETE` | `/api/ai/history/{id}`            | 删除单条日志                                                                                                    |
@@ -1263,10 +1262,6 @@ alembic upgrade head
 | `GET`    | `/api/ai/tag-corrections`         | 打标纠错记录列表（分页，可按 reason 筛选）                                                                      |
 | `GET`    | `/api/ai/tag-corrections/stats`   | 纠错统计（按原因/动作/提示词版本聚合）                                                                          |
 | `GET`    | `/api/ai/prompt-quality`          | 提示词版本质量对比（按版本聚合成功率/平均标签数/纠错率；`include_bare_rate=true` 额外采样重放原始响应算裸词率） |
-| `GET`    | `/api/ai/queue/pending`           | 排队中素材（含缩略图）                                                                                          |
-| `DELETE` | `/api/ai/queue/{id}`              | 取消排队任务                                                                                                    |
-| `POST`   | `/api/ai/queue/pause`             | 暂停队列                                                                                                        |
-| `POST`   | `/api/ai/queue/resume`            | 恢复队列                                                                                                        |
 | `GET`    | `/api/ai/compare/{id}`            | 分析结果对比（结构化标签差异 + 耗时 + 版本信息）                                                                |
 | `GET`    | `/api/ai/quality-dashboard`       | 分析质量仪表盘（覆盖率/趋势/问题素材）                                                                          |
 | `GET`    | `/api/ai/model-stats`             | 按模型聚合的使用统计（成功率/平均耗时/平均标签数，标签按结构化快照口径）                                        |

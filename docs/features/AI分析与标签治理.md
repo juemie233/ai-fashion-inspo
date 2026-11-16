@@ -10,7 +10,7 @@
 
 ```text
 素材（图片 / 视频首帧）
-  │ POST /api/ai/analyze/{id} 或批量任务 batch_analyze
+  │ POST /api/ai/analyze/{id}（创建单素材 batch_analyze 任务）或批量任务 batch_analyze
   ▼
 Ollama 视觉模型（默认 qwen3-vl:8b-instruct）
   │ 原始响应（JSON，可能畸形）
@@ -38,7 +38,7 @@ ai_analysis_log：模型、prompt 版本、耗时、原始输出
 
 | 入口 | 说明 |
 | --- | --- |
-| `POST /api/ai/analyze/{id}` | 单素材分析；插件入库后可自动触发 |
+| `POST /api/ai/analyze/{id}` | 单素材分析：创建「1 个素材」的 `batch_analyze` 任务（`priority=10`、`force_retry=True`），由 worker 执行并受 GPU 互斥；插件入库后可自动触发 |
 | `POST /api/ai/batch-analyze` | 批量任务（`batch_analyze`），支持暂停 / 恢复 / 取消 |
 | `POST /api/ai/retry/{id}`、`/retry-all-failed` | 重试失败素材 |
 | 后台任务 | 批量 / 组合分析均由 worker 执行，见 [异步任务体系](异步任务体系.md) |
@@ -66,8 +66,11 @@ ai_analysis_log：模型、prompt 版本、耗时、原始输出
 
 ### 2.4 分析队列与历史
 
-- `GET /api/ai/queue`、`/queue/pending`、`/active-analyses`：队列与进行中分析；
-- `POST /api/ai/queue/pause` / `resume`：暂停 / 恢复队列消费；
+- `GET /api/ai/queue`：分析队列统计（数据库任务队列口径）；
+- 单素材与批量 / 组合分析**统一走 worker 任务队列**：`POST /ai/analyze/{id}` 创建
+  1 个素材的 `batch_analyze` 任务（`priority=10`）；暂停 / 恢复 / 取消用任务接口
+  （`POST /api/tasks/{id}/pause` 等）。原 API 进程内存队列接口（`/queue/pending`、
+  `/active-analyses`、`/queue/pause|resume`）已于 2026-11-16 删除；
 - `GET /api/ai/history`、`/history/{id}`、`/history/export`：历史与导出；
 - `GET /api/ai/compare/{id}`、`POST /compare-batch`：多模型 / 多提示词结果对比；
 - `POST /api/ai/history/{log_id}/apply`：把某次历史结果应用到素材；

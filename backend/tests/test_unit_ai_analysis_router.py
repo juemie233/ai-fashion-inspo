@@ -20,6 +20,10 @@ from app.routers import ai_analysis as router
 from app.schemas.ai_analysis import BatchAnalyzeRequest
 
 
+# 最近一次 create_batch_analyze_task 的入参（单图分析断言用；每个用例前清空）
+CAPTURED: dict[str, object] = {}
+
+
 @pytest.fixture(autouse=True)
 def _patch_env(monkeypatch):
     """默认：无进行中素材、Ollama 在线、任务创建走替身（不真正建 worker 任务）。"""
@@ -28,7 +32,6 @@ def _patch_env(monkeypatch):
         return set()
 
     monkeypatch.setattr(router.ai_svc, "get_inflight_analysis_ids", _no_inflight)
-    monkeypatch.setattr(router, "get_in_memory_queue_ids", lambda: set())
 
     async def _ollama_ok():
         return True, None
@@ -38,7 +41,12 @@ def _patch_env(monkeypatch):
     class _Task:
         id = 777
 
+    CAPTURED.clear()
+
     async def _create_batch(db, ids, *args, **kwargs):
+        CAPTURED["ids"] = ids
+        CAPTURED["args"] = args
+        CAPTURED["kwargs"] = kwargs
         return _Task()
 
     async def _create_multi(db, ids, combos, *args, **kwargs):
@@ -46,12 +54,6 @@ def _patch_env(monkeypatch):
 
     monkeypatch.setattr(router, "create_batch_analyze_task", _create_batch)
     monkeypatch.setattr(router, "create_multi_analyze_task", _create_multi)
-
-    # 单张分析会 create_task 跑真实分析：替换成空操作
-    async def _noop_run(insp_id, file_path=None):
-        return None
-
-    monkeypatch.setattr(router, "_run_analysis", _noop_run)
 
 
 async def _insp(
@@ -61,7 +63,7 @@ async def _insp(
     deleted: bool = False,
     file_path: str | None = None,
 ) -> str:
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
     async with async_session() as db:
         db.add(
@@ -71,23 +73,48 @@ async def _insp(
                 file_path=file_path or f"images/x/{insp_id}.jpg",
                 media_type=media_type,
                 quality_status="approved",
-                deleted_at=datetime.now(timezone.utc) if deleted else None,
+                deleted_at=datetime.now(UTC) if deleted else None,
             )
         )
         await db.commit()
     return insp_id
 
 
-# ── 单张分析 ──
+# ── 单张分析（task-9 / R2：改为创建 worker 任务，不再 API 进程内直接跑）──
 
 
-async def test_analyze_single_queues_background_task(client):
+async def test_analyze_single_creates_worker_task(client):
+    """单图分析必须创建 batch_analyze 任务（priority=10、force_retry=True）。"""
     await _insp("a1")
     async with async_session() as db:
         result = await router.analyze_inspiration("a1", db=db)
 
-    assert result["status"] == "analyzing"
+    assert result["status"] == "pending"
+    assert result["task_id"] == 777
+    assert result["inspiration_id"] == "a1"
+    assert CAPTURED["ids"] == ["a1"]
+    assert CAPTURED["kwargs"] == {"priority": 10, "force_retry": True}
+    # 旧响应字段保留（上传后 fire-and-forget 的调用方不读它）
     assert result["ollama_will_start"] is False
+
+
+async def test_analyze_single_persists_real_task(client, monkeypatch):
+    """不 mock 建任务函数：落库的任务必须是 batch_analyze / priority=10 / force_retry。"""
+    from app.services.task_runner import create_batch_analyze_task as real_create
+
+    monkeypatch.setattr(router, "create_batch_analyze_task", real_create)
+    await _insp("a6")
+
+    async with async_session() as db:
+        result = await router.analyze_inspiration("a6", db=db)
+        task = await db.get(TaskQueue, result["task_id"])
+
+    assert task is not None
+    assert task.type == "batch_analyze"
+    assert task.priority == 10
+    assert task.status == "pending"
+    assert (task.result or {}).get("inspiration_ids") == ["a6"]
+    assert (task.result or {}).get("retry") is True
 
 
 async def test_analyze_single_404_and_400(client):
@@ -102,15 +129,30 @@ async def test_analyze_single_404_and_400(client):
         assert exc.value.status_code == 400
 
 
+async def test_analyze_single_rejects_trashed(client):
+    """垃圾桶素材不参与分析（与批量入口的 NOT_DELETED 口径一致）。"""
+    await _insp("a2t", deleted=True)
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await router.analyze_inspiration("a2t", db=db)
+    assert exc.value.status_code == 404
+
+
 async def test_analyze_single_skips_inflight(client, monkeypatch):
-    """已在队列中的素材不重复调度（否则同一张图会被分析两次）。"""
+    """已进入未完成任务的素材不重复调度（否则同一张图会被分析两次）。"""
     await _insp("a3")
-    monkeypatch.setattr(router, "get_in_memory_queue_ids", lambda: {"a3"})
+
+    async def _inflight(db):
+        return {"a3"}
+
+    monkeypatch.setattr(router.ai_svc, "get_inflight_analysis_ids", _inflight)
 
     async with async_session() as db:
         result = await router.analyze_inspiration("a3", db=db)
 
     assert "已在分析队列中" in result["message"]
+    assert result["status"] == "analyzing"
+    assert result["task_id"] is None
 
 
 async def test_analyze_single_when_ollama_offline(client, monkeypatch):
@@ -125,27 +167,20 @@ async def test_analyze_single_when_ollama_offline(client, monkeypatch):
     async with async_session() as db:
         result = await router.analyze_inspiration("a4", db=db)
 
+    assert result["status"] == "pending"
+    assert result["task_id"] == 777
     assert result["ollama_will_start"] is True
     assert "Ollama 未启动" in result["message"]
 
 
-async def test_analyze_video_passes_none_file_path(client, monkeypatch):
-    """视频不传路径：由后台任务懒解析首帧（ffmpeg 提取耗时不阻塞请求）。"""
+async def test_analyze_video_creates_task(client):
+    """视频同样建任务（首帧解析由 worker 执行器懒做，不阻塞请求）。"""
     await _insp("a5", media_type="video")
-    seen: list[tuple] = []
-
-    async def _capture(insp_id, file_path=None):
-        seen.append((insp_id, file_path))
-
-    monkeypatch.setattr(router, "_run_analysis", _capture)
-
     async with async_session() as db:
-        await router.analyze_inspiration("a5", db=db)
-        import asyncio
+        result = await router.analyze_inspiration("a5", db=db)
 
-        await asyncio.sleep(0)  # 让 create_task 跑起来
-
-    assert seen == [("a5", None)]
+    assert result["status"] == "pending"
+    assert CAPTURED["ids"] == ["a5"]
 
 
 # ── 批量 / 组合 ──

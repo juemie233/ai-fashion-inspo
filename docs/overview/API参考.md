@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-15，共 23 个模块 / 337 个端点）。
+> **状态**：自动生成（2026-11-16，共 23 个模块 / 332 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -10,7 +10,7 @@
 | 模块 | 前缀 | 端点数 |
 | --- | --- | ---: |
 | [admin](#admin) | `/api/admin` | 20 |
-| [ai_analysis](#ai_analysis) | `/api/ai` | 25 |
+| [ai_analysis](#ai_analysis) | `/api/ai` | 20 |
 | [ai_dashboard](#ai_dashboard) | `/api/ai` | 5 |
 | [ai_models](#ai_models) | `/api/ai` | 12 |
 | [ai_outfit](#ai_outfit) | `/api/ai` | 1 |
@@ -66,7 +66,7 @@
 
 | 方法 | 路径 | 函数 | 说明 |
 | --- | --- | --- | --- |
-| `POST` | `/api/ai/analyze/{inspiration_id}` | `analyze_inspiration` | 触发单个素材的 AI 分析（后台异步执行）。 |
+| `POST` | `/api/ai/analyze/{inspiration_id}` | `analyze_inspiration` | 触发单个素材的 AI 分析（走 worker 任务队列 + GPU 互斥）。 |
 | `POST` | `/api/ai/batch-analyze` | `batch_analyze` | 批量触发多个素材的 AI 分析。 |
 | `GET` | `/api/ai/queue` | `analysis_queue` | 获取分析队列状态：待分析/分析中/已完成/失败统计。 |
 | `GET` | `/api/ai/unanalyzed-ids` | `unanalyzed_ids` | 获取所有未分析过的图片素材 ID 列表（暂不分析视频）。 |
@@ -83,11 +83,6 @@
 | `DELETE` | `/api/ai/history/failed/all` | `delete_all_failed_logs` | 批量删除所有失败的分析日志。 |
 | `GET` | `/api/ai/history/{log_id}` | `get_analysis_detail` | 获取单条分析日志的详细信息，包含原始 AI 响应和关联标签。 |
 | `DELETE` | `/api/ai/history/{log_id}` | `delete_analysis_log` | 删除指定分析日志。 |
-| `GET` | `/api/ai/queue/pending` | `get_pending_queue` | 获取排队中素材的缩略图预览信息。 |
-| `DELETE` | `/api/ai/queue/{inspiration_id}` | `cancel_queue_item` | 取消排队中的分析任务（已开始分析的无法取消）。 |
-| `POST` | `/api/ai/queue/pause` | `pause_queue` | 暂停全局分析队列（已完成的不受影响）。 |
-| `POST` | `/api/ai/queue/resume` | `resume_queue` | 恢复全局分析队列。 |
-| `GET` | `/api/ai/active-analyses` | `get_active_analyses` | 获取当前正在分析中的素材列表，用于前端轮询显示进度。 |
 | `GET` | `/api/ai/compare/{inspiration_id}` | `compare_analyses` | 获取同一素材的所有历史分析结果，用于并排对比。 |
 | `POST` | `/api/ai/compare-batch` | `compare_analyses_batch` | 按日志 ID 批量对比多条分析记录（需为同一素材，至少 2 条）。 |
 | `POST` | `/api/ai/history/{log_id}/apply` | `apply_analysis_log_to_material` | 把某条分析记录提取的标签应用到素材（覆盖 AI 标签，保留手动标签）。 |

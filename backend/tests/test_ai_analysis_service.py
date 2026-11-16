@@ -298,18 +298,6 @@ async def test_batch_delete_analysis_failed_uses_latest(client, upload):
     assert r.json()["deleted_count"] == 0  # 最新成功，不应被选中
 
 
-def test_queue_pause_resume(client):
-    """分析队列暂停/恢复。"""
-    assert client.post("/api/ai/queue/pause").json()["paused"] is True
-    assert client.post("/api/ai/queue/resume").json()["paused"] is False
-
-
-def test_pending_queue_empty(client):
-    """空队列：排队预览返回空列表。"""
-    data = client.get("/api/ai/queue/pending").json()
-    assert data["items"] == []
-
-
 async def test_quality_dashboard(client, upload):
     """分析质量仪表盘：概览覆盖率 + 每日趋势。"""
     insp_id = upload().json()["id"]

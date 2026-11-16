@@ -12,7 +12,6 @@ from sqlalchemy import delete
 from app.config import settings
 from app.database import async_session
 from app.models.inspiration import AIAnalysisLog, Inspiration
-from app.routers.ai_shared import _active_analyses, _analysis_tasks
 from app.services.audit_service import record_audit_log
 from app.utils.auth import require_api_key
 
@@ -161,14 +160,6 @@ async def reset_all_data(
     from app.models.tag import InspirationTag, Tag, TagAlias
     from app.models.task import TaskQueue
     from app.models.scraper import ScraperSchedule, ScraperSeenURL, ScraperTask
-
-    # 先取消所有进行中的分析任务，再做快照，保证快照的是静止状态的数据
-    if _analysis_tasks:
-        logger.info(f"取消 {len(_analysis_tasks)} 个进行中的分析任务...")
-        for t in list(_analysis_tasks):
-            t.cancel()
-        _active_analyses.clear()
-        await aio.sleep(1)  # 给任务 1 秒处理取消
 
     # 防护 1：执行前快照（DB 一致性备份 + 素材目录移动，秒级）
     snapshot_dir, snap_moved = await aio.to_thread(_take_pre_reset_snapshot)

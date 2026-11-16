@@ -19,6 +19,8 @@ import ArcoVue from '@arco-design/web-vue'
 const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
   addTagsToInspiration: vi.fn(),
+  /** 自动 AI 分析（api/inspirations.analyzeInspiration）：只入队、fire-and-forget */
+  analyzeInspiration: vi.fn(),
   linkBlogger: vi.fn(),
   bindFace: vi.fn(),
   checkDuplicate: vi.fn(),
@@ -42,6 +44,7 @@ vi.mock('@/stores/inspirations', () => ({
 
 vi.mock('@/api/inspirations', () => ({
   addTagsToInspiration: mocks.addTagsToInspiration,
+  analyzeInspiration: mocks.analyzeInspiration,
 }))
 
 vi.mock('@/api/persons', () => ({
@@ -147,6 +150,14 @@ describe('UploadView 队列与上传', () => {
     mocks.upload.mockResolvedValue({ id: 'new-1', thumbnail_path: 't.jpg', file_path: 'f.jpg' })
     mocks.checkDuplicate.mockResolvedValue({ data: { exists: false } })
     mocks.addTagsToInspiration.mockResolvedValue({})
+    mocks.analyzeInspiration.mockReset()
+    mocks.analyzeInspiration.mockResolvedValue({
+      task_id: 9,
+      inspiration_id: 'new-1',
+      message: '已加入分析队列（任务 #9）',
+      status: 'pending',
+      ollama_will_start: false,
+    })
     mocks.linkBlogger.mockResolvedValue({})
     mocks.bindFace.mockResolvedValue({})
     mocks.analyze.mockResolvedValue({})
@@ -242,6 +253,27 @@ describe('UploadView 队列与上传', () => {
     await startUpload(wrapper)
 
     expect(mocks.upload.mock.calls.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('开启自动分析时，上传成功后 fire-and-forget 提交分析任务（不阻塞上传结果）', async () => {
+    const prefs = (globalThis as Record<string, unknown>).__uploadPrefs as {
+      autoAnalyze: { value: boolean }
+    }
+    prefs.autoAnalyze.value = true
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+      await selectFiles(wrapper, [makeFile('auto.jpg')])
+
+      await startUpload(wrapper)
+
+      expect(mocks.upload).toHaveBeenCalledTimes(1)
+      // 单图分析已改为 worker 任务队列：提交即返回（fire-and-forget），不再等待分析完成
+      expect(mocks.analyzeInspiration).toHaveBeenCalledWith('new-1')
+      expect(wrapper.text()).toContain('auto.jpg')
+    } finally {
+      prefs.autoAnalyze.value = false
+    }
   })
 
   it('没有待上传文件时点上传给出提示', async () => {

@@ -6,10 +6,13 @@
  *
  * - 行级暂停/恢复/取消：状态要就地更新，取消 pending 是物理删除（`deleted`）、
  *   running 取消是终态标记（从列表移除）；
- * - 队列暂停/恢复、取消排队素材、单条重试：提示文案与刷新；
- * - 活动分析轮询：有活动 3s、WS 已连接 15s、空闲 15s；stop 后不再续排；
+ * - 2026-11-16（R2）起 API 内存分析队列下线：旧的「排队素材 / 活动分析 / 整体暂停 /
+ *   按素材取消」接口已删除，对应函数只保留兼容占位（不发请求、按钮随空数据隐藏）；
+ * - 单条重试（/ai/retry）现在也返回 task_id：要并入任务列表并接管轮询；
+ * - 任务轮询：数据源为 `/tasks?type=batch_analyze|multi_analyze` + WS `task_event`，
+ *   有未完成任务 3s、空闲 15s；stop 后不再续排；
  * - 批量任务轮询：终态副作用只执行一次、连续失败 5 次才停止（避免网络抖动卡死）；
- * - WS 推送 `task_event` / `ai_analysis_done` 与轮询合流，不能重复触发副作用。
+ * - WS 推送 `task_event` 与轮询合流，不能重复触发副作用。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,7 +20,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
-  del: vi.fn(),
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   requestAndNotify: vi.fn(),
   checkFailureAlert: vi.fn(),
@@ -27,7 +29,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/client', () => ({
-  default: { get: mocks.get, post: mocks.post, delete: mocks.del },
+  default: { get: mocks.get, post: mocks.post },
 }))
 
 vi.mock('@/composables/useNotification', () => ({
@@ -86,25 +88,19 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.isWsConnected.mockReturnValue(false)
-    mocks.get.mockResolvedValue({ data: { items: [], paused: false } })
+    mocks.get.mockResolvedValue({ data: { items: [] } })
     mocks.post.mockResolvedValue({ data: {} })
-    mocks.del.mockResolvedValue({ data: {} })
   })
 
   describe('基础加载', () => {
-    it('loadPendingQueue 写入排队素材与暂停态；失败静默', async () => {
-      mocks.get.mockResolvedValueOnce({
-        data: { items: [{ inspiration_id: 'a' }], paused: true },
-      })
+    it('loadPendingQueue 兼容占位：不再请求已下线的排队素材接口', async () => {
       const { api } = setup()
 
       await api.loadPendingQueue()
-      expect(api.pendingQueue.value).toHaveLength(1)
-      expect(api.queuePaused.value).toBe(true)
 
-      mocks.get.mockRejectedValueOnce(new Error('500'))
-      await api.loadPendingQueue() // 不抛、不提示
-      expect(mocks.message.error).not.toHaveBeenCalled()
+      expect(mocks.get).not.toHaveBeenCalled()
+      expect(api.pendingQueue.value).toEqual([])
+      expect(api.queuePaused.value).toBe(false)
     })
 
     it('loadQueue 校验统计并触发失败告警；失败静默', async () => {
@@ -119,12 +115,13 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
       expect(mocks.checkFailureAlert).toHaveBeenCalledWith(1, 10)
     })
 
-    it('loadActiveAnalyses 写入活动分析；失败静默', async () => {
-      mocks.get.mockResolvedValueOnce({ data: { active_analyses: { a: 'running' } } })
+    it('loadActiveAnalyses 兼容占位：不再请求已下线的活动分析接口', async () => {
       const { api } = setup()
 
       await api.loadActiveAnalyses()
-      expect(api.activeAnalyses.value).toEqual({ a: 'running' })
+
+      expect(mocks.get).not.toHaveBeenCalledWith('/ai/active-analyses')
+      expect(api.activeAnalyses.value).toEqual({})
     })
   })
 
@@ -184,7 +181,6 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
 
       expect(api.analysisTasks.value.map((t: { id: number }) => t.id)).toEqual([2])
       expect(mocks.get).toHaveBeenCalledWith('/ai/queue')
-      expect(mocks.get).toHaveBeenCalledWith('/ai/active-analyses')
     })
 
     it('取消 running：标记 cancelled 并从列表移除（终态不展示）', async () => {
@@ -205,61 +201,68 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
     })
   })
 
-  describe('队列暂停 / 取消排队 / 单条重试', () => {
-    it('暂停中的队列点恢复 → resume；否则 pause', async () => {
+  describe('已下线接口的兼容占位（R2 内存队列删除）', () => {
+    it('队列整体暂停/恢复：不再请求旧接口，只提示按任务暂停', async () => {
       const { api } = setup()
-      api.queuePaused.value = false
-      mocks.post.mockResolvedValue({ data: {} })
 
       await api.togglePauseQueue()
-      expect(mocks.post).toHaveBeenCalledWith('/ai/queue/pause')
-      expect(mocks.message.success).toHaveBeenCalledWith('队列已暂停')
 
-      api.queuePaused.value = true
-      await api.togglePauseQueue()
-      expect(mocks.post).toHaveBeenCalledWith('/ai/queue/resume')
-      expect(mocks.message.success).toHaveBeenCalledWith('队列已恢复')
+      expect(mocks.post).not.toHaveBeenCalled()
+      expect(mocks.message.info).toHaveBeenCalledWith(
+        '队列整体暂停已下线，请在任务列表中按任务暂停',
+      )
+      expect(api.queuePaused.value).toBe(false)
     })
 
-    it('队列暂停操作失败提示「操作失败」', async () => {
-      mocks.post.mockRejectedValueOnce(new Error('500'))
-      const { api } = setup()
-      await api.togglePauseQueue()
-      expect(mocks.message.error).toHaveBeenCalledWith('操作失败')
-    })
-
-    it('取消排队素材：提示并刷新排队与活动分析', async () => {
-      const { api } = setup()
-      await api.cancelQueueItem('insp-1')
-
-      expect(mocks.del).toHaveBeenCalledWith('/ai/queue/insp-1')
-      expect(mocks.message.success).toHaveBeenCalledWith('已取消')
-      expect(mocks.get).toHaveBeenCalledWith('/ai/queue/pending')
-      expect(mocks.get).toHaveBeenCalledWith('/ai/active-analyses')
-    })
-
-    it('取消排队失败优先用后端 detail', async () => {
-      mocks.del.mockRejectedValueOnce({
-        response: { data: { detail: '队列已暂停' } },
-      })
+    it('按素材取消排队：不再请求旧 DELETE 接口，只提示去任务列表取消', async () => {
       const { api } = setup()
 
       await api.cancelQueueItem('insp-1')
 
-      expect(mocks.message.error).toHaveBeenCalledWith('队列已暂停')
+      expect(mocks.post).not.toHaveBeenCalled()
+      expect(mocks.message.info).toHaveBeenCalledWith(
+        '单图分析已并入任务队列，请在下方任务列表中取消',
+      )
+      expect(api.pendingQueue.value).toEqual([])
     })
+  })
 
-    it('单条重试：成功刷新；Ollama 启动中给警告', async () => {
-      const { api } = setup()
-      await api.retryAnalysis('insp-1')
-      expect(mocks.post).toHaveBeenCalledWith('/ai/retry/insp-1')
-      expect(mocks.message.success).toHaveBeenCalledWith('已重新加入队列')
-
+  describe('单条重试（/ai/retry 也走 worker 任务队列）', () => {
+    it('成功：提示后端文案并把新任务并入任务列表轮询', async () => {
       mocks.post.mockResolvedValueOnce({
-        data: { ollama_will_start: true, message: 'Ollama 正在启动' },
+        data: {
+          task_id: 77,
+          message: '已重新加入分析队列（任务 #77）',
+          status: 'pending',
+        },
       })
+      mocks.get.mockImplementation((url: string) => {
+        if (url === '/tasks') return Promise.resolve({ data: { items: [task(77)] } })
+        if (url === '/tasks/77') return Promise.resolve({ data: task(77) })
+        return Promise.resolve({ data: {} })
+      })
+      const { api } = setup()
+
+      await api.retryAnalysis('insp-1')
+
+      expect(mocks.post).toHaveBeenCalledWith('/ai/retry/insp-1')
+      expect(mocks.message.success).toHaveBeenCalledWith('已重新加入分析队列（任务 #77）')
+      expect(api.batchTask.value?.id).toBe(77) // 接管轮询
+      api.stopBatchPolling()
+      api.stopPolling()
+    })
+
+    it('Ollama 启动中给警告（任务已入队）', async () => {
+      mocks.post.mockResolvedValueOnce({
+        data: { task_id: 78, ollama_will_start: true, message: 'Ollama 正在启动' },
+      })
+      const { api } = setup()
+
       await api.retryAnalysis('insp-2')
+
       expect(mocks.message.warning).toHaveBeenCalledWith('Ollama 正在启动')
+      api.stopBatchPolling()
+      api.stopPolling()
     })
 
     it('单条重试失败提示「重试失败」', async () => {
@@ -270,20 +273,27 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
     })
   })
 
-  describe('活动分析轮询', () => {
-    it('startPolling 立即拉活动分析并按空闲 15s 调度；stopPolling 停止', async () => {
+  describe('任务轮询（/tasks + task_event）', () => {
+    it('startPolling 先拉任务列表，空闲 15s；stopPolling 后不再续排', async () => {
       vi.useFakeTimers()
       try {
-        mocks.get.mockResolvedValue({ data: { active_analyses: {} } })
         const { api } = setup()
 
         api.startPolling()
         await flush()
-        expect(mocks.get).toHaveBeenCalledWith('/ai/active-analyses')
+        expect(mocks.get).toHaveBeenCalledWith('/tasks', {
+          params: { type: 'batch_analyze', size: 50 },
+        })
+        expect(mocks.get).toHaveBeenCalledWith('/tasks', {
+          params: { type: 'multi_analyze', size: 50 },
+        })
+        // 旧接口已删除：轮询不得再访问
+        expect(mocks.get).not.toHaveBeenCalledWith('/ai/queue/pending')
+        expect(mocks.get).not.toHaveBeenCalledWith('/ai/active-analyses')
 
         await vi.advanceTimersByTimeAsync(15000)
-        // 定时回调里会刷新活动分析 / 排队 / 任务列表 / 统计
-        expect(mocks.get).toHaveBeenCalledWith('/ai/queue/pending')
+        await flush()
+        expect(mocks.get).toHaveBeenCalledWith('/ai/queue')
 
         api.stopPolling()
         const calls = mocks.get.mock.calls.length
@@ -294,12 +304,22 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
       }
     })
 
-    it('有活动分析时用 3s 短轮询；停止后不再续排', async () => {
+    it('有未完成任务时用 3s 短轮询并刷新历史；停止后不再续排', async () => {
       vi.useFakeTimers()
       try {
-        mocks.get.mockResolvedValue({ data: { active_analyses: { a: 'running' } } })
+        mocks.get.mockImplementation((url: string) => {
+          if (url === '/tasks') {
+            return Promise.resolve({ data: { items: [task(11, { status: 'running' })] } })
+          }
+          if (url === '/ai/queue') {
+            return Promise.resolve({
+              data: { total: 1, analyzed: 0, unanalyzed: 1, failed: 0 },
+            })
+          }
+          return Promise.resolve({ data: {} })
+        })
         const { api, loadHistory } = setup()
-        api.activeAnalyses.value = { a: 'running' } // 让 wasActive=true → 3s
+        api.analysisTasks.value = [task(11, { status: 'running' })] // wasActive → 3s
 
         api.startPolling()
         await vi.advanceTimersByTimeAsync(3000)
@@ -317,8 +337,8 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
   })
 
   describe('批量任务终态合流', () => {
-    it('任务列表任务收到 WS task_event 时就地更新并移除终态', async () => {
-      const { api } = setup()
+    it('任务列表任务收到 WS task_event 时就地更新并移除终态，同时刷新统计与历史', async () => {
+      const { api, loadHistory } = setup()
       api.analysisTasks.value = [task(5, { status: 'running', progress: 10 })]
 
       mocks.wsHandlers['task_event']({
@@ -329,16 +349,36 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
       })
 
       expect(api.analysisTasks.value).toHaveLength(0) // 终态即移除
-    })
-
-    it('ai_analysis_done 推送触发队列/活动分析/历史刷新', async () => {
-      const { loadHistory } = setup()
-
-      mocks.wsHandlers['ai_analysis_done']({})
-
-      expect(mocks.get).toHaveBeenCalledWith('/ai/active-analyses')
+      await flush()
       expect(mocks.get).toHaveBeenCalledWith('/ai/queue')
       expect(loadHistory).toHaveBeenCalled()
+    })
+
+    it('未知任务事件（其它页面刚创建的任务）会拉一次任务列表纳入展示', async () => {
+      mocks.get.mockImplementation((url: string, opts?: { params?: { type?: string } }) => {
+        if (url === '/tasks' && opts?.params?.type === 'batch_analyze') {
+          return Promise.resolve({ data: { items: [task(99)] } })
+        }
+        return Promise.resolve({ data: { items: [] } })
+      })
+      const { api } = setup()
+
+      mocks.wsHandlers['task_event']({
+        task_id: 99,
+        task_type: 'batch_analyze',
+        status: 'running',
+      })
+      await flush()
+
+      expect(mocks.get).toHaveBeenCalledWith('/tasks', {
+        params: { type: 'batch_analyze', size: 50 },
+      })
+      expect(api.analysisTasks.value.map((t) => t.id)).toEqual([99])
+    })
+
+    it('不再订阅已下线的 ai_analysis_done 事件（单图分析改由 task_event 推送）', () => {
+      setup()
+      expect(mocks.wsHandlers['ai_analysis_done']).toBeUndefined()
     })
 
     it('批量任务终态副作用只执行一次（轮询 + WS 谁先到都行）', async () => {

@@ -1,6 +1,5 @@
 """AI 子路由。"""
 
-import asyncio
 import csv
 import io
 import logging
@@ -14,16 +13,6 @@ from app.config import settings
 from app.database import get_db
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
-from app.routers.ai_shared import (
-    _active_analyses,
-    _analysis_tasks,
-    _task_by_id,
-    _pending_queue,
-    get_queue_paused,
-    set_queue_paused,
-    get_in_memory_queue_ids,
-    _run_analysis,
-)
 from app.services import ai_analysis_service as ai_svc
 from app.services.model_prompt import get_prompt_versions
 from app.services.ollama_utils import is_ollama_running, start_ollama
@@ -60,20 +49,17 @@ async def _exclude_inflight_ids(
 ) -> tuple[list[str], set[str]]:
     """过滤出「尚未在进行中」的素材 ID。
 
-    进行中 = API 进程内存队列（_active_analyses/_pending_queue）里的素材
-    ∪ 已进入任一未完成 batch_analyze/multi_analyze 任务（DB 任务队列）的素材。
-    跨队列去重：内存队列与 worker 数据库任务队列互不可见，调度前必须排除，
-    否则同一素材可能被两个队列各分析一次。
+    进行中 = 已进入任一未完成 batch_analyze / multi_analyze 任务的素材（数据库
+    任务队列真值，见 ``ai_svc.get_inflight_analysis_ids``）。2026-11-16（task-9）
+    起单图分析也走该队列，API 进程内存队列已删除，只需查数据库。
+    调度前必须排除，否则同一素材可能被多个任务各分析一次、白烧 GPU。
 
     返回:
         (未在进行中的素材 ID 列表, 被剔除的进行中素材 ID 集合)
     """
-    in_memory = get_in_memory_queue_ids()
-    from_db = await ai_svc.get_inflight_analysis_ids(db)
-    inflight = in_memory | from_db
+    inflight = await ai_svc.get_inflight_analysis_ids(db)
     kept = [iid for iid in inspiration_ids if iid not in inflight]
-    skipped_inflight = set(inspiration_ids) - set(kept)
-    return kept, skipped_inflight
+    return kept, set(inspiration_ids) - set(kept)
 
 
 # ============ AI 分析 ============
@@ -83,11 +69,23 @@ async def _exclude_inflight_ids(
 async def analyze_inspiration(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
-) -> dict:
-    """触发单个素材的 AI 分析（后台异步执行）。"""
-    # 先校验素材是否存在（无论 Ollama 状态），不存在的素材直接 404
+) -> dict[str, str | int | bool | None]:
+    """触发单个素材的 AI 分析（走 worker 任务队列 + GPU 互斥）。
+
+    2026-11-16（task-9 / R2）：不再在 API 进程内 ``asyncio.create_task`` 直接分析
+    ——那会绕过 task_queue 的审计/重试/看门狗，也不受 worker 的
+    ``GPU_EXCLUSIVE_TASK_TYPES`` 互斥约束，会与向量回填/质量审核并发抢 GPU。
+    现在改为创建「1 个素材」的 ``batch_analyze`` 任务：``priority=10``（用户即时
+    操作插队）、``force_retry=True``（显式重跑，不因已有成功日志被跳过），响应返回
+    ``task_id`` 供前端轮询任务终态。
+    """
+    # 先校验素材是否存在（无论 Ollama 状态），不存在的素材直接 404；
+    # 垃圾桶素材（deleted_at 非空）不参与分析（与批量入口口径一致）
     result = await db.execute(
-        select(Inspiration).where(Inspiration.id == inspiration_id)
+        select(Inspiration).where(
+            Inspiration.id == inspiration_id,
+            Inspiration.deleted_at.is_(None),
+        )
     )
     inspiration = result.scalar_one_or_none()
     if not inspiration:
@@ -95,37 +93,41 @@ async def analyze_inspiration(
     if inspiration.media_type not in ("image", "video"):
         raise HTTPException(status_code=400, detail="仅支持分析图片/视频素材")
 
-    # 已在「进行中/排队中」（内存队列或未完成 batch/multi 任务）则不重复调度
-    inflight = get_in_memory_queue_ids() | await ai_svc.get_inflight_analysis_ids(db)
+    # 进行中幂等：已进入未完成 batch/multi 任务（含刚创建的单图任务）则不重复调度，
+    # 避免连点/与批量任务并发重复分析堆显存。
+    inflight = await ai_svc.get_inflight_analysis_ids(db)
     if inspiration_id in inflight:
         return {
             "message": "该素材已在分析队列中",
             "inspiration_id": inspiration_id,
             "status": "analyzing",
+            "task_id": None,
             "ollama_will_start": False,
         }
 
+    # 视频素材由执行器懒解析首帧（ffmpeg 提取耗时不阻塞 HTTP 请求），这里只建任务
+    task = await create_batch_analyze_task(
+        db,
+        [inspiration_id],
+        priority=10,
+        force_retry=True,
+    )
+
+    # Ollama 检查仅作提示：任务已入队，离线属可恢复错误，worker 会退避重试
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
-    if not ollama_running:
-        return {
-            "message": ollama_msg,
-            "inspiration_id": inspiration_id,
-            "status": "analyzing",
-            "ollama_will_start": True,
-        }
-
-    # 视频素材传 None：由后台任务懒解析第一关键帧（ffmpeg 提取耗时，不阻塞请求）
-    file_path = inspiration.file_path if inspiration.media_type == "image" else None
-
-    task = asyncio.create_task(_run_analysis(inspiration_id, file_path))
-    _analysis_tasks.add(task)
-    task.add_done_callback(_analysis_tasks.discard)
-    return {
-        "message": "分析任务已加入队列",
+    resp: dict[str, str | int | bool | None] = {
+        "task_id": task.id,
         "inspiration_id": inspiration_id,
-        "status": "analyzing",
-        "ollama_will_start": False,
+        "message": (
+            (f"{ollama_msg}，" if not ollama_running else "")
+            + f"已加入分析队列（任务 #{task.id}）"
+            + ("，worker 将自动重试直至 Ollama 恢复" if not ollama_running else "")
+        ),
+        "status": "pending",
+        # 与旧响应保持字段兼容（上传后 fire-and-forget 的调用方可能读它）
+        "ollama_will_start": not ollama_running,
     }
+    return resp
 
 
 def _resolve_prompt_combinations(
@@ -305,9 +307,9 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)) -> dict:
 async def unanalyzed_ids(db: AsyncSession = Depends(get_db)) -> dict[str, list[str] | int]:
     """获取所有未分析过的图片素材 ID 列表（暂不分析视频）。
 
-    排除正在进行/排队中的素材（内存队列 + 数据库任务队列），避免与分析队列重复。
+    排除已进入未完成 batch/multi 分析任务的素材（数据库任务队列真值），避免重复分析。
     """
-    ids = await ai_svc.get_unanalyzed_ids(db, skip_ids=get_in_memory_queue_ids())
+    ids = await ai_svc.get_unanalyzed_ids(db)
     return {"ids": ids, "count": len(ids)}
 
 
@@ -687,80 +689,6 @@ async def delete_analysis_log(
     if not await ai_svc.delete_analysis_log(db, log_id):
         raise HTTPException(status_code=404, detail="分析记录未找到")
     return {"message": f"分析记录 #{log_id} 已删除"}
-
-
-@router.get("/queue/pending")
-async def get_pending_queue(db: AsyncSession = Depends(get_db)) -> dict[str, list[dict] | bool]:
-    """获取排队中素材的缩略图预览信息。"""
-    if not _pending_queue and not _active_analyses:
-        return {"items": [], "paused": get_queue_paused()}
-
-    # 所有活跃/排队中的素材 ID
-    all_ids = list(_active_analyses.keys())
-    if not all_ids:
-        return {"items": [], "paused": get_queue_paused()}
-
-    insp_map = await ai_svc.get_inspiration_preview_map(db, all_ids)
-
-    items = []
-    for insp_id in _pending_queue:
-        info = insp_map.get(insp_id, {})
-        items.append({
-            "inspiration_id": insp_id,
-            "thumbnail_path": info.get("thumbnail_path"),
-            "file_path": info.get("file_path"),
-            "status": "排队中",
-        })
-    for insp_id, status in _active_analyses.items():
-        if insp_id not in _pending_queue:
-            info = insp_map.get(insp_id, {})
-            items.append({
-                "inspiration_id": insp_id,
-                "thumbnail_path": info.get("thumbnail_path"),
-                "file_path": info.get("file_path"),
-                "status": status,
-            })
-
-    return {"items": items, "paused": get_queue_paused()}
-
-
-@router.delete("/queue/{inspiration_id}")
-async def cancel_queue_item(inspiration_id: str) -> dict[str, str]:
-    """取消排队中的分析任务（已开始分析的无法取消）。"""
-    if inspiration_id in _pending_queue:
-        # 取消对应的 asyncio Task
-        task = _task_by_id.pop(inspiration_id, None)
-        if task and not task.done():
-            task.cancel()
-        _pending_queue.remove(inspiration_id)
-        _active_analyses.pop(inspiration_id, None)
-        return {"message": "已取消排队任务"}
-    elif inspiration_id in _active_analyses and inspiration_id not in _pending_queue:
-        raise HTTPException(status_code=409, detail="任务正在执行中，无法取消。可等待完成后查看结果")
-    else:
-        raise HTTPException(status_code=404, detail="任务不在队列中")
-
-
-@router.post("/queue/pause")
-async def pause_queue() -> dict[str, str | bool]:
-    """暂停全局分析队列（已完成的不受影响）。"""
-    set_queue_paused(True)
-    logger.info("分析队列已暂停")
-    return {"message": "队列已暂停", "paused": True}
-
-
-@router.post("/queue/resume")
-async def resume_queue() -> dict[str, str | bool]:
-    """恢复全局分析队列。"""
-    set_queue_paused(False)
-    logger.info("分析队列已恢复")
-    return {"message": "队列已恢复", "paused": False}
-
-
-@router.get("/active-analyses")
-async def get_active_analyses() -> dict[str, dict[str, str] | int]:
-    """获取当前正在分析中的素材列表，用于前端轮询显示进度。"""
-    return {"active_analyses": _active_analyses, "count": len(_active_analyses)}
 
 
 # ============ 分析结果对比 ============

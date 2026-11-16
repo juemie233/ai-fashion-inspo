@@ -32,11 +32,15 @@ import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
 import { useBrowseContext } from '@/composables/useBrowseContext'
 import { usePageTitle } from '@/composables/usePageTitle'
+import { useTaskPolling } from '@/composables/useTaskPolling'
 import { useInspirationsStore } from '@/stores/inspirations'
 
 const route = useRoute()
 const router = useRouter()
 const inspirationsStore = useInspirationsStore()
+
+/** 通用任务轮询（单图分析已改走 worker 任务队列：提交后按 task_id 轮询到终态再刷新详情） */
+const { pollTask, stopPolling } = useTaskPolling()
 
 /** 素材详情数据 */
 const detail = ref<InspirationDetailOut | null>(null)
@@ -171,6 +175,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
+  // 离开详情页时停止分析任务轮询（任务本身在 worker 侧继续执行，回来刷新即可看到结果）
+  stopPolling()
 })
 
 // 详情页跳转相似推荐等场景下，Vue Router 复用同一路由记录、不会重触发 onMounted，
@@ -329,19 +335,33 @@ async function copySourceUrl() {
   }
 }
 
-/** 重新触发 AI 分析（分析失败/未分析时可重试） */
+/** 重新触发 AI 分析（分析失败/未分析时可重试）。
+ *
+ * 2026-11-16（R2）起单图分析由 worker 任务队列执行：`/ai/analyze` 只负责入队并返回
+ * `task_id`，这里用通用任务轮询（WS task_event 优先 + 轮询兜底）等到终态后再刷新详情，
+ * 避免「点了没反应」；已在队列中时后端返回 `task_id=null`，不重复调度。
+ */
 async function reanalyze() {
   if (!detail.value || analyzing.value) return
   analyzing.value = true
   try {
-    // analyzeInspiration 返回的是响应体本身（{message, status, ollama_will_start}），
-    // 不是 axios 响应对象——不能再用 { data } 解构一层
     const data = await analyzeInspiration(detail.value.id)
-    if (data.ollama_will_start) {
-      Message.warning(data.message || 'Ollama 正在启动中')
-    } else {
-      Message.success('已提交重新分析')
+    if (data.task_id === null) {
+      // 幂等命中：已有未完成的分析任务在跑，等它完成即可
+      Message.info(data.message || '该素材已在分析队列中')
+      return
     }
+    if (data.ollama_will_start) {
+      Message.warning(data.message || 'Ollama 正在启动中，任务会在其恢复后自动执行')
+    } else {
+      Message.success('已提交重新分析，完成后自动刷新')
+    }
+    // 记录发起时的素材 id：轮询期间用户可能翻页，完成回调按原素材刷新
+    const inspirationId = detail.value.id
+    pollTask(data.task_id, () => {
+      Message.success('分析完成')
+      loadDetail(inspirationId)
+    })
   } catch (e) {
     Message.error(getApiErrorMessage(e, '重新分析失败'))
   } finally {

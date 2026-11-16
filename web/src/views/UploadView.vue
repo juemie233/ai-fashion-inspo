@@ -6,7 +6,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useInspirationsStore } from '@/stores/inspirations'
-import { addTagsToInspiration } from '@/api/inspirations'
+import { addTagsToInspiration, analyzeInspiration } from '@/api/inspirations'
 import { bloggersApi, type PersonBrief } from '@/api/persons'
 import apiClient from '@/api/client'
 import type { UploadQueueItem } from '@/types/upload'
@@ -241,9 +241,10 @@ async function startUpload() {
       item.resultId = result.id
       item.progress = 100
 
-      // 自动 AI 分析
+      // 自动 AI 分析：后端只负责入队（worker 执行），保持 fire-and-forget；
+      // 分析结果到「分析历史 / 任务管理」查看，不阻塞上传主流程
       if (autoAnalyze.value) {
-        apiClient.post(`/ai/analyze/${result.id}`).catch(() => {})
+        analyzeInspiration(result.id).catch(() => {})
       }
 
       // 绑定穿搭博主（幂等关联；失败不影响上传主流程，只计数提示）
@@ -344,7 +345,8 @@ async function importFromUrl() {
     prependRecent(data.id, data.thumbnail_path, data.file_path, data.media_type)
     urlInput.value = ''
     if (autoAnalyze.value) {
-      apiClient.post(`/ai/analyze/${data.id}`).catch(() => {})
+      // 同上：URL 导入后的自动分析仍 fire-and-forget（任务入队即返回）
+      analyzeInspiration(data.id).catch(() => {})
     }
     // 绑定穿搭博主（幂等；失败仅提示，不影响导入结果）
     if (linkBloggerId.value) {

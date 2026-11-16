@@ -408,14 +408,26 @@ export async function emptyTrash(onlyExpired = false) {
   return data
 }
 
-/** 触发 AI 分析（用于手动重新分析）。返回响应体本身，非 axios 响应对象 */
-export async function analyzeInspiration(id: string): Promise<{
-  message: string
+/** 单图 AI 分析响应（内部类型：调用方通过 analyzeInspiration 的返回类型推断即可）。
+ *
+ * 2026-11-16（R2）起单图分析改由 worker 任务队列执行（受 GPU 互斥约束），API 不再
+ * 在进程内直接跑分析：
+ * - 新入队：``status='pending'`` + ``task_id``，调用方应轮询任务到终态再刷新详情；
+ * - 已在分析队列中（幂等）：``status='analyzing'`` + ``task_id=null``，不重复调度。
+ */
+interface AnalyzeInspirationResult {
+  /** 新建的分析任务 id；已在队列中时为 null */
+  task_id: number | null
   inspiration_id: string
-  status: string
+  message: string
+  status: 'pending' | 'analyzing'
+  /** Ollama 未就绪时为 true：任务已入队，worker 会退避重试直至其恢复 */
   ollama_will_start: boolean
-}> {
-  const { data } = await apiClient.post(`/ai/analyze/${id}`)
+}
+
+/** 触发 AI 分析（用于手动重新分析）：任务入队后返回，调用方按 task_id 轮询终态 */
+export async function analyzeInspiration(id: string): Promise<AnalyzeInspirationResult> {
+  const { data } = await apiClient.post<AnalyzeInspirationResult>(`/ai/analyze/${id}`)
   return data
 }
 

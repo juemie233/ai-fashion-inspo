@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   removeTagFromInspiration: vi.fn(),
   analyzeInspiration: vi.fn(),
   fetchSimilar: vi.fn(),
+  /** useTaskPolling 内部用 apiClient.get 轮询任务状态 */
+  taskGet: vi.fn(),
   routerPush: vi.fn(),
   routerReplace: vi.fn(),
   routeQuery: {} as Record<string, string>,
@@ -33,6 +35,35 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { id: 'insp-1' }, query: mocks.routeQuery }),
   useRouter: () => ({ push: mocks.routerPush, replace: mocks.routerReplace }),
 }))
+
+// 单图分析改走任务队列后，详情页重试会通过 useTaskPolling → apiClient 轮询 /tasks/{id}
+vi.mock('@/api/client', () => ({
+  default: { get: mocks.taskGet, post: vi.fn(), delete: vi.fn(), patch: vi.fn() },
+}))
+
+/**
+ * apiClient 默认响应形状。
+ *
+ * 本文件 mock 了 api/inspirations 的部分函数，但浏览上下文（fetchInspirations）
+ * 与相似推荐（api/search.fetchSimilar）仍走真实实现 → 同一个 apiClient 实例；
+ * 统一给出合法空形状，避免它们被当成任务响应而把数组字段置为 undefined。
+ */
+function mockApiClientDefaults() {
+  mocks.taskGet.mockImplementation((url: string) => {
+    if (url.startsWith('/tasks/')) {
+      return Promise.resolve({
+        data: { id: Number(url.split('/').pop()), status: 'success', result: null },
+      })
+    }
+    if (url.startsWith('/inspirations')) {
+      return Promise.resolve({ data: { items: [], total: 0, page: 1, size: 50 } })
+    }
+    if (url.startsWith('/search/similar')) {
+      return Promise.resolve({ data: { similar: [] } })
+    }
+    return Promise.resolve({ data: {} })
+  })
+}
 
 vi.mock('@/api/inspirations', async () => {
   const actual = await vi.importActual<typeof import('@/api/inspirations')>('@/api/inspirations')
@@ -129,6 +160,14 @@ describe('DetailView 交互路径', () => {
     mocks.deleteInspiration.mockResolvedValue({})
     mocks.removeTagFromInspiration.mockResolvedValue({})
     mocks.fetchSimilar.mockResolvedValue({ items: [] })
+    mocks.analyzeInspiration.mockResolvedValue({
+      task_id: null,
+      inspiration_id: 'insp-1',
+      message: '该素材已在分析队列中',
+      status: 'analyzing',
+      ollama_will_start: false,
+    })
+    mockApiClientDefaults()
   })
 
   it('按路由 id 加载详情', async () => {
@@ -349,5 +388,48 @@ describe('DetailView 交互路径', () => {
       await flushPromises()
       expect(mocks.routerPush).toHaveBeenCalledWith({ path: '/search', query: { q: '针织开衫' } })
     }
+  })
+
+  it('重新分析：入队后按 task_id 轮询任务终态，完成后刷新详情', async () => {
+    mocks.analyzeInspiration.mockResolvedValue({
+      task_id: 42,
+      inspiration_id: 'insp-1',
+      message: '已加入分析队列（任务 #42）',
+      status: 'pending',
+      ollama_will_start: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    mocks.fetchInspiration.mockClear()
+
+    wrapper.findComponent({ name: 'DetailInfoPanel' }).vm.$emit('reanalyze')
+    await flushPromises()
+
+    expect(mocks.analyzeInspiration).toHaveBeenCalledWith('insp-1')
+    // 走通用任务轮询（/tasks/{id}），不依赖已删除的内存队列接口
+    expect(mocks.taskGet).toHaveBeenCalledWith('/tasks/42')
+    // 终态回调刷新详情，用户不用手动刷新页面
+    expect(mocks.fetchInspiration).toHaveBeenCalledWith('insp-1')
+  })
+
+  it('重新分析命中「已在队列中」（task_id=null）时不轮询、不重复调度', async () => {
+    mocks.analyzeInspiration.mockResolvedValue({
+      task_id: null,
+      inspiration_id: 'insp-1',
+      message: '该素材已在分析队列中',
+      status: 'analyzing',
+      ollama_will_start: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    mocks.taskGet.mockClear()
+
+    wrapper.findComponent({ name: 'DetailInfoPanel' }).vm.$emit('reanalyze')
+    await flushPromises()
+
+    expect(mocks.analyzeInspiration).toHaveBeenCalledWith('insp-1')
+    expect(mocks.taskGet).not.toHaveBeenCalled()
   })
 })
