@@ -286,6 +286,15 @@ onMounted(load)
 .row-name {
   font-weight: 600;
 }
+
+/* 触屏：博主名是跳详情页的文本链接，默认 16px 高；命中区补到 36（字号不变） */
+@media (pointer: coarse) {
+  a.row-name {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+  }
+}
 .cluster-line {
   font-size: 12px;
   color: var(--color-text-2);

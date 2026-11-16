@@ -61,20 +61,112 @@ body:has(.arco-drawer-mask:not([style*='display: none'])) .main-content {
   overflow: hidden;
 }
 
-/* 触屏 / 触控笔：mini 按钮命中区不低于 36px；高频按钮由组件提升到 44px */
+/* 触屏 / 触控笔命中区。
+ *
+ * 口径：最低 36px（普通操作），高频/危险操作 44px（表格行内动作、行展开、侧栏导航）。
+ * 原则：优先放大"可点区域"而不是整块视觉——除开关外不做整体放大，保持 834 竖屏 /
+ * 1024·1194 横屏下的排版密度；数字步进受输入框高度约束，用透明 ::after 扩命中区。
+ */
 @media (pointer: coarse) {
+  /* Arco 按钮：medium 默认 32px（表单主按钮）→ 36；视觉只高 4px，工具栏密度基本不变 */
+  .arco-btn-size-medium {
+    min-height: 36px;
+  }
+
+  /* small 默认 28px：高度补 36，宽度补 36 让纯图标按钮也够点（文本按钮本来就宽） */
+  .arco-btn-size-small {
+    min-height: 36px;
+    min-width: 36px;
+  }
+
   .arco-btn-size-mini {
     min-height: 36px;
     min-width: 36px;
   }
 
-  .arco-btn-size-small {
+  /* 文本链接（Arco link 本身是 inline-flex）默认只有 20~24px 高：补 min-height 到 36 */
+  .arco-link {
     min-height: 36px;
   }
 
-  .arco-table .arco-btn-size-mini {
+  /* 表格行内动作：与既有 mini 规则一致统一 44（运行记录 / 详情等高频操作） */
+  .arco-table .arco-btn-size-mini,
+  .arco-table .arco-btn-size-small {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  /* 表格行展开（+ 号）默认 14×14：触屏上属于高频操作，44。
+   * 列宽被 `.arco-table-expand-col` 固定 40px，需连 col 一起放宽，否则按钮被 flex 压回 40 */
+  .arco-table .arco-table-expand-col {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+  }
+  .arco-table .arco-table-expand-btn {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    line-height: 44px;
+  }
+
+  /* 开关默认 40×24：放大到 56×36（≈iOS 开关比例），命中区与滑块一起放大 */
+  .arco-switch {
+    min-width: 56px;
+    height: 36px;
+    line-height: 36px;
+    border-radius: 18px;
+  }
+  .arco-switch-handle {
+    width: 28px;
+    height: 28px;
+    top: 4px;
+    left: 4px;
+  }
+  .arco-switch-checked .arco-switch-handle {
+    left: calc(100% - 32px);
+  }
+
+  /* 数字步进按钮默认 18×7~11（并排叠在输入框右侧，视觉无法单独放大）：
+   * 用透明 ::after 把命中区扩到 ≥36×36（按最小 7px 高补 30px）；上下按钮各向两端扩，
+   * 两者只在边界相接、不重叠。需放开 step 容器的 overflow（Arco embed 选择器权重更高，同权重覆盖）。 */
+  .arco-input-number-mode-embed .arco-input-number-step {
+    overflow: visible;
+  }
+  .arco-input-number-step-button {
+    position: relative;
+  }
+  .arco-input-number-step-button:first-child::after {
+    content: '';
+    position: absolute;
+    left: -9px;
+    right: -9px;
+    top: -30px;
+    bottom: 0;
+  }
+  .arco-input-number-step-button:last-child::after {
+    content: '';
+    position: absolute;
+    left: -9px;
+    right: -9px;
+    top: 0;
+    bottom: -30px;
+  }
+
+  /* 标签右上角删除按钮默认 12×12：用透明 ::after 扩到约 36×36（不放大标签视觉） */
+  .arco-tag .arco-icon-hover {
+    position: relative;
+  }
+  .arco-tag .arco-icon-hover::after {
+    content: '';
+    position: absolute;
+    inset: -12px;
+  }
+
+  /* 侧栏导航项默认 40px 高：主要导航入口，44（紧凑图标栏宽度 56 已够） */
+  .sidebar .arco-menu-vertical .arco-menu-item,
+  .sidebar .arco-menu-vertical .arco-menu-inline-header {
+    line-height: 44px;
   }
 }
 

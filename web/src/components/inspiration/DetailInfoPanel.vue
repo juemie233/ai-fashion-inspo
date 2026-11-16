@@ -135,6 +135,7 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
             :href="detail.source_url"
             target="_blank"
             rel="noopener noreferrer"
+            class="source-link"
             >打开</a
           >
           <a-typography-text v-else type="secondary">图片直链，无法打开</a-typography-text>
@@ -361,6 +362,17 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
 /* 下载原图按钮的链接容器 */
 .download-link {
   display: inline-flex;
+}
+
+/* 触屏：原始链接「打开」默认是 19px 高的裸链接，补到 36×36 可点区域（字号不变） */
+@media (pointer: coarse) {
+  .source-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    min-height: 36px;
+  }
 }
 
 @media (max-width: 900px) {
