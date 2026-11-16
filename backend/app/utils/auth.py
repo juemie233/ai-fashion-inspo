@@ -1,20 +1,71 @@
 """API 认证依赖与中间件：API Key 校验，保护破坏性接口。"""
 
 import hmac
+import ipaddress
+import logging
 import re
 
-from fastapi import HTTPException, Security
+from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
+# 未配置 API_KEY 时拒绝非回环访问的统一文案（中间件与依赖共用，避免两处漂移）
+NO_API_KEY_LOOPBACK_ONLY_DETAIL = "未配置 API_KEY，仅允许本机访问；局域网/手机访问请设置 API_KEY"
 
-async def require_api_key(api_key: str | None = Security(api_key_header)) -> str | None:
-    """验证 API Key。如果未配置 api_key（开发模式）则跳过。"""
+# 主机名形式的本机来源；TestClient 的默认 client host 固定为 testclient
+_LOOPBACK_HOSTNAMES = frozenset({"localhost", "testclient"})
+
+
+def is_loopback_host(host: str | None) -> bool:
+    """判断请求的 TCP 对端地址是否来自本机回环。
+
+    只用于 ``request.client.host``；**禁止**把 ``X-Forwarded-For`` / ``X-Real-IP``
+    这类客户端可控请求头传进来——那等于让调用方自证来源，限制形同虚设。
+
+    放行范围：127.0.0.0/8、::1、IPv4-mapped IPv6（``::ffff:127.0.0.1``）、
+    localhost 与 testclient（pytest TestClient 的固定 client host）。
+    """
+    if not host:
+        return False
+    normalized = host.strip().lower()
+    if normalized.startswith("[") and normalized.endswith("]"):
+        normalized = normalized[1:-1]
+    if normalized in _LOOPBACK_HOSTNAMES:
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError as exc:
+        # 非 IP 形式（如 DNS 主机名）：按非回环处理（放行名单已在上面单独判断）
+        logger.debug("is_loopback_host: 忽略异常（非 IP 主机名）：%s（%s）", normalized, exc)
+        return False
+    if address.is_loopback:
+        return True
+    # IPv4-mapped IPv6 形式（部分平台/代理链会把 127.0.0.1 报成 ::ffff:127.0.0.1）
+    mapped = getattr(address, "ipv4_mapped", None)
+    return bool(mapped and mapped.is_loopback)
+
+
+async def require_api_key(
+    request: Request,
+    api_key: str | None = Security(api_key_header),
+) -> str | None:
+    """验证 API Key；未配置 api_key 时只允许回环地址访问。
+
+    与 ``destructive_api_key_middleware`` 口径一致：未配置密钥 ≠ 无鉴权，而是把
+    安全边界收到本机。``DESTRUCTIVE_ROUTES`` 清单由中间件统一覆盖；清单之外仍
+    需要显式鉴权的破坏性接口用本依赖兜底。
+    """
     if not settings.api_key:
-        return  # 开发模式：未设置密钥则跳过认证
+        client_host = request.client.host if request.client else None
+        if not is_loopback_host(client_host):
+            logger.warning("拒绝非回环访问：未配置 API_KEY（client=%s）", client_host)
+            raise HTTPException(status_code=401, detail=NO_API_KEY_LOOPBACK_ONLY_DETAIL)
+        return None
 
     if not api_key:
         raise HTTPException(status_code=401, detail="缺少 API 密钥，请在请求头中提供 X-API-Key")

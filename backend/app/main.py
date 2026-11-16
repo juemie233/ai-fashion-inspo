@@ -45,7 +45,11 @@ from app.routers import (
     collections,
     pose_gallery,
 )
-from app.utils.auth import is_destructive_route
+from app.utils.auth import (
+    NO_API_KEY_LOOPBACK_ONLY_DETAIL,
+    is_destructive_route,
+    is_loopback_host,
+)
 from app.exceptions import (
     AppException,
     AuthenticationException,
@@ -179,16 +183,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging("api")
     setup_uvicorn_access_log()
 
-    # 安全护栏：绑定非回环地址（0.0.0.0 / 局域网 IP）时，破坏性接口（物理删除、
-    # 清空垃圾桶、数据重置等）在未配置 API_KEY 的情况下会对所有能访问该地址的
-    # 客户端无鉴权开放。此处仅强烈告警而非强制中断，避免破坏现有部署；生产或
-    # 局域网暴露场景务必设置 API_KEY。
+    # 安全护栏：绑定非回环地址（0.0.0.0 / 局域网 IP）且未配置 API_KEY 时，只放行
+    # 回环地址的 HTTP 请求，所有非回环请求一律 401（见 no_api_key_loopback_only_middleware）。
+    # 手机/局域网要用必须配 API_KEY。
     _loopback_hosts = {"127.0.0.1", "localhost", "::1"}
     if settings.host not in _loopback_hosts and not settings.api_key:
         logger.warning(
-            "安全警告：当前绑定非回环地址 %s 但未配置 API_KEY，破坏性接口（物理删除/"
-            "清空垃圾桶/数据重置等）将无鉴权开放。请运行 scripts/ops/generate_api_key.py "
-            "生成密钥并写入 backend/.env，或把 host 改回 127.0.0.1（仅本机访问）。",
+            "安全警告：当前绑定非回环地址 %s 但未配置 API_KEY，所有非本机 HTTP 请求"
+            "（含读接口/健康检查）将返回 401。手机/局域网使用请运行 "
+            "scripts/ops/generate_api_key.py 生成密钥并写入 backend/.env，"
+            "或把 host 改回 127.0.0.1（仅本机访问）。",
             settings.host,
         )
 
@@ -347,16 +351,32 @@ app.add_middleware(
 async def destructive_api_key_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    """破坏性接口的 API Key 认证。
+    """破坏性接口的 API Key 认证 + 未配置密钥时的回环限制。
 
     命中 DESTRUCTIVE_ROUTES 清单的写操作（不可恢复删除/重置/批量破坏）需要
-    有效的 X-API-Key；未配置 api_key（开发模式）时跳过；读接口与普通写接口
-    完全不受影响。
+    有效的 X-API-Key；未配置 api_key 时只允许本机回环来源，非回环一律 401
+    （中文提示见 ``NO_API_KEY_LOOPBACK_ONLY_DETAIL``）。来源判定只看
+    ``request.client.host``，不信任 X-Forwarded-For 等可伪造请求头。
+    读接口与普通写接口不受本中间件影响。
     """
     if not is_destructive_route(request.method, request.url.path):
         return await call_next(request)
     if not settings.api_key:
-        return await call_next(request)  # 开发模式：未配置密钥则跳过认证
+        # 未配置密钥 ≠ 无鉴权：把安全边界收到本机，避免 HOST=0.0.0.0 时局域网
+        # 任意客户端可清空垃圾桶/物理删除（task-7，口径与 require_api_key 一致）。
+        client_host = request.client.host if request.client else None
+        if not is_loopback_host(client_host):
+            logger.warning(
+                "拒绝破坏性接口：未配置 API_KEY 且来源非回环（client=%s, %s %s）",
+                client_host,
+                request.method,
+                request.url.path,
+            )
+            return JSONResponse(
+                status_code=401,
+                content={"detail": NO_API_KEY_LOOPBACK_ONLY_DETAIL},
+            )
+        return await call_next(request)
 
     api_key = request.headers.get("X-API-Key")
     if not api_key:
@@ -368,6 +388,37 @@ async def destructive_api_key_middleware(
     if not hmac.compare_digest(api_key, settings.api_key):
         return JSONResponse(
             status_code=403, content={"detail": "API 密钥无效"}
+        )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def no_api_key_loopback_only_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """未配置 API_KEY 时，**所有**非回环 HTTP 请求一律 401。
+
+    这是单机本地部署的安全边界（CLAUDE.md「认证」）：api_key 为空时只放行
+    回环地址，而不是只保护破坏性接口——否则 HOST=0.0.0.0 时局域网的任何客户端
+    都能完整读写素材库。配置了 API_KEY 时本中间件不拦截，按既有逻辑
+    （破坏性接口校验 X-API-Key）处理。
+
+    来源只看 TCP 对端 ``request.client.host``；不信任 X-Forwarded-For 等
+    客户端可控请求头。``testclient``（pytest TestClient 固定 host）视为回环。
+    """
+    if settings.api_key:
+        return await call_next(request)
+    client_host = request.client.host if request.client else None
+    if not is_loopback_host(client_host):
+        logger.warning(
+            "拒绝非回环请求：未配置 API_KEY（client=%s, %s %s）",
+            client_host,
+            request.method,
+            request.url.path,
+        )
+        return JSONResponse(
+            status_code=401,
+            content={"detail": NO_API_KEY_LOOPBACK_ONLY_DETAIL},
         )
     return await call_next(request)
 

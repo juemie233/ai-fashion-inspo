@@ -286,7 +286,7 @@ class Settings(BaseSettings):
     f2_like_max_counts: int = 0
 
     # 安全
-    api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）
+    api_key: str = ""  # API 密钥；为空时破坏性接口仅允许回环来源（非回环 401）
     cors_origins: list[str] = [
         "http://localhost:17777",
         "http://127.0.0.1:17777",
