@@ -11,12 +11,13 @@
 #   bash scripts/ops/restore_data.sh /path/to/backup --allow-overwrite   # 目标已有数据时不拒绝
 #
 # 执行步骤（对应 T8）:
-#   1. 前置检查（SUCCESS 标记/磁盘空间/服务是否在跑/是否覆盖现有数据）
-#   2. 恢复前快照当前 DB + storage（移到 backend/storage/_pre_restore_snapshot/，保留7天）
+#   1. 前置检查（SUCCESS 标记/磁盘空间/服务是否在跑/是否覆盖现有数据；备份人脸库先验 integrity）
+#   2. 恢复前快照当前 DB + storage + 人脸库（移到 backend/storage/_pre_restore_snapshot/，保留7天）
 #   3. 还原数据库（默认 .db 一致性快照；--from-sql 用 fashion_inspo.sql 重建）
+#   3.1 还原 face-service 人脸库（face-service/face_service.db；旧备份缺该库时跳过并提示）
 #   4. robocopy 还原 storage 必备目录（_crop_backup/logs 等排除项缺失不告警）
 #   5. 还原运行时配置（.env / prompt 配置 / web/.env.local）
-#   6. 恢复后校验（integrity_check + 关键表 count 对 manifest + 抽查素材文件）
+#   6. 恢复后校验（integrity_check + 关键表 count 对 manifest + 抽查素材文件 + 人脸库校验）
 #
 # 安全约定:
 #   - 不自动停/启后端与 worker（项目约定）：检测到服务在运行会打印停止命令并退出。
@@ -75,7 +76,7 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1; shift ;;
     --allow-overwrite) ALLOW_OVERWRITE=1; shift ;;
     --from-sql) FROM_SQL=1; shift ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     -*) echo "未知参数: $1"; exit 1 ;;
     *)
       if [ -z "$BACKUP" ]; then BACKUP="$1"; else echo "多余的位置参数: $1"; exit 1; fi
@@ -107,6 +108,10 @@ case "$DB_PATH" in
   /*|[A-Za-z]:[\\/]*) : ;;
   *) DB_PATH="$BACKEND_DIR/fashion_inspo.db" ;;
 esac
+
+# 人脸子服务库（face-service/app/storage.py 固定为 face-service/face_service.db）：
+# 与主库隔离、不在 storage/ 下；备份里可能有也可能没有（旧备份/未部署），单独处理
+FACE_DB_PATH="$PROJECT_ROOT/face-service/face_service.db"
 BACKEND_PORT="$(_env_value PORT "$BACKUP/backend/.env")"
 BACKEND_PORT="${BACKEND_PORT:-$(_env_value PORT "$BACKEND_DIR/.env")}"
 BACKEND_PORT="${BACKEND_PORT:-18888}"
@@ -165,6 +170,47 @@ PYEOF
   fi
 fi
 
+# 1.2c 人脸库（face-service/face_service.db）：备份含该库时先验 integrity，
+# 失败则**不覆盖**现有库；旧备份/未部署 face-service 时缺文件属正常（skip）。
+FACE_DB_SRC="$BACKUP/face-service/face_service.db"
+FACE_RESTORE=0
+if [ -f "$FACE_DB_SRC" ]; then
+  if python - "$FACE_DB_SRC" <<'PYEOF'
+import sqlite3, sys
+try:
+    con = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+    try:
+        ok = con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        con.close()
+except sqlite3.Error:
+    ok = False  # 不是 SQLite 文件/已损坏：按未通过处理，不覆盖现有库
+sys.exit(0 if ok else 1)
+PYEOF
+  then
+    FACE_RESTORE=1
+    echo "  备份人脸库 integrity_check 通过（步骤 3.1 还原）"
+  else
+    fail "备份人脸库 integrity_check 未通过（不覆盖现有 face_service.db）"
+  fi
+else
+  # manifest 声明备份里应有人脸库 → 备份不完整，判失败；否则按旧备份跳过
+  if python - "$BACKUP/manifest.json" <<'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        manifest = json.load(f)
+except Exception:
+    sys.exit(0)  # 无/坏 manifest：按旧备份处理，不阻塞恢复
+sys.exit(0 if not (manifest.get("face_service_db") or {}).get("present") else 1)
+PYEOF
+  then
+    echo "  备份未包含人脸库（旧备份或未部署 face-service），跳过还原"
+  else
+    fail "manifest 标记备份含人脸库，但缺少 face-service/face_service.db"
+  fi
+fi
+
 # 1.3 服务是否在运行：端口 + supervisor/状态文件里的 PID（worker 可能没有端口）
 RUNNING_DESC=""
 _port_listening() {
@@ -219,7 +265,7 @@ echo "  未检测到服务运行"
 
 # 1.4 目标已有数据？（所有 storage 子目录都要看，不只看 images/person_photos）
 HAS_EXISTING=0
-if [ -f "$DB_PATH" ] || [ -d "$STORAGE_DIR" ]; then
+if [ -f "$DB_PATH" ] || [ -d "$STORAGE_DIR" ] || [ -f "$FACE_DB_PATH" ]; then
   for d in images person_photos trash videos thumbnails person_thumbnails lancedb; do
     if [ -d "$STORAGE_DIR/$d" ]; then HAS_EXISTING=1; break; fi
   done
@@ -324,6 +370,15 @@ if [ "$HAS_EXISTING" -eq 1 ]; then
       fi
     fi
   done
+  # 人脸库同样进快照：选错备份时可手动回退（不移走，后面步骤 3.1 会覆盖）
+  if [ -f "$FACE_DB_PATH" ]; then
+    if mkdir -p "$SNAPSHOT_DIR/face-service" && mv "$FACE_DB_PATH" "$SNAPSHOT_DIR/face-service/"; then
+      echo "  快照 face_service.db"
+    else
+      echo "  错误：快照人脸库失败：$FACE_DB_PATH"
+      exit 1
+    fi
+  fi
   # 当前 storage 必备目录移动到快照（被排除的 _crop_backup/logs 等保留原位，不参与恢复）
   if [ -d "$STORAGE_DIR" ]; then
     if ! mkdir -p "$SNAPSHOT_DIR/storage"; then
@@ -376,6 +431,25 @@ else
 fi
 echo ""
 
+# ── 步骤 3.1：还原人脸库（face-service/face_service.db）──
+if [ "$FACE_RESTORE" -eq 1 ]; then
+  echo ">>> [3.1] 还原人脸库（face-service/face_service.db）..."
+  mkdir -p "$PROJECT_ROOT/face-service"
+  TMP_FACE="$FACE_DB_PATH.restore_tmp"
+  rm -f "$TMP_FACE"
+  # 先落临时文件再替换：cp 中途失败不会留下半截 face_service.db
+  if cp "$FACE_DB_SRC" "$TMP_FACE" && mv "$TMP_FACE" "$FACE_DB_PATH"; then
+    echo "  人脸库已还原（备份内 integrity_check 已通过）"
+  else
+    rm -f "$TMP_FACE"
+    fail "还原人脸库失败：$FACE_DB_SRC → $FACE_DB_PATH"
+  fi
+  rm -f "${FACE_DB_PATH}-wal" "${FACE_DB_PATH}-shm"
+else
+  echo ">>> [3.1] 人脸库：跳过（备份无该库或未通过校验，未覆盖现有数据）"
+fi
+echo ""
+
 # ── 步骤 4：还原 storage 文件 ──
 echo ">>> [4/6] 还原素材存储（robocopy）..."
 if command -v robocopy >/dev/null 2>&1; then
@@ -425,10 +499,11 @@ echo ">>> [6/6] 恢复后校验..."
 # RESTORE_MODE 告诉校验块「这次是整文件复制还是 SQL 重建」：重建出的库不可能与备份
 # 字节一致，只能比行数，跳过 6.5 的 SHA-256 比对。
 RESTORE_MODE=$([ "$FROM_SQL" -eq 1 ] && echo sql || echo copy) \
-  python - "$DB_PATH" "$STORAGE_DIR" "$BACKUP/manifest.json" <<'PYEOF'
+  python - "$DB_PATH" "$STORAGE_DIR" "$BACKUP/manifest.json" "$FACE_DB_PATH" "$FACE_DB_SRC" <<'PYEOF'
 import json, os, sqlite3, sys
 
 db_path, storage_dir, manifest_path = sys.argv[1], sys.argv[2], sys.argv[3]
+face_db_path, backup_face_db = sys.argv[4], sys.argv[5]
 errors, warnings = [], []
 
 # 6.1 integrity_check
@@ -461,6 +536,32 @@ else:
     warnings.append("无 manifest.json，跳过 count 比对")
 
 print("  关键表行数:", {k: v for k, v in counts.items() if v is not None})
+
+# 6.2b 人脸库（face-service）：备份含该库时校验完整性 + 行数；旧备份跳过
+if os.path.exists(backup_face_db):
+    if not os.path.exists(face_db_path):
+        errors.append("备份含人脸库，但恢复后 face-service/face_service.db 不存在")
+    else:
+        face_con = sqlite3.connect(face_db_path)
+        try:
+            face_ic = face_con.execute("PRAGMA integrity_check").fetchone()[0]
+            if face_ic != "ok":
+                errors.append(f"恢复后人脸库 integrity_check 返回 {face_ic!r}")
+            face_counts = {}
+            for t in ("face_persons",):
+                try:
+                    face_counts[t] = face_con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                except sqlite3.Error:
+                    face_counts[t] = None
+        finally:
+            face_con.close()
+        m_face = (manifest.get("face_service_db") or {}) if isinstance(manifest, dict) else {}
+        for t, v in (m_face.get("table_counts") or {}).items():
+            if v is not None and face_counts.get(t) is not None and face_counts[t] != v:
+                errors.append(f"人脸库表 {t} 行数不一致：备份={v} 恢复={face_counts[t]}")
+        print("  人脸库行数:", {k: v for k, v in face_counts.items() if v is not None})
+else:
+    warnings.append("备份未含人脸库（旧备份或未部署 face-service），跳过人脸库校验")
 
 # 6.3 抽查素材文件：随机取若干 file_path 验证磁盘存在
 con = sqlite3.connect(db_path)
@@ -560,6 +661,11 @@ echo "  恢复完成"
 echo "=============================================="
 if [ -n "$SNAPSHOT_DIR" ]; then
   echo "恢复前快照: $SNAPSHOT_DIR"
+fi
+if [ "$FACE_RESTORE" -eq 1 ]; then
+  echo "人脸库: 已还原（face-service/face_service.db）"
+else
+  echo "人脸库: 未还原（备份未包含或未通过校验，现有库未被覆盖）"
 fi
 echo ""
 echo "后续步骤（请手动执行，脚本不自动启停服务）："

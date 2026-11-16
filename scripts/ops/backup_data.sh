@@ -14,6 +14,9 @@
 #   - SQLite 一致性快照（Python sqlite3.backup，后端运行中可安全备份）
 #   - 额外导出 SQL 明文（iterdump），DB 损坏时的抢救双保险
 #   - robocopy 全量 storage/，排除可重建的 _crop_backup / logs / tmp 等
+#   - face-service 人脸注册库（face-service/face_service.db）一致性快照：
+#     与主库隔离、不在 storage/ 下，storage 镜像覆盖不到；未部署 face-service
+#     时缺失只写告警、不判备份失败
 #   - 热写入收敛：后台任务持续写入（标签分析/lancedb）时自动增量修复，
 #     并以「冻结源端清单」为校验基准（时点快照语义，不与实时源端比对）
 #   - 运行时配置（.env / prompt 配置 / web/.env.local）+ git HEAD
@@ -74,6 +77,10 @@ case "$DB_PATH" in
   *) DB_PATH="$PROJECT_ROOT/backend/fashion_inspo.db" ;;
 esac
 
+# 人脸子服务库：face-service/app/storage.py 固定为 face-service/face_service.db，
+# 与主库隔离且不在 storage/ 下（storage 镜像覆盖不到），必须单独快照（见步骤 1.1）
+FACE_DB_PATH="$PROJECT_ROOT/face-service/face_service.db"
+
 # ── 参数解析 ──
 TARGET=""
 ALLOW_SAME_DISK=0
@@ -93,7 +100,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "--keep 需要参数"; exit 1; }
       KEEP_COUNT="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,32p' "$0"; exit 0 ;;
+      sed -n '2,38p' "$0"; exit 0 ;;
     -*)
       echo "未知参数: $1"; exit 1 ;;
     *)
@@ -261,6 +268,30 @@ else
   fail "未找到数据库文件（$DB_PATH），跳过数据库备份"
 fi
 [ "$DB_OK" -ne 0 ] && fail "数据库快照/导出失败（python 退出码 $DB_OK）"
+echo ""
+
+# ── 1.1 人脸识别子服务库（face-service/face_service.db）一致性快照 ──
+# 该库与主库隔离、也不在 storage/ 下（storage 镜像覆盖不到），必须单独备份。
+# 未部署 face-service 时文件不存在属正常：只打印提示并在 manifest 告警，不判失败。
+FACE_DB_OK=0
+if [ -f "$FACE_DB_PATH" ]; then
+  mkdir -p "$DEST/face-service"
+  python - "$FACE_DB_PATH" "$DEST/face-service/face_service.db" <<'PYEOF'
+import sqlite3, sys
+src_path, dest_path = sys.argv[1], sys.argv[2]
+src = sqlite3.connect(src_path)
+dst = sqlite3.connect(dest_path)
+with dst:
+    src.backup(dst)  # backup API：face-service 运行中也能取到一致性快照
+src.close()
+dst.close()
+print("  人脸库快照完成")
+PYEOF
+  FACE_DB_OK=$?
+  [ "$FACE_DB_OK" -ne 0 ] && fail "人脸库快照失败（python 退出码 $FACE_DB_OK）"
+else
+  echo "  未发现人脸库（$FACE_DB_PATH），跳过（未部署 face-service 时属正常）"
+fi
 echo ""
 
 # ── 2. 素材存储（robocopy 镜像，排除可重建/临时目录）──
@@ -492,7 +523,7 @@ else
   echo ">>> 抽样哈希校验：跳过（已开全量哈希或抽样数为 0）"
 fi
 
-python - "$DEST" "$STORAGE_DIR" "$VERIFY_HASH" "$GIT_HEAD" "$STORAGE_DIR_SOURCE" <<'PYEOF'
+python - "$DEST" "$STORAGE_DIR" "$VERIFY_HASH" "$GIT_HEAD" "$STORAGE_DIR_SOURCE" "$FACE_DB_PATH" <<'PYEOF'
 import hashlib
 import json
 import os
@@ -501,6 +532,7 @@ import sys
 
 dest, storage_src, verify_hash, git_head = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4]
 storage_src_kind = sys.argv[5]
+face_db_src = sys.argv[6]
 errors, warnings = [], []
 # 回退到 backend/storage 时显式告警：调度器只读 manifest，stdout 无人看。
 # 这条告警落进 manifest.warnings，事后校验/审计才查得出「这次备的可能不是现网那棵树」。
@@ -641,6 +673,36 @@ else:
         if not os.path.exists(os.path.join(dest, cfg)):
             warnings.append(f"{cfg} 未备份（可能本就不存在）")
 
+# 5.4b 人脸库（face-service）：存在性 / 大小 / integrity / 行数写进 manifest。
+# 源端存在但备份缺失 = 备份不完整（判失败）；源端不存在 = 未部署，告警不判失败。
+face_info: dict = {"present": False, "snapshot": "face-service/face_service.db"}
+face_snapshot = os.path.join(dest, "face-service", "face_service.db")
+if os.path.exists(face_snapshot):
+    face_con = sqlite3.connect(face_snapshot)
+    try:
+        face_ic = face_con.execute("PRAGMA integrity_check").fetchone()[0]
+        face_counts: dict[str, int | None] = {}
+        for t in ("face_persons",):
+            try:
+                face_counts[t] = face_con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            except sqlite3.Error:
+                face_counts[t] = None
+    finally:
+        face_con.close()
+    face_info = {
+        "present": True,
+        "snapshot": "face-service/face_service.db",
+        "size": os.path.getsize(face_snapshot),
+        "integrity": face_ic,
+        "table_counts": face_counts,
+    }
+    if face_ic != "ok":
+        errors.append(f"face_service.db integrity_check 返回 {face_ic!r}")
+elif os.path.exists(face_db_src):
+    errors.append("源端存在 face-service/face_service.db，但备份中缺失（步骤 1.1 未产出快照）")
+else:
+    warnings.append("未备份人脸库（face-service 未部署或库不存在），恢复后人脸注册数据为空")
+
 # 5.5 可选：全量 SHA-256
 hashes: dict[str, str] = {}
 if verify_hash:
@@ -687,6 +749,7 @@ manifest = {
     "db_size": os.path.getsize(db_path) if os.path.exists(db_path) else 0,
     "sql_size": os.path.getsize(sql_path) if os.path.exists(sql_path) else 0,
     "table_counts": counts,
+    "face_service_db": face_info,
     "dir_stats": dir_stats,
     "verify_hash": verify_hash,
     "hash_sample": hash_sample,
@@ -697,6 +760,13 @@ with open(os.path.join(dest, "manifest.json"), "w", encoding="utf-8") as f:
     json.dump(manifest, f, ensure_ascii=False, indent=2)
 
 print(f"  关键表行数: {{{', '.join(f'{k}={v}' for k,v in counts.items() if v is not None)}}}")
+if face_info["present"]:
+    print(
+        f"  人脸库: {face_info['table_counts']} "
+        f"size={face_info['size']}B integrity={face_info['integrity']}"
+    )
+else:
+    print("  人脸库: 未备份（face-service 未部署或库不存在）")
 for w in warnings:
     print(f"  告警: {w}")
 if errors:
