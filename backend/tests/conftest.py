@@ -28,7 +28,7 @@ for _sub in (
 # lancedb_dir 同为类字段默认值（storage_root/"lancedb"），必须显式覆盖，
 # 否则测试会读写/清空真实 backend/storage/lancedb（历史事故：向量「几乎全部缺失」）
 os.environ["LANCEDB_DIR"] = f"{_TMP}/storage/lancedb"
-os.environ.pop("API_KEY", None)  # 认证测试自行设置，默认开发模式跳过
+os.environ["API_KEY"] = ""  # 显式空值覆盖本机 backend/.env 的真实密钥；认证测试自行设置
 
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
