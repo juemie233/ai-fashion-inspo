@@ -7,21 +7,15 @@
 
 import type { ListFilter, SortKey } from '../services/api'
 import type { StatusTone } from './theme'
+import { TAG_CATEGORY_LABELS } from '@shared/types/inspiration'
 
-/** 标签分类中文名（与后端 `TagCategory` 枚举一致） */
-export const CATEGORY_LABELS: Record<string, string> = {
-  style: '风格',
-  item_type: '单品',
-  color: '颜色',
-  body_part: '穿着方式',
-  fit: '版型',
-  season: '季节',
-  attribute: '属性',
-  atmosphere: '氛围',
-  design_detail: '设计细节',
-  expression: '表情',
-  free: '自定义',
-}
+/** 标签分类中文名（与后端实际分类一致）。
+ *
+ * 真源在 `shared/types/inspiration.ts` 的 TAG_CATEGORY_LABELS（Web / Mobile 共用）；
+ * 这里展开成 Record<string, string> 供 `CATEGORY_LABELS[category]` 宽索引使用。
+ * 新增分类只改 shared 一处，避免两端各写一份导致「同一分类两个中文名」。
+ */
+export const CATEGORY_LABELS: Record<string, string> = { ...TAG_CATEGORY_LABELS }
 
 /** 分类中文名（未知分类回退原值，避免显示空白） */
 export function tagCategoryLabel(category: string | null | undefined): string {
