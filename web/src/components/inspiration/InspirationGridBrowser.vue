@@ -205,7 +205,7 @@ function previewPath(item: GridBrowserItem): string {
   border-bottom: 1px solid #f0f0f0;
   position: sticky;
   top: 0;
-  background: #fff;
+  background: var(--sheet);
   z-index: 2;
   display: flex;
   align-items: center;
@@ -221,7 +221,7 @@ function previewPath(item: GridBrowserItem): string {
 }
 
 .grid-empty {
-  color: #999;
+  color: var(--ink-3);
   text-align: center;
   padding: 60px 20px;
   font-size: 14px;
@@ -234,7 +234,7 @@ function previewPath(item: GridBrowserItem): string {
   margin-bottom: 10px;
   background: #f0f6ff;
   border: 1px solid #c8dfff;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -254,8 +254,8 @@ function previewPath(item: GridBrowserItem): string {
 .image-card {
   position: relative;
   cursor: pointer;
-  border-radius: 4px;
-  background: #fff;
+  border-radius: var(--radius-sm);
+  background: var(--sheet);
   border: 1px solid #f0f0f0;
   padding: 3px;
 }
@@ -264,7 +264,7 @@ function previewPath(item: GridBrowserItem): string {
 .image-wrap {
   position: relative;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* 图片/视频：中图网格展示；大图浏览由「悬停快速预览」浮层承担 */
@@ -273,15 +273,15 @@ function previewPath(item: GridBrowserItem): string {
   width: 100%;
   aspect-ratio: 2/3;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: block;
 }
 
 .no-preview {
   width: 100%;
   aspect-ratio: 2/3;
-  background: #f5f5f5;
-  border-radius: 4px;
+  background: var(--sheet-2);
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -292,7 +292,7 @@ function previewPath(item: GridBrowserItem): string {
 /* 多选勾选：与操作按钮一起常显在图片下方按钮区 */
 .card-checkbox {
   background: rgba(255, 255, 255, 0.9);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px;
 }
 
@@ -311,7 +311,7 @@ function previewPath(item: GridBrowserItem): string {
   inset: 0;
   border: 2px solid #3b82f6;
   background: rgba(59, 130, 246, 0.15);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   pointer-events: none;
   z-index: 1;
 }

@@ -85,12 +85,12 @@ watch(days, load)
   align-items: center;
   justify-content: center;
   min-height: 180px;
-  color: #999;
+  color: var(--ink-3);
   font-size: 13px;
 }
 .trend-summary {
   font-size: 12px;
-  color: #666;
+  color: var(--ink-2);
   margin-bottom: 12px;
 }
 .trend-chart {
@@ -112,7 +112,7 @@ watch(days, load)
 }
 .bar-value {
   font-size: 10px;
-  color: #999;
+  color: var(--ink-3);
   line-height: 1;
   margin-bottom: 2px;
 }

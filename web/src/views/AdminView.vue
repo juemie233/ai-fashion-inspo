@@ -99,7 +99,7 @@ onMounted(() => {
 
 <template>
   <div class="admin-page">
-    <h2>素材管理</h2>
+    <h2 class="page-title">素材管理</h2>
     <p class="subtitle">概览、剪裁与垃圾桶（治理类操作见「数据治理」「数据洞察」）</p>
 
     <!-- ====== 子页面小菜单 ====== -->
@@ -110,8 +110,8 @@ onMounted(() => {
         <admin-stat-cards :stats="stats" />
         <admin-dist-stats :stats="stats" />
         <admin-large-files :files="largestFiles" />
-        <p style="color: #999; font-size: 12px">
-          💡 提示：定期检查数据完整性和重复文件，可以保持素材库健康。建议每月执行一次。
+        <p style="color: var(--ink-3); font-size: 12px">
+          提示：定期检查数据完整性和重复文件，可以保持素材库健康。建议每月执行一次。
         </p>
       </a-tab-pane>
 
@@ -143,7 +143,20 @@ onMounted(() => {
   margin: 0 auto;
 }
 .subtitle {
-  color: #999;
+  color: var(--ink-3);
   margin-bottom: 24px;
+}
+
+.admin-page {
+  max-width: 1400px;
+  padding-bottom: 32px;
+}
+
+.subtitle {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0 0 20px;
+  max-width: 52em;
 }
 </style>

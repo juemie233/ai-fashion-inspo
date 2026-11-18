@@ -304,7 +304,7 @@ function handleExpandedChange(keys: Array<string | number>) {
               <a-tag size="small">{{ PERSON_PLATFORM_LABELS[m.platform] ?? m.platform }}</a-tag>
               <span class="group-member-count">{{ m.inspiration_count ?? 0 }} 素材</span>
               <span v-if="(m.rated_count ?? 0) > 0" class="group-member-count">
-                ★ {{ (m.rating_average ?? 0).toFixed(1) }} ({{ m.rated_count }})
+                {{ (m.rating_average ?? 0).toFixed(1) }} ({{ m.rated_count }})
               </span>
             </div>
             <div class="group-expand-hint">点击账号查看该平台素材</div>
@@ -391,7 +391,7 @@ function handleExpandedChange(keys: Array<string | number>) {
   margin-bottom: 10px;
   padding: 8px 12px;
   border: 1px solid var(--color-border-2);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--color-fill-1);
 }
 
@@ -429,7 +429,7 @@ function handleExpandedChange(keys: Array<string | number>) {
 }
 .group-expand-title {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--ink-3);
   margin-bottom: 8px;
 }
 .group-member {
@@ -439,14 +439,14 @@ function handleExpandedChange(keys: Array<string | number>) {
   padding: 6px 10px;
   margin: 0 8px 8px 0;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.15s;
-  background: #fafafa;
+  background: var(--sheet-2);
 }
 .group-member:hover {
-  border-color: #2a78d6;
-  background: #eef4fd;
+  border-color: var(--pine);
+  background: var(--sheet-2);
 }
 .group-member-name {
   font-weight: 500;
@@ -462,8 +462,8 @@ function handleExpandedChange(keys: Array<string | number>) {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #eef4fd;
-  color: #2a78d6;
+  background: var(--sheet-2);
+  color: var(--pine);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -471,12 +471,12 @@ function handleExpandedChange(keys: Array<string | number>) {
 }
 .group-member-count {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .group-expand-empty {
   padding: 8px 8px 8px 32px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .group-expand-hint {
   font-size: 11px;

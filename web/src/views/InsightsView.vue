@@ -37,7 +37,7 @@ watch(activeTab, (tab) => {
 
 <template>
   <div class="insights-page">
-    <h2>数据洞察</h2>
+    <h2 class="page-title">数据洞察</h2>
     <p class="subtitle">向量状态、导出与统计报表、提示词质量对比</p>
 
     <a-tabs v-model:active-key="activeTab" type="line">
@@ -70,7 +70,7 @@ watch(activeTab, (tab) => {
   margin: 0 auto;
 }
 .subtitle {
-  color: #999;
+  color: var(--ink-3);
   margin-bottom: 24px;
 }
 
@@ -90,5 +90,18 @@ watch(activeTab, (tab) => {
   .reports-layout {
     grid-template-columns: 1fr;
   }
+}
+
+.insights-page {
+  max-width: 1400px;
+  padding-bottom: 32px;
+}
+
+.subtitle {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0 0 20px;
+  max-width: 52em;
 }
 </style>

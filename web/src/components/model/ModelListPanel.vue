@@ -495,11 +495,11 @@ const statColumns = [
     <!-- GPU 显存监控（自动轮询 + 趋势图） -->
     <a-card v-if="gpuStats?.gpu_available" size="small" style="margin-bottom: 16px">
       <template #title>
-        🖥 GPU 显存
+        GPU 显存
         <a-tag color="arcoblue" size="small" style="margin-left: 8px">每 5 秒自动刷新</a-tag>
       </template>
       <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
-        <span style="font-size: 13px; color: #666">{{ gpuStats?.gpu_name || 'GPU' }}</span>
+        <span style="font-size: 13px; color: var(--ink-2)">{{ gpuStats?.gpu_name || 'GPU' }}</span>
         <a-progress
           type="line"
           :percent="Math.max(0, gpuStats?.usage_percent || 0) / 100"
@@ -517,7 +517,7 @@ const statColumns = [
             >{{ gpuStats?.used_vram_mb }} / {{ gpuStats?.total_vram_mb || '?' }} MB</span
           >
         </a-progress>
-        <span v-if="gpuStats?.free_vram_mb" style="font-size: 12px; color: #18a058"
+        <span v-if="gpuStats?.free_vram_mb" style="font-size: 12px; color: var(--pine)"
           >空闲 {{ gpuStats?.free_vram_mb }} MB</span
         >
       </div>
@@ -532,7 +532,7 @@ const statColumns = [
         >
           {{ m.name }} ({{ m.vram_mb }} MB)
         </a-tag>
-        <span style="font-size: 11px; color: #999; margin-left: 4px">点击 × 卸载模型</span>
+        <span style="font-size: 11px; color: var(--ink-3); margin-left: 4px">点击 × 卸载模型</span>
       </div>
       <ArcoChart
         v-if="gpuHistory.length > 1"
@@ -540,7 +540,9 @@ const statColumns = [
         :height="180"
         style="margin-top: 12px"
       />
-      <div v-else style="font-size: 11px; color: #999; margin-top: 8px">正在收集显存趋势数据…</div>
+      <div v-else style="font-size: 11px; color: var(--ink-3); margin-top: 8px">
+        正在收集显存趋势数据…
+      </div>
     </a-card>
 
     <!-- 模型列表 -->
@@ -601,7 +603,7 @@ const statColumns = [
             :stroke-width="12"
             style="flex: 1; min-width: 120px"
           />
-          <span style="font-size: 12px; color: #666; min-width: 140px"
+          <span style="font-size: 12px; color: var(--ink-2); min-width: 140px"
             >{{ t.statusText
             }}{{ t.key === runningTask?.key && downloadSize ? ` ${downloadSize}` : '' }}</span
           >
@@ -610,7 +612,7 @@ const statColumns = [
           >
         </div>
       </div>
-      <p style="font-size: 12px; color: #999; margin-top: 8px">
+      <p style="font-size: 12px; color: var(--ink-3); margin-top: 8px">
         支持多模型排队下载：加入队列后按顺序逐个执行，完成后自动刷新使用统计。
       </p>
     </a-card>
@@ -664,9 +666,9 @@ const statColumns = [
                   font-size: 12px;
                   white-space: pre-wrap;
                   word-break: break-all;
-                  background: #f5f5f5;
+                  background: var(--sheet-2);
                   padding: 12px;
-                  border-radius: 6px;
+                  border-radius: var(--radius-sm);
                   margin: 0;
                 "
                 >{{ modelDetail.template || '（无）' }}</pre>
@@ -677,9 +679,9 @@ const statColumns = [
                   font-size: 12px;
                   white-space: pre-wrap;
                   word-break: break-all;
-                  background: #f5f5f5;
+                  background: var(--sheet-2);
                   padding: 12px;
-                  border-radius: 6px;
+                  border-radius: var(--radius-sm);
                   margin: 0;
                 "
                 >{{ modelDetail.modelfile || '（无）' }}</pre>

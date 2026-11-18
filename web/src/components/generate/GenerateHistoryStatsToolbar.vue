@@ -150,8 +150,8 @@ function patchFilters(patch: Partial<GenerationHistoryQuery>): void {
   gap: 18px;
   margin: 8px 0 10px;
   padding: 10px 12px;
-  border-radius: 6px;
-  background: #f7f8fa;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
 }
 
 .gh-stat {
@@ -159,12 +159,12 @@ function patchFilters(patch: Partial<GenerationHistoryQuery>): void {
   align-items: baseline;
   gap: 4px;
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 
 .gh-stat b {
   font-size: 16px;
-  color: #1d2129;
+  color: var(--ink);
 }
 
 .gh-stat-models {
@@ -179,7 +179,7 @@ function patchFilters(patch: Partial<GenerationHistoryQuery>): void {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #4e5969;
+  color: var(--ink-2);
 }
 
 .gh-stat-model-name {

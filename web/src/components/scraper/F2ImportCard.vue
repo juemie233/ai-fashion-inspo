@@ -327,7 +327,7 @@ async function toggleAuthors() {
         所以「一键获取素材」下不了新博主（会得到 0 个作者）；这个入口直接点名，
         <b>首次自动翻全量</b>（不是只拿最近几天），下完自动入库。
         <br />
-        ⚠ 抖音号（如 72906514384）与 v.douyin.com 短链不支持——手填时请用完整主页链接里的
+        抖音号（如 72906514384）与 v.douyin.com 短链不支持——手填时请用完整主页链接里的
         <code>user/</code> 后面那段；从上面选择器挑的博主不受此限。
       </div>
     </div>
@@ -335,7 +335,7 @@ async function toggleAuthors() {
     <!-- 可用性状态：不可用时说明原因（f2 未装 / 目录缺失 / 用户库为空 / 对不上博主） -->
     <a-spin :loading="statusLoading" style="display: block">
       <div v-if="status" class="f2-status" :class="{ 'is-bad': !status.available }">
-        <span>{{ status.available ? '✅' : '⚠️' }} {{ status.reason }}</span>
+        <span>{{ status.available ? '' : '' }} {{ status.reason }}</span>
         <a-link @click="loadStatus()">刷新状态</a-link>
       </div>
     </a-spin>
@@ -500,40 +500,40 @@ async function toggleAuthors() {
 .f2-title {
   font-size: 15px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--ink);
 }
 
 .f2-sub {
   margin-top: 4px;
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
   line-height: 1.6;
 }
 
 .f2-hint {
-  color: #d97706;
+  color: var(--amber);
 }
 
 .f2-status {
   margin-top: 10px;
   font-size: 13px;
-  color: #4b5563;
+  color: var(--ink-2);
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
 .f2-status.is-bad {
-  color: #d97706;
+  color: var(--amber);
 }
 
 .f2-running {
   margin-top: 10px;
   padding: 8px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: #f2f6ff;
   font-size: 13px;
-  color: #1d2129;
+  color: var(--ink);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -558,7 +558,7 @@ async function toggleAuthors() {
 
 .f2-tip {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 
 /* 已登记博主清单：状态行下面一行入口 + 展开后的表格 */
@@ -575,11 +575,11 @@ async function toggleAuthors() {
 .f2-authors-note {
   margin-top: 8px;
   font-size: 12px;
-  color: #8a8f99;
+  color: var(--ink-3);
 }
 /* 库内博主名与 f2 昵称一致时弱化，避免两列看起来重复 */
 .f2-dim {
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 
 /* 「按博主全量下载」区块：与上方的增量入口用左侧竖线区分开 */
@@ -588,12 +588,12 @@ async function toggleAuthors() {
   padding: 10px 12px;
   border-left: 3px solid var(--color-primary-light-3, #94bfff);
   background: #f8faff;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .f2-profile-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--ink);
   margin-bottom: 8px;
 }
 .f2-profile-row {
@@ -619,60 +619,60 @@ async function toggleAuthors() {
   gap: 8px;
   flex-wrap: wrap;
   font-size: 12px;
-  color: #d97706;
+  color: var(--amber);
 }
 .f2-profile-tip {
   margin-top: 8px;
   font-size: 12px;
-  color: #8a8f99;
+  color: var(--ink-3);
   line-height: 1.8;
 }
 .f2-profile-tip code {
   padding: 0 3px;
   border-radius: 3px;
-  background: #f2f3f5;
+  background: var(--sheet-2);
 }
 
 /* ── 入库前预览弹窗 ── */
 .f2-preview-sum {
   font-size: 14px;
-  color: #1d2129;
+  color: var(--ink);
   margin-bottom: 8px;
 }
 .f2-preview-sum b {
-  color: #165dff;
+  color: var(--pine);
 }
 .f2-preview-empty {
   font-size: 13px;
-  color: #8a8f99;
+  color: var(--ink-3);
   line-height: 1.9;
 }
 .f2-preview-note {
   font-size: 12px;
-  color: #8a8f99;
+  color: var(--ink-3);
   line-height: 1.8;
   margin-top: 8px;
 }
 .f2-preview-skip {
   margin-top: 8px;
   padding: 8px 12px;
-  border-radius: 4px;
-  background: #f7f8fa;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
 }
 .f2-preview-skip-title {
   font-size: 12px;
-  color: #4e5969;
+  color: var(--ink-2);
   margin-bottom: 4px;
 }
 .f2-preview-skip-row {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  color: #8a8f99;
+  color: var(--ink-3);
   line-height: 1.9;
 }
 .f2-preview-skip-row b {
-  color: #4e5969;
+  color: var(--ink-2);
 }
 .f2-preview-actions {
   display: flex;

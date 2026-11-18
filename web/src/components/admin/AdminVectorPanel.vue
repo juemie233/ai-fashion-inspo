@@ -143,7 +143,7 @@ onUnmounted(() => {
           <a-statistic
             title="缺失（待向量化）"
             :value="stats.missing"
-            :value-style="{ color: stats.missing > 0 ? '#e8804f' : undefined }"
+            :value-style="{ color: stats.missing > 0 ? 'var(--amber)' : undefined }"
           />
           <a-statistic title="文本向量" :value="stats.text_vectors" />
         </div>

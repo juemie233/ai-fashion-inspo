@@ -129,7 +129,7 @@ function onPageChange(p: number) {
     <div class="toolbar">
       <div class="toolbar-left">
         <a-tag color="orange" size="small" :bordered="false"> 共 {{ total }} 个疑似 AI 素材 </a-tag>
-        <span class="view-hint">点击卡片勾选，悬停后点 👁 浏览详情</span>
+        <span class="view-hint">点击卡片勾选，悬停后点浏览详情</span>
         <span v-if="selectedCount > 0" class="selected-info">已选 {{ selectedCount }} 项</span>
       </div>
       <div class="toolbar-right">
@@ -174,7 +174,7 @@ function onPageChange(p: number) {
       :show-actions="false"
       :hover-zoom="true"
       :show-view-button="true"
-      empty-text="🎉 没有疑似 AI 的素材"
+      empty-text="没有疑似 AI 的素材"
       @toggle-select="toggleSelect"
     />
 
@@ -201,11 +201,11 @@ function onPageChange(p: number) {
 }
 .view-hint {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 .selected-info {
   font-size: 13px;
-  color: #d03050;
+  color: var(--seal);
   font-weight: 600;
 }
 .toolbar-right {

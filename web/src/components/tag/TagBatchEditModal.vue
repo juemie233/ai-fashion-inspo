@@ -237,7 +237,9 @@ const canSubmit = computed(() => {
 
     <!-- 查找替换 -->
     <div v-else-if="mode === 'replace'" class="replace-body">
-      <p style="color: #6b7280; font-size: 13px">在选中的 {{ count }} 个标签名中查找并替换文本：</p>
+      <p style="color: var(--ink-3); font-size: 13px">
+        在选中的 {{ count }} 个标签名中查找并替换文本：
+      </p>
       <div class="field">
         <label class="field-label">查找</label>
         <a-input v-model="replaceFind" placeholder="如：白色" />
@@ -275,7 +277,7 @@ const canSubmit = computed(() => {
           ]"
         >
           <template #after="{ record }">
-            <span :style="{ color: record.empty ? '#e5484d' : undefined }">
+            <span :style="{ color: record.empty ? 'var(--seal)' : undefined }">
               {{ record.empty ? '（空名，会被拒绝）' : record.after }}
             </span>
           </template>
@@ -288,7 +290,7 @@ const canSubmit = computed(() => {
 
     <!-- 批量改类别 -->
     <div v-else class="category-body">
-      <p style="color: #6b7280; font-size: 13px">将选中的 {{ count }} 个标签移至：</p>
+      <p style="color: var(--ink-3); font-size: 13px">将选中的 {{ count }} 个标签移至：</p>
       <a-select
         v-model="categoryTarget"
         :options="categoryOptions"
@@ -310,14 +312,14 @@ const canSubmit = computed(() => {
 <style scoped>
 .hint {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
   margin-bottom: 8px;
 }
 .form-head {
   display: flex;
   gap: 8px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--ink-3);
   margin-bottom: 6px;
 }
 .form-head .col-name {
@@ -340,7 +342,7 @@ const canSubmit = computed(() => {
 .progress-hint {
   margin-top: 8px;
   font-size: 12px;
-  color: #2a78d6;
+  color: var(--pine);
 }
 .field {
   margin-bottom: 12px;
@@ -348,7 +350,7 @@ const canSubmit = computed(() => {
 .field-label {
   display: block;
   font-size: 13px;
-  color: #4b5563;
+  color: var(--ink-2);
   margin-bottom: 4px;
 }
 

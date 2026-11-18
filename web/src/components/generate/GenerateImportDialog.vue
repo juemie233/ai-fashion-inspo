@@ -180,7 +180,7 @@ function confirm(): void {
   gap: 4px;
   padding: 6px;
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-fill-2);
   cursor: pointer;
 }
@@ -199,7 +199,7 @@ function confirm(): void {
   height: 200px;
   object-fit: contain;
   background: var(--color-fill-3);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .gid-seed {
@@ -217,7 +217,7 @@ function confirm(): void {
   top: 8px;
   left: 8px;
   padding: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgb(255 255 255 / 85%);
 }
 

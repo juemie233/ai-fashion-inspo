@@ -27,7 +27,7 @@ defineEmits<{
       <div v-for="set in photoSets" :key="set.id" class="photo-set-card">
         <div class="photo-set-cover" @click="$emit('open', set)">
           <img v-if="set.cover_path" :src="getFileUrl(set.cover_path)" :alt="set.name" />
-          <span v-else class="cover-fallback">🖼️</span>
+          <span v-else class="cover-fallback">无封面</span>
           <div class="photo-set-count">{{ set.photo_count }} 张</div>
         </div>
         <div class="photo-set-meta">
@@ -75,9 +75,9 @@ defineEmits<{
 
 .photo-set-card {
   border: 1px solid #eef1f6;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: #fff;
+  background: var(--sheet);
 }
 
 .photo-set-cover {
@@ -106,7 +106,7 @@ defineEmits<{
   right: 6px;
   bottom: 6px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-size: 11px;

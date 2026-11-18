@@ -278,7 +278,7 @@ onUnmounted(() => {
 
 <template>
   <div class="governance-page">
-    <h2>数据治理</h2>
+    <h2 class="page-title">数据治理</h2>
     <p class="subtitle">批量清理、完整性检查与去重维护</p>
 
     <!-- ====== 后台任务进度（全局） ====== -->
@@ -295,8 +295,8 @@ onUnmounted(() => {
           @delete-untagged="batchDeleteByCondition('untagged')"
           @delete-failed="batchDeleteByCondition('analysis_failed')"
         />
-        <p style="color: #999; font-size: 12px">
-          💡 提示：清理无标签或分析失败的素材可回收空间；删除前请确认这些素材确实不再需要。
+        <p style="color: var(--ink-3); font-size: 12px">
+          提示：清理无标签或分析失败的素材可回收空间；删除前请确认这些素材确实不再需要。
         </p>
       </a-tab-pane>
 
@@ -343,7 +343,20 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 .subtitle {
-  color: #999;
+  color: var(--ink-3);
   margin-bottom: 24px;
+}
+
+.governance-page {
+  max-width: 1400px;
+  padding-bottom: 32px;
+}
+
+.subtitle {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0 0 20px;
+  max-width: 52em;
 }
 </style>

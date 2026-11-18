@@ -303,7 +303,7 @@ async function createTask() {
           <a-radio value="blogger">按博主采集</a-radio>
         </a-radio-group>
         <template #extra>
-          <span style="font-size: 12px; color: #999">
+          <span style="font-size: 12px; color: var(--ink-3)">
             {{
               formMode === 'blogger'
                 ? '进入博主主页，逐篇提取作品全部图片/视频与正文，素材自动标记该博主'
@@ -325,7 +325,7 @@ async function createTask() {
       </a-form-item>
       <a-form-item v-if="formMode === 'blogger'" label="笔记数">
         <a-input-number v-model="formMaxNotes" :min="1" :max="200" style="width: 100px" />
-        <span style="margin-left: 8px; font-size: 12px; color: #999"
+        <span style="margin-left: 8px; font-size: 12px; color: var(--ink-3)"
           >篇笔记（进详情页逐篇提取，建议 ≤50 防风控）</span
         >
       </a-form-item>
@@ -339,7 +339,7 @@ async function createTask() {
           style="width: 100%"
         />
         <template #extra>
-          <span style="font-size: 12px; color: #999">
+          <span style="font-size: 12px; color: var(--ink-3)">
             可直接选择最近采集使用过的关键词，也可手动输入新关键词后回车创建（回车即添加）
           </span>
         </template>
@@ -367,7 +367,7 @@ async function createTask() {
             }
           "
         />
-        <span style="margin-left: 8px; font-size: 12px; color: #18a058">{{
+        <span style="margin-left: 8px; font-size: 12px; color: var(--pine)">{{
           formCdp ? '连接真实 Chrome（零检测）' : 'Playwright 自动浏览器（仅封面图）'
         }}</span>
       </a-form-item>
@@ -384,9 +384,9 @@ async function createTask() {
               cdpChecking
                 ? '检测中...'
                 : cdpStatus === 'ok'
-                  ? '✓ 已连接'
+                  ? '已连接'
                   : cdpStatus === 'fail'
-                    ? '✗ 未连接'
+                    ? '未连接'
                     : '测试连接'
             }}</a-button
           ></a-space
@@ -422,13 +422,13 @@ async function createTask() {
         </a-space>
       </a-form-item>
       <a-form-item v-if="formCdp && chromeStatus?.detail">
-        <span style="font-size: 12px; color: #999; line-height: 1.6">{{
+        <span style="font-size: 12px; color: var(--ink-3); line-height: 1.6">{{
           chromeStatus.detail
         }}</span>
       </a-form-item>
       <a-form-item v-if="formPlatform === 'douyin'" label="视频">
         <a-switch v-model="formDownloadVideo" />
-        <span style="margin-left: 8px; font-size: 12px; color: #999">{{
+        <span style="margin-left: 8px; font-size: 12px; color: var(--ink-3)">{{
           formDownloadVideo
             ? '下载视频入库（mp4 + 首帧缩略图，单条 ≤50MB）'
             : '跳过视频，仅采集图片素材'

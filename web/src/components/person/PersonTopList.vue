@@ -21,10 +21,12 @@ defineEmits<{
         <!-- image-url 传头像：Arco 只在 imageUrl 分支加 arco-avatar-image，
              圆形裁剪才生效（插槽 img 会渲染成方形并溢出） -->
         <a-avatar :size="28" :image-url="p.avatar_path ? getFileUrl(p.avatar_path) : undefined">
-          <span v-if="!p.avatar_path" aria-hidden="true">👤</span>
+          <span v-if="!p.avatar_path" aria-hidden="true">{{ p.name?.slice(0, 1) }}</span>
         </a-avatar>
         <span class="top-name">{{ p.name }}</span>
-        <span style="color: #999; font-size: 12px">{{ p.inspiration_count ?? 0 }} 素材</span>
+        <span style="color: var(--ink-3); font-size: 12px"
+          >{{ p.inspiration_count ?? 0 }} 素材</span
+        >
       </div>
     </a-space>
   </a-card>
@@ -40,13 +42,13 @@ defineEmits<{
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .top-row:hover {
-  background: #f5f7fa;
+  background: var(--sheet-2);
 }
 
 .top-rank {

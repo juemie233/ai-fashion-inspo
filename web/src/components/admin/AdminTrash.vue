@@ -194,7 +194,7 @@ async function cleanExpired() {
       :loading="loading"
       :error="error"
       :empty="items.length === 0"
-      empty-text="垃圾桶是空的 🎉"
+      empty-text="垃圾桶是空的"
       loading-text="加载垃圾桶..."
       @retry="load"
     >
@@ -285,7 +285,7 @@ async function cleanExpired() {
 }
 .trash-card {
   border: 1px solid var(--color-border-2);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--color-bg-2);
   display: flex;
@@ -300,7 +300,7 @@ async function cleanExpired() {
 }
 .days {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 .meta-source {
   font-size: 11px;

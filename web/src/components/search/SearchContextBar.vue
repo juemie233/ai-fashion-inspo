@@ -29,7 +29,7 @@ defineProps<{
 <style scoped>
 .search-context {
   font-size: 13px;
-  color: #666;
+  color: var(--ink-2);
   margin-bottom: 8px;
 }
 </style>

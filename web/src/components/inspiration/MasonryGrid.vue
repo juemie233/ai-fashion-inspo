@@ -200,7 +200,7 @@ watch(
 /* 定位模式：被定位素材金色描边 + 角标，加载时闪烁提示 */
 .masonry-cell.focused {
   position: relative;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow:
     0 0 0 3px #f0a020,
     0 0 12px rgba(240, 160, 32, 0.45);
@@ -214,8 +214,8 @@ watch(
   left: 8px;
   z-index: 5;
   padding: 2px 8px;
-  border-radius: 10px;
-  background: #f0a020;
+  border-radius: var(--radius-md);
+  background: var(--amber);
   color: #fff;
   font-size: 11px;
   font-weight: 600;
@@ -242,7 +242,7 @@ watch(
   align-items: center;
   justify-content: center;
   padding: 24px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 /* ── 印样台网格：收窄缝隙、去掉圆角与发光；定位用松烟绿角线而不是金色光晕 ── */

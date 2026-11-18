@@ -28,7 +28,7 @@ async function handleImport() {
 
 <template>
   <a-modal v-model:visible="show" title="导入标签" :footer="false" :width="550">
-    <p style="font-size:13px;color:#999;margin-bottom:8px">
+    <p style="font-size: 13px; color: var(--ink-3); margin-bottom: 8px">
       粘贴 JSON 数组，每项含 name 和 category 字段：
     </p>
     <a-textarea
@@ -36,9 +36,11 @@ async function handleImport() {
       :auto-size="{ minRows: 10 }"
       placeholder='[{"name": "森系", "category": "style"}, ...]'
     />
-    <a-space style="display:flex;justify-content:flex-end;margin-top:16px">
+    <a-space style="display: flex; justify-content: flex-end; margin-top: 16px">
       <a-button @click="show = false">取消</a-button>
-      <a-button type="primary" @click="handleImport" :disabled="!importJsonText.trim()">导入</a-button>
+      <a-button type="primary" @click="handleImport" :disabled="!importJsonText.trim()"
+        >导入</a-button
+      >
     </a-space>
   </a-modal>
 </template>

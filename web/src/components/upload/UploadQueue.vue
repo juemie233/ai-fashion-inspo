@@ -26,7 +26,7 @@ const emit = defineEmits<{
   <div class="queue-section">
     <div class="queue-header">
       <span>上传队列 ({{ queue.length }})</span>
-      <span style="font-size: 12px; color: #999">
+      <span style="font-size: 12px; color: var(--ink-3)">
         待上传 {{ pending }} · 已完成 {{ done }} · 失败 {{ failed }}
         <template v-if="dups > 0"> · 跳过 {{ dups }}</template>
         <template v-if="uploading && speed">
@@ -60,9 +60,9 @@ const emit = defineEmits<{
               <template v-else-if="item.status === 'uploading'">
                 <a-spin :size="14" />
               </template>
-              <template v-else-if="item.status === 'done'">✅</template>
-              <template v-else-if="item.status === 'duplicate'">🔄</template>
-              <template v-else-if="item.status === 'failed'">❌</template>
+              <template v-else-if="item.status === 'done'"></template>
+              <template v-else-if="item.status === 'duplicate'"></template>
+              <template v-else-if="item.status === 'failed'"></template>
             </div>
             <div class="queue-card-name">{{ item.file.name.slice(0, 20) }}</div>
             <div v-if="item.status === 'failed'" class="queue-card-error" :title="item.errorMsg">
@@ -75,7 +75,6 @@ const emit = defineEmits<{
               status="danger"
               @click="emit('remove', item.id)"
             >
-              ✕
             </a-button>
           </template>
         </ThumbCard>
@@ -88,8 +87,8 @@ const emit = defineEmits<{
 /* 队列 */
 .queue-section {
   margin-top: 16px;
-  background: #fff;
-  border-radius: 10px;
+  background: var(--sheet);
+  border-radius: var(--radius-md);
   padding: 12px;
 }
 
@@ -112,17 +111,17 @@ const emit = defineEmits<{
 
 .queue-card {
   position: relative;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: #f5f5f5;
+  background: var(--sheet-2);
   border: 2px solid #e5e7eb;
 }
 
 .queue-card.done {
-  border-color: #22c55e;
+  border-color: var(--jade);
 }
 .queue-card.failed {
-  border-color: #ef4444;
+  border-color: var(--seal);
 }
 .queue-card.duplicate {
   border-color: #f59e0b;

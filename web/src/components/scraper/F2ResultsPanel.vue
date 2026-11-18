@@ -165,7 +165,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   <div class="f2-results">
     <div class="f2r-head">
       <div class="f2r-title">
-        📋 本批素材
+        本批素材
         <span class="f2r-meta">
           共 <b>{{ counts.total }}</b> 条 · 在库 <b>{{ counts.live }}</b> · 垃圾桶
           <b>{{ counts.trash }}</b> · 已彻底删除 <b>{{ counts.gone }}</b>
@@ -327,7 +327,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
 
           <!-- 已被彻底删除：保留占位以说明「本批导入过、现已不存在」 -->
           <div v-else class="f2r-gone">
-            <div class="f2r-gone-mark">🗑️ 已彻底删除</div>
+            <div class="f2r-gone-mark">已彻底删除</div>
             <div class="f2r-gone-meta">{{ item.author || '未知博主' }}</div>
             <div class="f2r-gone-meta" :title="item.caption">
               {{ item.caption || '（无正文）' }}
@@ -346,7 +346,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   margin-top: 12px;
   padding: 12px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: #fafbfc;
   /* 面板内不允许横向滚动：所有行内元素换行，网格列数由 DensityImageGrid 自适应 */
   overflow-x: hidden;
@@ -372,13 +372,13 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   font-weight: 600;
 }
 .f2r-meta {
-  color: #666;
+  color: var(--ink-2);
   font-size: 12px;
   font-weight: 400;
   margin-left: 6px;
 }
 .f2r-batch {
-  color: #999;
+  color: var(--ink-3);
   font-size: 12px;
   /* 批次号是长串，允许在窄屏下换行，避免把头部撑宽 */
   word-break: break-all;
@@ -421,7 +421,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
 .f2r-caption {
   padding: 4px 6px;
   font-size: 11px;
-  color: #666;
+  color: var(--ink-2);
   line-height: 1.35;
   max-height: 32px;
   overflow: hidden;
@@ -432,7 +432,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
 }
 .f2r-gone {
   border: 1px dashed #d0d5dd;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: #f2f4f7;
   min-height: 120px;
   padding: 10px;

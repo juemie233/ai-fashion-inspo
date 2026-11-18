@@ -147,7 +147,7 @@ onUnmounted(() => {
 
 .svc-meta {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 .res-row {
@@ -163,14 +163,14 @@ onUnmounted(() => {
 
 .res-label {
   width: 48px;
-  color: #666;
+  color: var(--ink-2);
   flex-shrink: 0;
 }
 
 .res-value {
   width: 80px;
   text-align: right;
-  color: #666;
+  color: var(--ink-2);
   flex-shrink: 0;
 }
 

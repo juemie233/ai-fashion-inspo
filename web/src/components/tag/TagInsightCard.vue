@@ -75,7 +75,7 @@ follow(toRef(() => props.tag))
   padding: 10px 12px;
   margin-bottom: 10px;
   border: 1px solid var(--color-border-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--color-fill-1);
 }
 

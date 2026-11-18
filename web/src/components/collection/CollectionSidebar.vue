@@ -64,7 +64,7 @@ function itemMeta(c: CollectionOut): string {
       <span>合集（{{ collections.length }}）</span>
       <div style="display: flex; gap: 4px">
         <a-button size="mini" type="primary" @click="emit('create-manual')">＋ 手动</a-button>
-        <a-button size="mini" @click="emit('create-smart')">⚡ 智能</a-button>
+        <a-button size="mini" @click="emit('create-smart')">智能</a-button>
       </div>
     </div>
 
@@ -90,7 +90,7 @@ function itemMeta(c: CollectionOut): string {
             {{ collapsed.has(c.id) ? '▸' : '▾' }}
           </span>
           <span v-else class="collapse-toggle placeholder"></span>
-          <span class="collection-kind">{{ c.kind === 'smart' ? '⚡' : '📁' }}</span>
+          <span class="collection-kind">{{ c.kind === 'smart' ? '智' : '集' }}</span>
           <div class="collection-info">
             <div class="collection-name" :title="c.name">{{ c.name }}</div>
             <div class="collection-meta">{{ itemMeta(c) }}</div>
@@ -149,9 +149,9 @@ function itemMeta(c: CollectionOut): string {
   width: 260px;
   min-width: 260px;
   min-height: 420px;
-  background: #fff;
+  background: var(--sheet);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px;
   position: sticky;
   top: 16px;
@@ -172,7 +172,7 @@ function itemMeta(c: CollectionOut): string {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: 1px solid transparent;
   margin-bottom: 2px;
@@ -184,11 +184,11 @@ function itemMeta(c: CollectionOut): string {
   flex: none;
 }
 .collection-item:hover {
-  background: #f5f7fa;
+  background: var(--sheet-2);
 }
 .collection-item.active {
-  background: #eef4ff;
-  border-color: #94bfff;
+  background: var(--sheet-2);
+  border-color: var(--ink-3);
 }
 .collection-item.drag-over {
   border-top: 2px solid #2080f0;
@@ -199,12 +199,12 @@ function itemMeta(c: CollectionOut): string {
 }
 .collection-item.child .collection-name {
   font-size: 12.5px;
-  color: #4e5969;
+  color: var(--ink-2);
 }
 .collapse-toggle {
   width: 12px;
   font-size: 10px;
-  color: #86909c;
+  color: var(--ink-3);
   flex: none;
   text-align: center;
 }
@@ -214,13 +214,13 @@ function itemMeta(c: CollectionOut): string {
 .child-create {
   padding: 4px 10px 4px 26px;
   font-size: 11px;
-  color: #86909c;
+  color: var(--ink-3);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .child-create:hover {
-  color: #2080f0;
-  background: #f5f7fa;
+  color: var(--pine);
+  background: var(--sheet-2);
 }
 .collection-kind {
   font-size: 14px;
@@ -237,11 +237,11 @@ function itemMeta(c: CollectionOut): string {
 }
 .collection-meta {
   font-size: 11px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 .drag-hint {
   font-size: 11px;
-  color: #c9cdd4;
+  color: var(--ink-3);
   text-align: center;
   padding-top: 8px;
 }

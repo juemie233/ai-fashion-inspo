@@ -110,7 +110,7 @@ function selectSuggestion(val: string) {
 
 .search-bar :deep(.arco-input-wrapper.arco-input-focus) {
   border-color: var(--pine);
-  background: #fff;
+  background: var(--sheet);
 }
 
 .search-bar :deep(.arco-input) {

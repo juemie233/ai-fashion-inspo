@@ -121,7 +121,7 @@ async function refresh() {
         "
         @click="toggle"
       >
-        <span>🎯 采集 ROI（成本花在哪 · {{ days }} 天）{{ expanded ? '▼' : '▶' }}</span>
+        <span>采集 ROI（成本花在哪 · {{ days }} 天）{{ expanded ? '▼' : '▶' }}</span>
         <a-button v-if="expanded" size="mini" type="text" @click.stop="refresh">刷新</a-button>
       </div>
     </template>
@@ -241,11 +241,11 @@ async function refresh() {
 .roi-coverage {
   margin-top: 10px;
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 .roi-empty {
   text-align: center;
-  color: #999;
+  color: var(--ink-3);
   padding: 24px 0;
   font-size: 13px;
 }

@@ -134,7 +134,7 @@ onUnmounted(() => {
     <div class="rate-page-header">
       <a-button type="text" @click="router.push('/')">← 返回素材库</a-button>
       <div class="rate-title-wrap">
-        <h2>随机评分</h2>
+        <h2 class="page-title">随机评分</h2>
         <span class="rate-subtitle">仅图片素材 · 优先未评分 · 本次已评 {{ ratedCount }} 张</span>
       </div>
       <span v-if="total > 0" class="rate-total">
@@ -238,7 +238,7 @@ onUnmounted(() => {
 .rate-card {
   background: var(--color-bg-2);
   border: 1px solid var(--color-border-2);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 16px;
 }
 
@@ -250,7 +250,7 @@ onUnmounted(() => {
   max-height: 68vh;
   overflow: hidden;
   background: var(--color-fill-1);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .rate-image {
@@ -325,5 +325,76 @@ onUnmounted(() => {
 
 .rate-error {
   margin-bottom: 12px;
+}
+
+/* ── 印样台：随机评分是「审片台」，一张样张 + 一条评分尺 ── */
+.rate-page {
+  max-width: 1180px;
+  padding: 0 0 32px;
+}
+
+.rate-page-header {
+  align-items: flex-end;
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rate-title-wrap h2.page-title {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: 30px;
+}
+
+.rate-subtitle,
+.rate-total {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.rate-total {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.rate-card {
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.rate-stage {
+  background: var(--sheet-2);
+  border: 1px solid var(--line);
+}
+
+.rate-image {
+  border-radius: 0;
+}
+
+.rate-info {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rate-meta {
+  color: var(--ink-2);
+}
+
+.rate-hint,
+.rate-keyboard-hint {
+  color: var(--ink-3);
+}
+
+/* 评分操作行在 375 下换行 */
+.rate-controls,
+.rate-actions {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.rate-actions {
+  justify-content: flex-end;
 }
 </style>

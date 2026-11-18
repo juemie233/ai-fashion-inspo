@@ -52,19 +52,19 @@ const {
 
 // 社区色板（固定顺序，不循环；超出用灰色）
 const COMMUNITY_COLORS = [
-  '#2a78d6',
-  '#eb6834',
-  '#1baf7a',
-  '#eda100',
-  '#e87ba4',
-  '#008300',
-  '#4a3aa7',
-  '#e34948',
-  '#00a8a8',
-  '#7a5dc7',
+  '#2E4B40',
+  '#A6402F',
+  '#3F6B57',
+  '#8A6A2F',
+  '#8A5F6A',
+  '#3F6B57',
+  '#6B5A6E',
+  '#A6402F',
+  '#46606E',
+  '#6B5A6E',
 ]
-const BRIDGE_COLOR = '#e34948'
-const MUTED_INK = '#898781'
+const BRIDGE_COLOR = '#A6402F'
+const MUTED_INK = '#686C64'
 
 function communityColor(cid: number): string {
   return COMMUNITY_COLORS[cid % COMMUNITY_COLORS.length] ?? MUTED_INK
@@ -86,7 +86,7 @@ const graphOption = computed<EChartsOption | null>(() => {
           return (
             `${n.name}<br/>使用 ${n.usage_count} 次 · 度 ${n.degree}` +
             (n.betweenness != null ? ` · 介数 ${n.betweenness}` : '') +
-            (n.is_bridge ? '<br/><b style="color:#e34948">桥接节点</b>' : '')
+            (n.is_bridge ? '<br/><b style="color:var(--seal)">桥接节点</b>' : '')
           )
         }
         if (p.dataType === 'edge') {
@@ -102,7 +102,7 @@ const graphOption = computed<EChartsOption | null>(() => {
         layout: 'force',
         roam: true,
         force: { repulsion: 140, edgeLength: 90, gravity: 0.1 },
-        label: { show: true, position: 'right', fontSize: 11, color: '#52514e' },
+        label: { show: true, position: 'right', fontSize: 11, color: '#4F534D' },
         emphasis: { focus: 'adjacency', label: { fontWeight: 'bold' } },
         data: data.nodes.map((n) => ({
           id: n.id,
@@ -111,7 +111,7 @@ const graphOption = computed<EChartsOption | null>(() => {
           symbolSize: 8 + 26 * Math.pow(n.usage_count / maxUsage, 0.5),
           itemStyle: {
             color: communityColor(n.community),
-            borderColor: n.is_bridge ? BRIDGE_COLOR : '#fff',
+            borderColor: n.is_bridge ? BRIDGE_COLOR : '#FAF9F4',
             borderWidth: n.is_bridge ? 3 : 1,
           },
           // 透传原始节点字段供 tooltip formatter 使用（echarts 会保留自定义字段）
@@ -130,7 +130,7 @@ const graphOption = computed<EChartsOption | null>(() => {
             width: 1 + (e.weight / maxWeight) * 3,
           },
         })),
-        lineStyle: { color: '#c3c2b7', curveness: 0.1 },
+        lineStyle: { color: '#B9B8AD', curveness: 0.1 },
       },
     ],
   } as EChartsOption
@@ -178,8 +178,8 @@ const trendOption = computed<EChartsOption | null>(() => {
         data: rows.map((p) => p.count),
         smooth: true,
         symbolSize: 8,
-        lineStyle: { width: 2, color: '#2a78d6' },
-        itemStyle: { color: '#2a78d6' },
+        lineStyle: { width: 2, color: '#2E4B40' },
+        itemStyle: { color: '#2E4B40' },
         areaStyle: { color: 'rgba(42,120,214,0.12)' },
       },
     ],
@@ -221,7 +221,9 @@ onBeforeUnmount(() => {
       <div class="param-item">
         <span class="param-label">每节点连边</span>
         <a-input-number v-model="maxEdgesPerNode" :min="0" :max="50" style="width: 80px" />
-        <span class="param-hint" style="font-size: 11px; color: #9ca3af"> （0 = 不剪枝） </span>
+        <span class="param-hint" style="font-size: 11px; color: var(--ink-3)">
+          （0 = 不剪枝）
+        </span>
       </div>
       <a-button type="primary" :loading="running" @click="runAnalyze" v-if="!running && !paused">
         {{ result ? '重新分析' : '开始分析' }}
@@ -298,9 +300,9 @@ onBeforeUnmount(() => {
   gap: 20px;
   flex-wrap: wrap;
   padding: 12px;
-  background: #f8fafc;
+  background: var(--sheet-2);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   flex-shrink: 0;
 }
 .param-item {
@@ -310,12 +312,12 @@ onBeforeUnmount(() => {
 }
 .param-label {
   font-size: 13px;
-  color: #374151;
+  color: var(--ink-2);
 }
 .empty-tip {
   padding: 40px;
   text-align: center;
-  color: #9ca3af;
+  color: var(--ink-3);
   font-size: 14px;
 }
 .net-body {
@@ -330,18 +332,18 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 16px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
   margin-top: 4px;
   flex-wrap: wrap;
 }
 .bridge-sample {
-  color: #e34948;
+  color: var(--seal);
 }
 .comm-list {
   width: 220px;
   flex-shrink: 0;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px;
   overflow-y: auto;
   max-height: 520px;
@@ -369,11 +371,11 @@ onBeforeUnmount(() => {
 }
 .comm-head {
   font-size: 12px;
-  color: #374151;
+  color: var(--ink-2);
 }
 .comm-tags {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--ink-3);
   margin-top: 2px;
 }
 </style>

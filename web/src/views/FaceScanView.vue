@@ -468,6 +468,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
 
 <template>
   <div class="face-scan-page">
+    <h2 class="page-title">人脸库扫描</h2>
     <!-- 子服务离线提示：事前给出原因，而不是等点了按钮才报 503 -->
     <a-alert
       v-if="faceServiceOffline"
@@ -692,13 +693,13 @@ function filterOption(input: string, option: { label?: string }): boolean {
   max-width: 480px;
   max-height: 620px;
   object-fit: contain;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .compare-face {
   width: 200px;
   height: 200px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border-2);
 }
 
@@ -710,12 +711,18 @@ function filterOption(input: string, option: { label?: string }): boolean {
 .face-service-alert-tip {
   margin-top: 4px;
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
   line-height: 1.6;
 }
 
 /* 手动复检按钮：贴在提示条末尾，不与提示文案同行 */
 .face-service-alert-btn {
   margin-top: 8px;
+}
+
+/* ── 印样台：人脸库扫描（检测区 + 结果页签）── */
+.face-scan-page {
+  max-width: 1280px;
+  padding: 0 0 32px;
 }
 </style>

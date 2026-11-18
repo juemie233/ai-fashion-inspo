@@ -246,8 +246,8 @@ onMounted(() => {
         @select="onTreeSelect"
       >
         <template #icon="{ isLeaf }">
-          <IconFolder v-if="!isLeaf" style="color: #d97706" />
-          <IconTag v-else style="color: #9ca3af" />
+          <IconFolder v-if="!isLeaf" style="color: var(--amber)" />
+          <IconTag v-else style="color: var(--ink-3)" />
         </template>
         <template #title="node">
           {{ nodeTitle(node) }}
@@ -273,7 +273,7 @@ onMounted(() => {
 }
 .tree-hint {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .tree-spin {
   flex: 1;
@@ -282,6 +282,6 @@ onMounted(() => {
 .empty-tip {
   padding: 40px;
   text-align: center;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 </style>

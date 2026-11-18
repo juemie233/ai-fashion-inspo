@@ -665,7 +665,7 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
 
 .browse-position {
   font-size: 13px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 @media (max-width: 900px) {

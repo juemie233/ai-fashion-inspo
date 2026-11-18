@@ -17,7 +17,7 @@ const emit = defineEmits<{
     v-if="pairs.length > 0"
     title="相似标签"
     size="small"
-    style="margin-bottom: 16px; border-color: #f0a020"
+    style="margin-bottom: 16px; border-color: var(--amber)"
   >
     <template #extra>
       <a-button size="small" type="text" @click="emit('close')">关闭</a-button>
@@ -26,7 +26,7 @@ const emit = defineEmits<{
       <a-list-item v-for="pair in pairs.slice(0, 50)" :key="`${pair.tag_a?.id}-${pair.tag_b?.id}`">
         <a-space align="center">
           <a-tag size="small">{{ pair.tag_a?.name }}</a-tag>
-          <span style="font-size: 12px; color: #999"
+          <span style="font-size: 12px; color: var(--ink-3)"
             >相似度 {{ (pair.similarity * 100).toFixed(0) }}%</span
           >
           <a-tag size="small">{{ pair.tag_b?.name }}</a-tag>

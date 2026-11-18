@@ -104,7 +104,7 @@ function mergeIds(group: { items: Array<{ id: number }> }, currentId: number): n
   gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--color-border-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .similar-item:hover {

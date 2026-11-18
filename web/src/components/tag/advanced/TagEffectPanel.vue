@@ -54,8 +54,8 @@ function reloadTrending() {
 }
 
 // ── 图表 option ──
-const MUTED_INK = '#898781'
-const SERIES_BLUE = '#2a78d6'
+const MUTED_INK = '#686C64'
+const SERIES_BLUE = '#2E4B40'
 
 const combinationOption = computed<EChartsOption | null>(() => {
   const rows = combinations.value.slice(0, 12)
@@ -104,7 +104,7 @@ const coverageOption = computed<EChartsOption | null>(() => {
       {
         type: 'bar',
         data: entries.map(([, v]) => v),
-        itemStyle: { color: '#1baf7a', borderRadius: [3, 3, 0, 0] },
+        itemStyle: { color: '#3F6B57', borderRadius: [3, 3, 0, 0] },
         barMaxWidth: 28,
       },
     ],
@@ -123,7 +123,7 @@ const sourceOption = computed<EChartsOption | null>(() => {
         type: 'pie',
         radius: ['40%', '65%'],
         center: ['50%', '45%'],
-        label: { color: '#52514e', fontSize: 11 },
+        label: { color: '#4F534D', fontSize: 11 },
         data: entries.map(([k, v]) => ({
           name: SOURCE_LABELS[k] ?? k,
           value: v.usage_total,
@@ -135,9 +135,9 @@ const sourceOption = computed<EChartsOption | null>(() => {
 
 // ── 表格格式化 ──
 function deltaTag(item: TrendingItem): { text: string; color: string } {
-  if (item.delta > 0) return { text: `↑${item.delta}`, color: '#e34948' }
-  if (item.delta < 0) return { text: `↓${Math.abs(item.delta)}`, color: '#1baf7a' }
-  return { text: '—', color: '#9ca3af' }
+  if (item.delta > 0) return { text: `↑${item.delta}`, color: '#A6402F' }
+  if (item.delta < 0) return { text: `↓${Math.abs(item.delta)}`, color: '#3F6B57' }
+  return { text: '—', color: '#686C64' }
 }
 
 onMounted(() => {
@@ -310,7 +310,7 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   font-size: 13px;
-  color: #374151;
+  color: var(--ink-2);
 }
 .trending-cols {
   display: flex;
@@ -325,10 +325,10 @@ onMounted(() => {
   font-size: 14px;
 }
 .col-title.rise {
-  color: #e34948;
+  color: var(--seal);
 }
 .col-title.fall {
-  color: #1baf7a;
+  color: var(--jade);
 }
 .combo-list {
   display: flex;
@@ -340,7 +340,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   border: 1px solid #e5e7eb;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
 }
 .combo-tags {
@@ -354,14 +354,14 @@ onMounted(() => {
 .cov-card {
   flex: 1;
   min-width: 140px;
-  background: #f8fafc;
+  background: var(--sheet-2);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 12px 16px;
 }
 .cov-label {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--ink-3);
 }
 .cov-value {
   font-size: 22px;

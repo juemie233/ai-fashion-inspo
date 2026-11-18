@@ -240,7 +240,7 @@ onUnmounted(() => {
             @change="(v: unknown) => toggleAutoApprove(v === true)"
           />
         </a-space>
-        <p style="font-size: 12px; color: #999; margin: 8px 0 0">
+        <p style="font-size: 12px; color: var(--ink-3); margin: 8px 0 0">
           开启后，手动上传的素材会直接标记为「已通过」，不再进入待审核队列。
         </p>
       </a-card>
@@ -409,7 +409,7 @@ onUnmounted(() => {
               status="success"
               :loading="approvingRejectedIds.has(item.id)"
               @click="approveItem(item.id)"
-              >✓ 翻案</a-button
+              >翻案</a-button
             >
             <a-button
               size="mini"
@@ -476,7 +476,7 @@ onUnmounted(() => {
 
       <!-- 说明 -->
       <a-alert type="info">
-        <template #title>💡 待审核与已通过的素材</template>
+        <template #title>待审核与已通过的素材</template>
         前往「素材库」页，用筛选栏的「待审核 / 已通过」查看对应素材。
       </a-alert>
     </template>
@@ -510,7 +510,7 @@ onUnmounted(() => {
   background: rgba(208, 48, 80, 0.85);
   text-align: center;
   padding: 3px 6px;
-  border-radius: 4px 4px 0 0;
+  border-radius: var(--radius-sm) 4px 0 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;

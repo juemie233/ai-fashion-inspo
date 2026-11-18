@@ -108,9 +108,10 @@ const selectedTotal = computed(
                 :alt="item.inspiration_id"
                 loading="lazy"
               />
-              <div v-if="selectedFaceInspIds.has(item.inspiration_id)" class="face-insp-check">
-                ✓
-              </div>
+              <div
+                v-if="selectedFaceInspIds.has(item.inspiration_id)"
+                class="face-insp-check"
+              ></div>
             </div>
             <a-empty
               v-if="!faceInspLoading && faceInspItems.length === 0"
@@ -186,7 +187,7 @@ const selectedTotal = computed(
 .face-hint {
   margin: 8px 0;
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 /* 子服务离线提示：与扫描页同款告知方式 */
 .face-offline-alert {
@@ -209,7 +210,7 @@ const selectedTotal = computed(
 .face-insp-item {
   position: relative;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   border: 2px solid transparent;
   transition:
@@ -223,11 +224,11 @@ const selectedTotal = computed(
   height: 100%;
   object-fit: cover;
   display: block;
-  background: #f5f5f5;
+  background: var(--sheet-2);
 }
 
 .face-insp-item.checked {
-  border-color: #18a058;
+  border-color: var(--pine);
 }
 
 .face-insp-item.checked img {
@@ -241,7 +242,7 @@ const selectedTotal = computed(
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #18a058;
+  background: var(--pine);
   color: #fff;
   font-size: 13px;
   font-weight: 700;
@@ -257,7 +258,7 @@ const selectedTotal = computed(
   justify-content: center;
   gap: 8px;
   padding: 20px 0;
-  color: #999;
+  color: var(--ink-3);
   font-size: 12px;
 }
 </style>

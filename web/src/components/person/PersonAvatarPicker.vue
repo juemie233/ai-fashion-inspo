@@ -216,11 +216,11 @@ async function clearAvatar() {
 .avatar-pick-cell {
   position: relative;
   aspect-ratio: 1;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: pointer;
   border: 2px solid transparent;
-  background: #f2f3f5;
+  background: var(--sheet-2);
 }
 
 .avatar-pick-cell img {
@@ -231,7 +231,7 @@ async function clearAvatar() {
 }
 
 .avatar-pick-cell.checked {
-  border-color: #165dff;
+  border-color: var(--pine);
 }
 
 .avatar-pick-check {
@@ -241,7 +241,7 @@ async function clearAvatar() {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #165dff;
+  background: var(--pine);
   color: #fff;
   font-size: 12px;
   line-height: 18px;
@@ -257,7 +257,7 @@ async function clearAvatar() {
 .avatar-pick-hint {
   margin-top: 8px;
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 
 .avatar-upload-row {
@@ -269,7 +269,7 @@ async function clearAvatar() {
 .avatar-upload-tip {
   margin-top: 8px;
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
   line-height: 1.7;
 }
 

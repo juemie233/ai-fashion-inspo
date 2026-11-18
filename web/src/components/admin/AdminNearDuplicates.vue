@@ -384,7 +384,7 @@ function fmtTime(iso: string | null): string {
 
 /** 收藏标记展示 */
 function favoriteLabel(f: NearDuplicateFile): string {
-  return f.is_favorite ? ' ♥' : ''
+  return f.is_favorite ? '' : ''
 }
 </script>
 
@@ -471,7 +471,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
 
     <template v-if="groups.length > 0">
       <p style="color: rgb(var(--warning-6)); margin-bottom: 12px">
-        ⚠️ 发现 {{ groups.length }} 组近似重复，{{ nearDupScopeLabel(result!, limit) }}
+        发现 {{ groups.length }} 组近似重复，{{ nearDupScopeLabel(result!, limit) }}
       </p>
 
       <a-space align="center" style="margin-bottom: 12px">
@@ -571,7 +571,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
           >保留右边</a-button
         >
         <a-button type="text" :disabled="deletingBoth || decisionLocked" @click="skipGroup"
-          >都保留（跳过本组）{{ currentDecision === 'skip' ? ' ✓' : '' }}</a-button
+          >都保留（跳过本组）{{ currentDecision === 'skip' ? '' : '' }}</a-button
         >
         <a-popconfirm
           :ok-button-props="{ type: 'primary', status: 'danger' }"
@@ -674,7 +674,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
   height: 70dvh;
   min-height: 420px;
   background: #111;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   display: flex;
   align-items: center;

@@ -400,7 +400,7 @@ onUnmounted(stopPoll)
   <div class="gen-page">
     <div class="gen-head">
       <div>
-        <h2 class="gen-title">本地出图</h2>
+        <h2 class="page-title gen-title">本地出图</h2>
         <div class="gen-sub">
           用本机 ComfyUI 或云端 Seedream
           生成穿搭图；生成结果先进候选区，勾选后才入库（默认待审核、标记「AI 生成」）。
@@ -573,21 +573,21 @@ onUnmounted(stopPoll)
   font-size: 18px;
 }
 .gen-sub {
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 12px;
 }
 .gen-alert {
   margin-bottom: 12px;
 }
 .gen-hint {
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 12px;
   line-height: 1.7;
 }
 .gen-hint code {
   padding: 0 3px;
   border-radius: 3px;
-  background: #f2f3f5;
+  background: var(--sheet-2);
 }
 .gen-grid {
   display: grid;
@@ -600,7 +600,7 @@ onUnmounted(stopPoll)
   }
 }
 .gen-card {
-  background: #fff;
+  background: var(--sheet);
 }
 .gen-label {
   font-size: 13px;
@@ -613,7 +613,7 @@ onUnmounted(stopPoll)
   align-items: center;
 }
 .gen-empty {
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 13px;
   padding: 24px 0;
   text-align: center;
@@ -627,5 +627,51 @@ onUnmounted(stopPoll)
   gap: 8px;
   margin-top: 12px;
   flex-wrap: wrap;
+}
+
+/* ── 印样台：出图工作台（参数区 + 候选区）── */
+.gen-page {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 0 32px;
+}
+
+.gen-head {
+  align-items: flex-end;
+  margin-bottom: 18px;
+}
+
+.gen-sub {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+  max-width: 52em;
+}
+
+.gen-grid {
+  gap: 20px;
+}
+
+.gen-card {
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.gen-alert {
+  border-radius: var(--radius-sm);
+}
+
+/* 375：书眉允许换行，说明文字与刷新按钮不再挤在一条线上 */
+@media (max-width: 767px) {
+  .gen-head {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
+  .gen-sub {
+    font-size: 13px;
+    line-height: 1.8;
+  }
 }
 </style>

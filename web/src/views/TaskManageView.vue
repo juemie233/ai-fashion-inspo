@@ -54,7 +54,7 @@ onUnmounted(stopPoll)
 
 <template>
   <div class="task-page">
-    <h2>任务管理</h2>
+    <h2 class="page-title">任务管理</h2>
     <p class="subtitle">查看后台处理与采集任务的状态、进度与结果</p>
 
     <div class="toolbar">
@@ -105,7 +105,7 @@ onUnmounted(stopPoll)
   margin: 0 auto;
 }
 .subtitle {
-  color: #999;
+  color: var(--ink-3);
   margin-bottom: 20px;
 }
 .toolbar {
@@ -115,7 +115,30 @@ onUnmounted(stopPoll)
   margin-bottom: 16px;
 }
 .summary {
-  color: #999;
+  color: var(--ink-3);
   font-size: 13px;
+}
+
+.task-page {
+  max-width: 1400px;
+  padding-bottom: 32px;
+}
+
+.subtitle {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0 0 20px;
+  max-width: 52em;
+}
+
+/* 任务页：筛选行允许换行；宽表在纸面内横向滚动而不是撑破内容区 */
+.toolbar {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.task-page :deep(.arco-descriptions) {
+  overflow-x: auto;
 }
 </style>

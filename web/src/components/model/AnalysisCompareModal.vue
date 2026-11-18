@@ -31,7 +31,7 @@ const emit = defineEmits<{
         <div v-if="data.thumbnail_path" style="text-align: center; margin-bottom: 16px">
           <img
             :src="getFileUrl(data.thumbnail_path)"
-            style="max-height: 200px; border-radius: 8px"
+            style="max-height: 200px; border-radius: var(--radius-md)"
           />
         </div>
 
@@ -45,12 +45,14 @@ const emit = defineEmits<{
                 min-width: 140px;
                 text-align: center;
                 padding: 8px;
-                background: #f5f5f5;
-                border-radius: 6px;
+                background: var(--sheet-2);
+                border-radius: var(--radius-sm);
               "
             >
               <div style="font-weight: 600; font-size: 13px">{{ tc.model_name }}</div>
-              <div style="font-size: 11px; color: #999">{{ formatDate(tc.created_at) }}</div>
+              <div style="font-size: 11px; color: var(--ink-3)">
+                {{ formatDate(tc.created_at) }}
+              </div>
               <a-tag
                 :color="tc.processing_time_ms ? 'green' : 'gray'"
                 size="small"
@@ -62,7 +64,7 @@ const emit = defineEmits<{
           </div>
         </a-card>
 
-        <a-card title="📊 标签数量对比" size="small" style="margin-bottom: 12px">
+        <a-card title="标签数量对比" size="small" style="margin-bottom: 12px">
           <div style="display: flex; gap: 12px; flex-wrap: wrap">
             <div
               v-for="a in data.analyses"
@@ -72,11 +74,11 @@ const emit = defineEmits<{
                 min-width: 120px;
                 text-align: center;
                 padding: 8px;
-                background: #f5f5f5;
-                border-radius: 6px;
+                background: var(--sheet-2);
+                border-radius: var(--radius-sm);
               "
             >
-              <div style="font-size: 11px; color: #999">{{ a.model_name }}</div>
+              <div style="font-size: 11px; color: var(--ink-3)">{{ a.model_name }}</div>
               <div
                 v-for="(count, cat) in a.tags_count"
                 :key="cat"
@@ -90,12 +92,12 @@ const emit = defineEmits<{
 
         <a-card
           v-if="data.tag_diff"
-          title="🔄 标签差异（首次 → 末次）"
+          title="标签差异（首次 → 末次）"
           size="small"
           style="margin-bottom: 12px"
         >
           <div v-if="data.tag_diff.added.length" style="margin-bottom: 8px">
-            <span style="color: #18a058; font-weight: 600; font-size: 12px"
+            <span style="color: var(--pine); font-weight: 600; font-size: 12px"
               >+ 新增 ({{ data.tag_diff.added.length }}):</span
             >
             <a-tag
@@ -108,7 +110,7 @@ const emit = defineEmits<{
             >
           </div>
           <div v-if="data.tag_diff.removed.length" style="margin-bottom: 8px">
-            <span style="color: #d03050; font-weight: 600; font-size: 12px"
+            <span style="color: var(--seal); font-weight: 600; font-size: 12px"
               >− 消失 ({{ data.tag_diff.removed.length }}):</span
             >
             <a-tag
@@ -121,7 +123,7 @@ const emit = defineEmits<{
             >
           </div>
           <div v-if="data.tag_diff.common.length">
-            <span style="color: #2080f0; font-weight: 600; font-size: 12px"
+            <span style="color: var(--pine); font-weight: 600; font-size: 12px"
               >= 共同 ({{ data.tag_diff.common.length }}):</span
             >
             <a-tag
@@ -132,7 +134,10 @@ const emit = defineEmits<{
               style="margin: 1px"
               >{{ t }}</a-tag
             >
-            <span v-if="data.tag_diff.common.length > 20" style="font-size: 11px; color: #999">
+            <span
+              v-if="data.tag_diff.common.length > 20"
+              style="font-size: 11px; color: var(--ink-3)"
+            >
               ...还有 {{ data.tag_diff.common.length - 20 }} 个</span
             >
           </div>
@@ -144,7 +149,7 @@ const emit = defineEmits<{
             :key="a.id"
             :header="`#${idx + 1} — ${a.model_name} — ${a.status === 'success' ? '✓' : '✗'} — ${formatDate(a.created_at)}`"
           >
-            <div v-if="a.error" style="color: #d03050; font-size: 13px; margin-bottom: 8px">
+            <div v-if="a.error" style="color: var(--seal); font-size: 13px; margin-bottom: 8px">
               {{ a.error }}
             </div>
             <div v-if="a.parsed_response" style="font-size: 12px">

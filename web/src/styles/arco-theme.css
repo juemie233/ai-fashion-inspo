@@ -480,3 +480,228 @@ a {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── 第二阶段：全站页面书眉 / 副标题 / 空态 / 折叠面板统一 ── */
+.main-content h2.page-title {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  margin: 0 0 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.main-content .subtitle,
+.main-content .page-subtitle {
+  margin: 0 0 20px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--ink-2);
+  max-width: 52em;
+}
+
+/* 空态插图：默认彩色插画去饱和，融入纸面 */
+.arco-empty-image {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+
+/* 折叠面板 / 描述列表 / 表单标签：纸面 + 墨线 */
+.arco-collapse {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.arco-collapse-item {
+  border-color: var(--line);
+}
+
+.arco-collapse-item-header {
+  background: var(--sheet-2);
+  border-color: var(--line);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.arco-descriptions-item-label {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.arco-descriptions-item-value {
+  color: var(--ink);
+}
+
+.arco-form-item-label-col > .arco-form-item-label {
+  color: var(--ink-2);
+}
+
+/* 弹层正文继承次级墨色；列表/表格内联说明不再用亮蓝 */
+.arco-modal-body,
+.arco-drawer-body {
+  color: var(--ink-2);
+}
+
+.arco-typography {
+  color: var(--ink-2);
+}
+
+@media (max-width: 767px) {
+  .main-content h2.page-title {
+    font-size: 26px;
+    padding-bottom: 10px;
+  }
+}
+
+/* Arco 在 body 上重复声明了默认蓝色彩板：把同一套变量再覆盖到 body 层，
+ * 否则禁用态按钮、浅色边框、语义标签仍会解析回 Arco 默认蓝。 */
+body {
+  /* ── 印样台色板 ───────────────────────────────────────────── */
+  --paper: #efede6; /* 底：冷调石纸 */
+  --sheet: #faf9f4; /* 面：样张纸 */
+  --sheet-2: #f4f2ea; /* 次级面（表头 / 分栏底） */
+  --ink: #1c201e; /* 主文 / 墨线 */
+  --ink-2: #4f534d; /* 次文（纸面对比 6.4:1） */
+  --ink-3: #686c64; /* 弱文 / 12px 元信息（纸面 4.58:1，满足 4.5） */
+  --line: #d9d7cd; /* 细线 */
+  --line-strong: #b9b8ad; /* 强调线 */
+  --pine: #2e4b40; /* 主操作 / 导航（松烟绿） */
+  --pine-deep: #22382f;
+  --pine-soft: #e5eae3;
+  --seal: #a6402f; /* 朱砂：收藏 / 选中 / 危险 */
+  --seal-soft: #f3e4de;
+  --jade: #3f6b57; /* 成功 / 在线 */
+  --amber: #8a6a2f; /* 警告 */
+
+  /* ── 字阶（12 微标 / 13 元信息 / 14 控件 / 16 正文 / 20 小节 / 28 页题 / 40 大数）── */
+  --font-sans:
+    'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei',
+    system-ui, sans-serif;
+  --font-numeric: Georgia, 'Times New Roman', 'Songti SC', serif;
+  --type-12: 12px;
+  --type-13: 13px;
+  --type-14: 14px;
+  --type-16: 16px;
+  --type-20: 20px;
+  --type-28: 28px;
+  --type-40: 40px;
+  --leading-body: 1.8;
+
+  /* ── 间距（8 栅格为主）与圆角：印刷品的直角，不用大圆角 ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 5px;
+  --shadow-print: 5px 5px 0 rgba(28, 32, 30, 0.14); /* 印刷偏移影：只给弹层 */
+
+  /* ── Arco 主色映射：松烟绿（RGB 三元组，Arco 用 rgb(var(--primary-N))）── */
+  --primary-1: 235, 239, 235;
+  --primary-2: 213, 224, 216;
+  --primary-3: 181, 200, 187;
+  --primary-4: 137, 168, 149;
+  --primary-5: 92, 132, 111;
+  --primary-6: 46, 75, 64; /* 主色基准 */
+  --primary-7: 38, 62, 53;
+  --primary-8: 31, 51, 43;
+  --primary-9: 24, 40, 34;
+  --primary-10: 17, 29, 24;
+  /* 蓝色系一并收进松烟绿：避免旧 Arco 蓝标签/链接破坏色板 */
+  --arcoblue-1: 235, 239, 235;
+  --arcoblue-2: 213, 224, 216;
+  --arcoblue-3: 181, 200, 187;
+  --arcoblue-4: 137, 168, 149;
+  --arcoblue-5: 92, 132, 111;
+  --arcoblue-6: 46, 75, 64;
+  --arcoblue-7: 38, 62, 53;
+  --arcoblue-8: 31, 51, 43;
+  --arcoblue-9: 24, 40, 34;
+  --arcoblue-10: 17, 29, 24;
+  /* 危险色：朱砂（仅收藏/删除/错误） */
+  --danger-1: 248, 235, 231;
+  --danger-2: 240, 213, 205;
+  --danger-3: 228, 181, 168;
+  --danger-4: 213, 141, 122;
+  --danger-5: 190, 98, 75;
+  --danger-6: 166, 64, 47;
+  --danger-7: 143, 53, 38;
+  --danger-8: 118, 42, 30;
+  --danger-9: 92, 32, 22;
+  --danger-10: 66, 22, 15;
+  /* 成功 / 警告：降饱和，融入纸面色板 */
+  --success-6: 63, 107, 87;
+  --success-5: 94, 133, 114;
+  --warning-6: 138, 106, 47;
+
+  /* ── Arco 语义变量 ── */
+  --color-text-1: var(--ink);
+  --color-text-2: var(--ink-2);
+  --color-text-3: var(--ink-3);
+  --color-text-4: #b4b7b0;
+  --color-bg-1: var(--paper);
+  --color-bg-2: var(--sheet);
+  --color-bg-3: var(--sheet);
+  --color-bg-4: var(--sheet-2);
+  --color-bg-5: #fff;
+  --color-bg-popup: var(--sheet);
+  --color-border-1: var(--line);
+  --color-border-2: var(--line);
+  --color-border-3: var(--line-strong);
+  --color-border-4: var(--ink-3);
+  --color-fill-1: #f3f1ea;
+  --color-fill-2: #ebe9e1;
+  --color-fill-3: #e2e0d7;
+  --color-fill-4: #d7d5cb;
+  --border-radius-none: 0;
+  --border-radius-small: 2px;
+  --border-radius-medium: 3px;
+  --border-radius-large: 5px;
+  --border-radius-circle: 50%;
+
+  font-family: var(--font-sans);
+
+  /* ── 成功 / 警告语义色（Arco 在 body 上只有默认亮绿/橙，这里统一为印样台色）── */
+  --success-1: 234, 241, 236;
+  --success-2: 211, 226, 218;
+  --success-3: 178, 204, 190;
+  --success-4: 134, 175, 154;
+  --success-5: 96, 140, 118;
+  --success-6: 63, 107, 87;
+  --success-7: 51, 89, 72;
+  --success-8: 41, 72, 58;
+  --success-9: 31, 55, 44;
+  --success-10: 21, 37, 30;
+  --warning-1: 246, 240, 228;
+  --warning-2: 236, 223, 199;
+  --warning-3: 223, 202, 160;
+  --warning-4: 203, 173, 114;
+  --warning-5: 171, 139, 74;
+  --warning-6: 138, 106, 47;
+  --warning-7: 115, 87, 37;
+  --warning-8: 92, 70, 29;
+  --warning-9: 69, 52, 21;
+  --warning-10: 46, 35, 14;
+}
+
+/* 禁用态主按钮：纸面 + 弱墨，而不是白字压在浅蓝上 */
+.arco-btn-primary.arco-btn-disabled,
+.arco-btn-primary[disabled] {
+  background: var(--sheet-2);
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+}
+
+/* 375 下 Arco Space 行内组允许换行（页眉操作按钮组不再撑出视口） */
+@media (max-width: 767px) {
+  .arco-space-horizontal {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}

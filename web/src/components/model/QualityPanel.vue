@@ -68,7 +68,7 @@ const trendOption = computed<EChartsOption | null>(() => {
     legend: { top: 0, textStyle: { fontSize: 11 } },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: rows.map((r) => r.day.slice(5)), axisLabel: { fontSize: 10 } },
-    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#eee' } } },
+    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#D9D7CD' } } },
     series: [
       {
         name: '总量',
@@ -76,7 +76,7 @@ const trendOption = computed<EChartsOption | null>(() => {
         smooth: true,
         showSymbol: false,
         data: rows.map((r) => r.total),
-        itemStyle: { color: '#3b82f6' },
+        itemStyle: { color: '#2E4B40' },
         areaStyle: { opacity: 0.08 },
       },
       {
@@ -85,7 +85,7 @@ const trendOption = computed<EChartsOption | null>(() => {
         smooth: true,
         showSymbol: false,
         data: rows.map((r) => r.success),
-        itemStyle: { color: '#22c55e' },
+        itemStyle: { color: '#3F6B57' },
       },
     ],
   }
@@ -104,14 +104,14 @@ const modelOption = computed<EChartsOption | null>(() => {
       data: rows.map((r) => r.model_name),
       axisLabel: { fontSize: 10, rotate: 20 },
     },
-    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#eee' } } },
+    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#D9D7CD' } } },
     series: [
       {
         name: '成功',
         type: 'bar',
         stack: 'total',
         data: rows.map((r) => r.success),
-        itemStyle: { color: '#22c55e' },
+        itemStyle: { color: '#3F6B57' },
         barMaxWidth: 28,
       },
       {
@@ -119,7 +119,7 @@ const modelOption = computed<EChartsOption | null>(() => {
         type: 'bar',
         stack: 'total',
         data: rows.map((r) => r.total - r.success),
-        itemStyle: { color: '#d03050' },
+        itemStyle: { color: '#A6402F' },
         barMaxWidth: 28,
       },
     ],
@@ -159,7 +159,7 @@ const failedColumns: TableColumnData[] = [
       return row.thumbnail_path
         ? h('img', {
             src: getFileUrl(row.thumbnail_path),
-            style: 'width:40px;height:56px;object-fit:cover;border-radius:4px',
+            style: 'width:40px;height:56px;object-fit:cover;border-radius: var(--radius-sm)',
           })
         : '-'
     },
@@ -191,7 +191,7 @@ const failedColumns: TableColumnData[] = [
         {
           title: row.error,
           style:
-            'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px',
+            'font-size:12px;color:var(--seal);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px',
         },
         row.error || '-',
       )
@@ -249,11 +249,11 @@ const failedColumns: TableColumnData[] = [
           <a-card
             size="small"
             :style="{
-              borderColor: qualityData.problem_items.multi_fail_count > 0 ? '#d03050' : '#e5e7eb',
+              borderColor: qualityData.problem_items.multi_fail_count > 0 ? '#A6402F' : '#D9D7CD',
             }"
           >
             <a-statistic
-              title="🔴 多次失败 (≥3次)"
+              title="多次失败 (≥3次)"
               :value="qualityData.problem_items.multi_fail_count"
             />
           </a-card>
@@ -262,10 +262,10 @@ const failedColumns: TableColumnData[] = [
           <a-card
             size="small"
             :style="{
-              borderColor: qualityData.problem_items.zero_tag_count > 0 ? '#f0a020' : '#e5e7eb',
+              borderColor: qualityData.problem_items.zero_tag_count > 0 ? '#8A6A2F' : '#D9D7CD',
             }"
           >
-            <a-statistic title="🟡 零标签输出" :value="qualityData.problem_items.zero_tag_count" />
+            <a-statistic title="零标签输出" :value="qualityData.problem_items.zero_tag_count" />
           </a-card>
         </a-col>
       </a-row>

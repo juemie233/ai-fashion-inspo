@@ -78,7 +78,7 @@ function openFrame(url: string) {
 
 .keyframe-count {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
   font-weight: normal;
 }
 
@@ -93,9 +93,9 @@ function openFrame(url: string) {
 .keyframe-thumb {
   height: 120px;
   flex-shrink: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: zoom-in;
-  background: #f5f5f5;
+  background: var(--sheet-2);
   object-fit: cover;
 }
 </style>

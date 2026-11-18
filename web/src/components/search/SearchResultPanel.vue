@@ -97,7 +97,7 @@ const sortModeModel = computed({
           <span v-if="total > 0" class="result-count">
             找到 <strong>{{ total }}</strong> 条结果
           </span>
-          <span v-else-if="!searching" style="color: #999">
+          <span v-else-if="!searching" style="color: var(--ink-3)">
             {{
               keyword || selectedTagCount > 0
                 ? '未找到匹配结果，请尝试放宽筛选条件'
@@ -226,7 +226,7 @@ const sortModeModel = computed({
 }
 
 .result-count {
-  color: #666;
+  color: var(--ink-2);
   font-size: 14px;
 }
 
@@ -238,7 +238,7 @@ const sortModeModel = computed({
   color: #8b5cf6;
   background: #f5f3ff;
   border: 1px solid #ddd6fe;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 4px 10px;
 }
 
@@ -246,13 +246,13 @@ const sortModeModel = computed({
   width: 32px;
   height: 40px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid #ddd;
 }
 
 .vector-limit-hint {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 .pagination-wrapper {

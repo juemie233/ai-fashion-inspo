@@ -518,7 +518,7 @@ onUnmounted(() => {
         controls
         autoplay
         playsinline
-        style="width: 100%; border-radius: 8px"
+        style="width: 100%; border-radius: var(--radius-md)"
       />
     </a-modal>
   </div>

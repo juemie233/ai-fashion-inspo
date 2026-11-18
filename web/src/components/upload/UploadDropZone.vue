@@ -103,9 +103,9 @@ function onUrlInput(value: string | null) {
 /* 上传主区域 */
 .upload-zone {
   padding: 48px 32px 36px;
-  background: #fff;
+  background: var(--sheet);
   border: 2px dashed #d1d5db;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   text-align: center;
   transition:
     border-color 0.2s,
@@ -114,7 +114,7 @@ function onUrlInput(value: string | null) {
 
 .upload-zone:hover {
   border-color: #818cf8;
-  background: #fafafe;
+  background: var(--sheet-2);
 }
 
 .upload-zone.has-queue {
@@ -130,13 +130,13 @@ function onUrlInput(value: string | null) {
   margin: 0 0 6px;
   font-size: 18px;
   font-weight: 600;
-  color: #374151;
+  color: var(--ink-2);
 }
 
 .upload-desc {
   margin: 0 0 4px;
   font-size: 14px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 
 .upload-desc-touch {

@@ -70,7 +70,7 @@ function onOutfitEnter(e: KeyboardEvent) {
         {{ t.tag.name }}
       </a-tag>
     </div>
-    <div v-else style="font-size: 12px; color: #999; margin-bottom: 8px">暂无大标签</div>
+    <div v-else style="font-size: 12px; color: var(--ink-3); margin-bottom: 8px">暂无大标签</div>
 
     <div class="outfit-tag-add" @keydown.enter.capture="onOutfitEnter">
       <a-select
@@ -94,7 +94,7 @@ function onOutfitEnter(e: KeyboardEvent) {
 
     <div v-if="aiSuggestions.length" class="outfit-tag-suggestions">
       <div class="outfit-tag-suggestions-header">
-        <span style="font-size: 12px; color: #999">AI 建议（点击标签入库，点 ✕ 丢弃）：</span>
+        <span style="font-size: 12px; color: var(--ink-3)">AI 建议（点击标签入库，点丢弃）：</span>
         <a-button size="mini" type="secondary" status="warning" @click="emit('confirm-all')"
           >一键全部入库 ({{ aiSuggestions.length }})</a-button
         >
@@ -108,9 +108,12 @@ function onOutfitEnter(e: KeyboardEvent) {
           <a-tag size="small" color="orange" style="cursor: pointer" @click="emit('confirm', name)">
             {{ name }}
           </a-tag>
-          <a-button size="mini" type="text" status="danger" @click="emit('dismiss', name)"
-            >✕</a-button
-          >
+          <a-button
+            size="mini"
+            type="text"
+            status="danger"
+            @click="emit('dismiss', name)"
+          ></a-button>
         </span>
       </div>
     </div>
@@ -120,10 +123,10 @@ function onOutfitEnter(e: KeyboardEvent) {
 <style scoped>
 .outfit-tags-section {
   border: 1px solid #f0d6dc;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 12px;
   margin-bottom: 20px;
-  background: #fef6f7;
+  background: var(--seal-soft);
 }
 
 .outfit-tags-header {
@@ -145,7 +148,7 @@ function onOutfitEnter(e: KeyboardEvent) {
 
 .outfit-tag-hint {
   font-size: 11px;
-  color: #999;
+  color: var(--ink-3);
   margin-top: 6px;
 }
 

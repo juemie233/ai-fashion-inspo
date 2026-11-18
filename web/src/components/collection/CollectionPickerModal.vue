@@ -112,7 +112,7 @@ function confirmAdd() {
 </script>
 
 <template>
-  <!-- ⚠️ 宽度必须用 `:width`，**不能**写成 style="width: 480px"：
+  <!--宽度必须用 `:width`，**不能**写成 style="width: 480px"：
        Arco 只把 `:width`/`:modal-style` 合并进 .arco-modal（mergedModalStyle），而裸 `style`
        会由 $attrs 透传到 `.arco-modal-container`——那是 `position: fixed; left: 0; width: 100%`
        的全屏容器（见 Arco modal.js 的 mergeProps(..., $attrs)）。被写上 width 后整层容器只剩
@@ -133,7 +133,6 @@ function confirmAdd() {
           :class="{ selected: selectedId === c.id }"
           @click="selectedId = c.id"
         >
-          <span class="collection-icon">📁</span>
           <span class="collection-name">{{ c.name }}</span>
           <span class="collection-count">{{ c.item_count ?? 0 }} 个素材</span>
         </div>
@@ -193,15 +192,15 @@ function confirmAdd() {
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid #e5e7eb;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .collection-option:hover {
-  background: #f5f7fa;
+  background: var(--sheet-2);
 }
 .collection-option.selected {
-  border-color: #2080f0;
-  background: #eef4ff;
+  border-color: var(--pine);
+  background: var(--sheet-2);
 }
 .collection-icon {
   font-size: 14px;
@@ -212,7 +211,7 @@ function confirmAdd() {
 }
 .collection-count {
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 .create-form {
   display: flex;

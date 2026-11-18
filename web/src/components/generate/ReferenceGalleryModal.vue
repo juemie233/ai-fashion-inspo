@@ -129,7 +129,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   height: 60vh;
   height: 60dvh;
   background: var(--color-fill-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .rg-img {

@@ -114,18 +114,18 @@ onUnmounted(() => {
 
 <template>
   <a-card title="单图即时测试" size="small">
-    <p style="font-size: 12px; color: #999; margin-bottom: 12px">
+    <p style="font-size: 12px; color: var(--ink-3); margin-bottom: 12px">
       使用当前 prompt 和参数对单张图片进行测试分析，不保存记录，不影响正式数据。
     </p>
     <a-space align="center" style="margin-bottom: 12px" :wrap="false">
       <a-upload :show-file-list="false" accept="image/*" @change="onTestFileChange">
         <a-button size="small" type="secondary">上传图片</a-button>
       </a-upload>
-      <span v-if="testFile" style="font-size: 12px; color: #666">
+      <span v-if="testFile" style="font-size: 12px; color: var(--ink-2)">
         已选：{{ testFile.name }}
         <a-button size="mini" type="text" status="danger" @click="clearTestFile">移除</a-button>
       </span>
-      <span v-else style="font-size: 12px; color: #999">或</span>
+      <span v-else style="font-size: 12px; color: var(--ink-3)">或</span>
       <a-input
         v-model="testInspirationId"
         placeholder="输入素材 ID 或完整 UUID"
@@ -172,9 +172,9 @@ onUnmounted(() => {
               font-size: 12px;
               white-space: pre-wrap;
               word-break: break-all;
-              background: #f5f5f5;
+              background: var(--sheet-2);
               padding: 12px;
-              border-radius: 6px;
+              border-radius: var(--radius-sm);
               margin: 0;
             "
             >{{ testRawResponse }}</pre>

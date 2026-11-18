@@ -415,7 +415,7 @@ const configColumns = [
             :format-tooltip="(v: number) => v.toFixed(2)"
             style="max-width: 280px"
           />
-          <span style="margin-left: 12px; font-size: 13px; color: #666">{{
+          <span style="margin-left: 12px; font-size: 13px; color: var(--ink-2)">{{
             confThreshold.toFixed(2)
           }}</span>
         </a-form-item>
@@ -451,9 +451,11 @@ const configColumns = [
             >
             <a-button size="small" @click="resetPrompt">撤销修改</a-button>
           </a-space>
-          <span style="font-size: 12px; color: #999">按模型独立保存（prompt_configs.json）</span>
+          <span style="font-size: 12px; color: var(--ink-3)"
+            >按模型独立保存（prompt_configs.json）</span
+          >
         </div>
-        <p style="font-size: 11px; color: #999; margin-top: 8px">
+        <p style="font-size: 11px; color: var(--ink-3); margin-top: 8px">
           修改 prompt 仅影响当前模型「{{ store.activeModel }}」后续的 AI
           分析结果（按模型隔离）。改动后建议先用「单图测试」验证效果。
         </p>
@@ -483,8 +485,8 @@ const configColumns = [
               align-items: center;
               justify-content: space-between;
               padding: 4px 8px;
-              background: #f5f5f5;
-              border-radius: 4px;
+              background: var(--sheet-2);
+              border-radius: var(--radius-sm);
               margin-bottom: 4px;
               font-size: 12px;
             "
@@ -498,7 +500,7 @@ const configColumns = [
         </div>
         <div
           v-else-if="promptVersionsVisible"
-          style="font-size: 12px; color: #999; margin-top: 4px"
+          style="font-size: 12px; color: var(--ink-3); margin-top: 4px"
         >
           暂无版本历史，修改 prompt 后点击「保存版本」创建
         </div>
@@ -507,7 +509,7 @@ const configColumns = [
 
     <!-- 人物简介生成 Prompt -->
     <a-card title="人物简介生成 Prompt" size="small">
-      <p style="font-size: 12px; color: #999; margin: 0 0 8px">
+      <p style="font-size: 12px; color: var(--ink-3); margin: 0 0 8px">
         用于「人物管理 → 详情 → 编辑 → AI 生成简介」。可用占位符：
         <code>{kind}</code> <code>{name}</code> <code>{platform}</code>{' '}
         <code>{ip_location}</code> <code>{top_tags}</code>{' '}
@@ -535,7 +537,9 @@ const configColumns = [
             <a-button size="small" @click="resetBioPromptChanges">撤销修改</a-button>
             <a-button size="small" @click="restoreDefaultBioPrompt">恢复默认</a-button>
           </a-space>
-          <span style="font-size: 12px; color: #999">全局共用（person_bio_prompt.json）</span>
+          <span style="font-size: 12px; color: var(--ink-3)"
+            >全局共用（person_bio_prompt.json）</span
+          >
         </div>
       </a-spin>
     </a-card>
@@ -555,7 +559,7 @@ const configColumns = [
             :format-tooltip="(v: number) => v.toFixed(2)"
             style="max-width: 280px"
           />
-          <span style="margin-left: 12px; font-size: 13px; color: #666">{{
+          <span style="margin-left: 12px; font-size: 13px; color: var(--ink-2)">{{
             samplingParams.temperature.toFixed(2)
           }}</span>
         </a-form-item>
@@ -568,7 +572,7 @@ const configColumns = [
             :format-tooltip="(v: number) => v.toFixed(2)"
             style="max-width: 280px"
           />
-          <span style="margin-left: 12px; font-size: 13px; color: #666">{{
+          <span style="margin-left: 12px; font-size: 13px; color: var(--ink-2)">{{
             samplingParams.top_p.toFixed(2)
           }}</span>
         </a-form-item>
@@ -592,13 +596,13 @@ const configColumns = [
             :step="1024"
             style="width: 160px"
           />
-          <span style="margin-left: 12px; font-size: 13px; color: #666"
+          <span style="margin-left: 12px; font-size: 13px; color: var(--ink-2)"
             >视觉模型编码图片消耗大量 token，过小会截断输出（建议 ≥ 8192）</span
           >
         </a-form-item>
         <a-form-item label="思考模式">
           <a-switch v-model="samplingParams.think" />
-          <span style="margin-left: 12px; font-size: 13px; color: #666"
+          <span style="margin-left: 12px; font-size: 13px; color: var(--ink-2)"
             >思考模型开启后更慢，可能提升推理质量（仅思考型模型生效）</span
           >
         </a-form-item>
@@ -607,7 +611,7 @@ const configColumns = [
 
     <!-- 每模型配置总览 -->
     <a-card title="每模型配置总览" size="small">
-      <p style="font-size: 12px; color: #999; margin: 0 0 12px">
+      <p style="font-size: 12px; color: var(--ink-3); margin: 0 0 12px">
         一览 model_configs.json / prompt_configs.json 中哪些模型有自定义参数或
         Prompt，支持跨模型复制。
       </p>
@@ -622,7 +626,7 @@ const configColumns = [
       <a-empty v-else description="暂无模型自定义配置" />
 
       <a-divider style="margin: 16px 0" />
-      <p style="font-size: 12px; color: #666; margin: 0 0 8px">
+      <p style="font-size: 12px; color: var(--ink-2); margin: 0 0 8px">
         跨模型复制配置：将源模型的参数与 Prompt 一并复制到目标模型。
       </p>
       <a-space align="center">
@@ -652,7 +656,7 @@ const configColumns = [
 
     <!-- 操作 -->
     <a-card size="small" title="保存与重置">
-      <p style="font-size: 12px; color: #999; margin: 0 0 12px">
+      <p style="font-size: 12px; color: var(--ink-3); margin: 0 0 12px">
         参数始终按模型独立持久化（超时/采样参数存 model_configs.json，置信度阈值存
         .env），重启后仍生效。
       </p>
@@ -666,14 +670,14 @@ const configColumns = [
           <a-button type="secondary" :loading="clearingModelConfig">清除本模型自定义配置</a-button>
         </a-popconfirm>
       </a-space>
-      <p style="font-size: 12px; color: #999; margin: 8px 0 0">
+      <p style="font-size: 12px; color: var(--ink-3); margin: 8px 0 0">
         「恢复默认值」仅把表单改回全局默认（需再点保存）；「清除自定义配置」会删除已保存的覆盖项并立即生效。
       </p>
     </a-card>
 
     <!-- 危险操作：重置所有数据 -->
-    <a-card title="⚠ 危险操作" size="small" style="border-color: #ef4444">
-      <p style="font-size: 13px; color: #999; margin-bottom: 12px">
+    <a-card title="危险操作" size="small" style="border-color: var(--seal)">
+      <p style="font-size: 13px; color: var(--ink-3); margin-bottom: 12px">
         删除数据库中所有素材、标签、分析记录，并清空所有照片文件。此操作不可恢复！
       </p>
 
@@ -689,9 +693,9 @@ const configColumns = [
       </a-popconfirm>
 
       <div v-if="resetStep === 2" style="margin-top: 8px">
-        <p style="font-size: 13px; color: #ef4444; margin-bottom: 8px">
+        <p style="font-size: 13px; color: var(--seal); margin-bottom: 8px">
           最后确认：此操作不可恢复！请在下方输入
-          <code style="color: #ef4444; font-weight: 600">{{ RESET_CONFIRM_WORD }}</code>
+          <code style="color: var(--seal); font-weight: 600">{{ RESET_CONFIRM_WORD }}</code>
           以继续。
         </p>
         <a-space>
@@ -714,7 +718,7 @@ const configColumns = [
         </a-space>
       </div>
 
-      <p v-if="resetting" style="font-size: 12px; color: #ef4444; margin-top: 8px">
+      <p v-if="resetting" style="font-size: 12px; color: var(--seal); margin-top: 8px">
         正在删除所有数据...
       </p>
     </a-card>

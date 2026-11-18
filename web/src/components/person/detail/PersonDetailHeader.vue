@@ -157,7 +157,7 @@ const dormant = computed(() => {
             暂无简介，点击右上角「编辑」补充
           </a-typography-text>
           <a-button type="text" size="mini" class="bio-generate" @click="$emit('generate-bio')">
-            ✨ AI 生成
+            AI 生成
           </a-button>
         </div>
         <div v-if="detail.profile_url" class="bio-line">
@@ -243,7 +243,7 @@ const dormant = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #eef1f6;
+  background: var(--sheet-2);
 }
 
 .avatar-img {
@@ -310,7 +310,7 @@ const dormant = computed(() => {
   margin-top: 8px;
   padding: 8px 12px;
   background: var(--color-fill-1, #f7f8fa);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border-left: 3px solid var(--color-text-4, #c9cdd4);
 }
 

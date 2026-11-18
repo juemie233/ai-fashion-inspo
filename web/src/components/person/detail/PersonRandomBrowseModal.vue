@@ -161,7 +161,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   height: 56vh;
   height: 56dvh;
   background: var(--color-fill-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .rb-img {

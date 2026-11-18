@@ -69,7 +69,7 @@ async function handleCreate() {
     </a-space>
     <!-- 去重建议 -->
     <div v-if="createSuggestions.length > 0" style="margin-top: 8px">
-      <span style="font-size: 12px; color: #f0a020">⚠ 已有相似标签：</span>
+      <span style="font-size: 12px; color: var(--amber)">已有相似标签：</span>
       <a-space :size="4" style="margin-top: 4px" wrap>
         <a-tag v-for="s in createSuggestions" :key="s.id" size="small" color="orange">
           {{ s.name }} ({{ CATEGORY_LABELS[s.category] || s.category }})

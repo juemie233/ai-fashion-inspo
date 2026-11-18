@@ -210,7 +210,7 @@ onMounted(() => {
 }
 .history-total {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .history-pager {
   margin-top: 12px;
@@ -222,11 +222,11 @@ onMounted(() => {
   gap: 10px;
   margin-bottom: 12px;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--ink-3);
 }
 .diff-row {
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px;
   margin-bottom: 10px;
 }
@@ -245,20 +245,20 @@ onMounted(() => {
   text-align: left;
 }
 .diff-table th {
-  background: #fafafa;
-  color: #6b7280;
+  background: var(--sheet-2);
+  color: var(--ink-3);
   font-weight: 500;
 }
 .diff-before {
-  color: #9ca3af;
+  color: var(--ink-3);
   text-decoration: line-through;
 }
 .diff-after {
-  color: #1baf7a;
+  color: var(--jade);
   font-weight: 500;
 }
 .diff-empty {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 </style>

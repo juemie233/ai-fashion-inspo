@@ -13,7 +13,7 @@
 .gen-history-hint {
   flex: 1;
   margin-left: 8px;
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 12px;
 }
 .gen-model-cell {
@@ -24,12 +24,12 @@
 }
 .gen-status-count {
   margin-left: 6px;
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 12px;
   white-space: nowrap;
 }
 .gen-empty {
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 13px;
   padding: 24px 0;
   text-align: center;
@@ -48,21 +48,21 @@
 }
 .ghd-label {
   flex: 0 0 76px;
-  color: #86909c;
+  color: var(--ink-3);
   font-size: 12px;
   line-height: 20px;
 }
 .ghd-text {
   flex: 1;
   min-width: 0;
-  color: #1d2129;
+  color: var(--ink);
   font-size: 13px;
   line-height: 20px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .ghd-error {
-  color: #f53f3f;
+  color: var(--seal);
 }
 .ghd-params {
   display: flex;
@@ -73,8 +73,8 @@
 .ghd-chip {
   padding: 0 6px;
   border-radius: 3px;
-  background: #f2f3f5;
-  color: #4e5969;
+  background: var(--sheet-2);
+  color: var(--ink-2);
   font-size: 12px;
   line-height: 20px;
 }
@@ -83,23 +83,23 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  color: #86909c;
+  color: var(--ink-3);
   font-size: 12px;
 }
 
 /* ── P1：统计卡 / 收藏星标 / 标题与备注 / 保留期 ── */
 .gh-star {
-  color: #c9cdd4;
+  color: var(--ink-3);
   font-size: 15px;
   line-height: 1;
 }
 
 .gh-star.is-on {
-  color: #ff7d00;
+  color: var(--amber);
 }
 
 .gh-title {
-  color: #1d2129;
+  color: var(--ink);
   font-size: 13px;
   overflow: hidden;
   white-space: nowrap;
@@ -108,7 +108,7 @@
 
 .gh-note {
   margin-top: 2px;
-  color: #86909c;
+  color: var(--ink-3);
   font-size: 12px;
   overflow: hidden;
   white-space: nowrap;
@@ -116,13 +116,13 @@
 }
 
 .gh-retention {
-  color: #86909c;
+  color: var(--ink-3);
   font-size: 12px;
   white-space: nowrap;
 }
 
 .gh-retention.is-gone {
-  color: #f53f3f;
+  color: var(--seal);
 }
 
 /* 参考素材：小方图，点击 = 按这张参考图筛选 */
@@ -137,7 +137,7 @@
 .ghd-ref {
   padding: 0;
   border: 1px solid var(--color-border-2);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: none;
   cursor: pointer;
@@ -182,7 +182,7 @@
   width: 56px;
   height: 56px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: zoom-in;
   background: var(--color-fill-3);
 }
@@ -206,7 +206,7 @@
   width: 132px;
   height: 132px;
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: zoom-in;
   background: var(--color-fill-3);
 }
@@ -220,6 +220,6 @@
   top: 6px;
   left: 6px;
   padding: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgb(255 255 255 / 85%);
 }

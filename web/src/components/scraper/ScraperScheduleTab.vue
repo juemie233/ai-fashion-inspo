@@ -263,7 +263,7 @@ function getColumns() {
             style="width: 100%"
           />
           <template #extra>
-            <span style="font-size: 12px; color: #999">
+            <span style="font-size: 12px; color: var(--ink-3)">
               每次执行时轮流使用其中一个关键词（可多选，可选历史关键词或手动输入后回车创建）
             </span>
           </template>
@@ -292,7 +292,7 @@ function getColumns() {
           </a-spin>
           <template #extra>
             <a-space :size="8">
-              <span style="font-size: 12px; color: #999"
+              <span style="font-size: 12px; color: var(--ink-3)"
                 >点击话题加入关键词，复用博主常发话题建定时采集</span
               >
               <a-button size="mini" type="text" @click="loadHashtags">刷新</a-button>

@@ -205,7 +205,7 @@ const summaryText = computed(() => {
 }
 .preview-area {
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 12px;
 }
 .preview-head {
@@ -218,7 +218,7 @@ const summaryText = computed(() => {
 }
 .summary-text {
   font-weight: normal;
-  color: #6b7280;
+  color: var(--ink-3);
   font-size: 12px;
 }
 .be-footer {
@@ -228,6 +228,6 @@ const summaryText = computed(() => {
 }
 .footer-hint {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 </style>

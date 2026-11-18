@@ -158,7 +158,7 @@ const groupCount = computed(
   margin-bottom: 12px;
 }
 .gen-hint {
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 12px;
   line-height: 1.7;
 }
@@ -173,7 +173,7 @@ const groupCount = computed(
   align-items: center;
 }
 .gen-empty {
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 13px;
   padding: 24px 0;
   text-align: center;
@@ -193,16 +193,16 @@ const groupCount = computed(
 .gen-item {
   position: relative;
   border: 2px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: pointer;
-  background: #f7f8fa;
+  background: var(--sheet-2);
 }
 .gen-item:hover {
-  border-color: #94bfff;
+  border-color: var(--ink-3);
 }
 .gen-item.is-selected {
-  border-color: #165dff;
+  border-color: var(--pine);
 }
 .gen-item img {
   width: 100%;
@@ -216,7 +216,7 @@ const groupCount = computed(
   right: 6px;
   z-index: 2;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgb(255 255 255 / 85%);
 }
 .gen-item-meta {
@@ -225,7 +225,7 @@ const groupCount = computed(
   align-items: center;
   padding: 4px 6px;
   font-size: 11px;
-  color: #8a8f99;
+  color: var(--ink-3);
 }
 .gen-item-actions {
   display: inline-flex;

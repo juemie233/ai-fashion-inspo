@@ -34,7 +34,7 @@ onMounted(() => {
 
 <template>
   <div class="model-page">
-    <h2>AI 模型管理</h2>
+    <h2 class="page-title">AI 模型管理</h2>
 
     <a-tabs v-model:active-key="activeTab" type="line">
       <a-tab-pane key="models" title="模型管理">
@@ -57,6 +57,20 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.model-page { max-width: 1100px; margin: 0 auto; }
-.model-page h2 { margin-bottom: 16px; }
+.model-page {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.model-page h2 {
+  margin-bottom: 16px;
+}
+
+.model-page {
+  max-width: 1400px;
+  padding-bottom: 32px;
+}
+
+.model-page h2 {
+  margin-bottom: 10px;
+}
 </style>

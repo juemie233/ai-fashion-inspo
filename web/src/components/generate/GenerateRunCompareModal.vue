@@ -202,7 +202,7 @@ function promptBrief(run: GenerationRun | null): string {
   height: 64px;
   padding: 0;
   border: 2px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--color-fill-2);
   cursor: pointer;
@@ -234,7 +234,7 @@ function promptBrief(run: GenerationRun | null): string {
   height: 44vh;
   height: 44dvh;
   background: var(--color-fill-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .gc-stage img {

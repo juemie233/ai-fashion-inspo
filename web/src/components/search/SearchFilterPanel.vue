@@ -107,7 +107,7 @@ const favoriteOnlyModel = computed({
     <aside v-if="visible" class="filter-panel">
       <a-card title="标签筛选" size="small" :bordered="true">
         <template #extra>
-          <a-button size="mini" type="text" @click="emit('update:visible', false)">收起 ✕</a-button>
+          <a-button size="mini" type="text" @click="emit('update:visible', false)">收起</a-button>
         </template>
         <TagFilter />
 
@@ -175,11 +175,11 @@ const favoriteOnlyModel = computed({
                   v-model="ratingFilterModel"
                   :options="[
                     { label: '全部', value: '' },
-                    { label: '★ 1 分及以上', value: '1' },
-                    { label: '★ 2 分及以上', value: '2' },
-                    { label: '★ 3 分及以上', value: '3' },
-                    { label: '★ 4 分及以上', value: '4' },
-                    { label: '★ 5 分', value: '5' },
+                    { label: '1 分及以上', value: '1' },
+                    { label: '2 分及以上', value: '2' },
+                    { label: '3 分及以上', value: '3' },
+                    { label: '4 分及以上', value: '4' },
+                    { label: '5 分', value: '5' },
                   ]"
                   size="mini"
                 />
@@ -221,7 +221,7 @@ const favoriteOnlyModel = computed({
 }
 .more-filters label {
   font-size: 12px;
-  color: #666;
+  color: var(--ink-2);
   width: 60px;
   flex-shrink: 0;
 }

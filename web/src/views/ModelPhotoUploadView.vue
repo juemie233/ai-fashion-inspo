@@ -367,7 +367,7 @@ onUnmounted(() => {
 
 <template>
   <div class="model-photo-page">
-    <h2>添加模特照片</h2>
+    <h2 class="page-title">添加模特照片</h2>
     <a-typography-text type="secondary" style="font-size: 13px">
       选择一个文件夹，把其中所有图片作为一组模特写真导入到某个人物名下
     </a-typography-text>
@@ -392,7 +392,6 @@ onUnmounted(() => {
     <!-- 文件夹选择 -->
     <a-card size="small" class="step-card" title="第二步 · 选择文件夹">
       <div class="folder-zone" :class="{ 'folder-zone-disabled': uploading }" @click="openFolder">
-        <div class="folder-icon">📁</div>
         <p class="folder-title">{{ uploading ? '导入中，暂不能更换文件夹' : '点击选择文件夹' }}</p>
         <p class="folder-desc">仅支持选择文件夹，会把文件夹内全部图片导入为一组</p>
       </div>
@@ -498,7 +497,7 @@ onUnmounted(() => {
 .folder-zone {
   padding: 36px 24px;
   border: 2px dashed #d1d5db;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   text-align: center;
   cursor: pointer;
   transition:
@@ -508,7 +507,7 @@ onUnmounted(() => {
 
 .folder-zone:hover {
   border-color: #818cf8;
-  background: #fafafe;
+  background: var(--sheet-2);
 }
 
 /* 上传中禁用文件夹选择 */
@@ -525,13 +524,13 @@ onUnmounted(() => {
   margin: 8px 0 4px;
   font-size: 16px;
   font-weight: 600;
-  color: #374151;
+  color: var(--ink-2);
 }
 
 .folder-desc {
   margin: 0;
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 
 /* 预览网格（卡片结构与状态遮罩由 ThumbCard 承担） */
@@ -553,7 +552,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #eef1f6;
+  background: var(--sheet-2);
 }
 
 /* 分批加载行（滚动监听哨兵 + 加载更多按钮） */
@@ -568,5 +567,73 @@ onUnmounted(() => {
   align-items: center;
   gap: 16px;
   margin-top: 16px;
+}
+
+.model-photo-page {
+  max-width: 960px;
+  padding-bottom: 48px;
+}
+
+.model-photo-page .page-title {
+  margin-bottom: 8px;
+}
+
+/* ── 印样台：文件夹投放区是「投递口」，四角裁切标记 ── */
+.folder-zone {
+  position: relative;
+  padding: 40px 24px;
+  background: var(--sheet);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  text-align: left;
+}
+
+.folder-zone::before,
+.folder-zone::after {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.folder-zone::before {
+  top: 10px;
+  left: 10px;
+  border-top: 1.5px solid var(--ink-3);
+  border-left: 1.5px solid var(--ink-3);
+}
+
+.folder-zone::after {
+  right: 10px;
+  bottom: 10px;
+  border-right: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+}
+
+.folder-zone:hover {
+  border-color: var(--ink-3);
+}
+
+.folder-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.folder-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.folder-zone-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.step-card {
+  border-radius: var(--radius-md);
 }
 </style>

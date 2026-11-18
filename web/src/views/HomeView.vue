@@ -220,7 +220,7 @@ loadPage(currentPage.value)
     <!-- 顶部标题栏 -->
     <div class="page-header">
       <div class="header-left">
-        <h2>素材库</h2>
+        <h2 class="page-title">素材库</h2>
         <span class="total-count">共 {{ store.total }} 条</span>
         <!-- 出图反查：从生成历史「已入库 N 张」点进来时只显示该批素材 -->
         <a-tag v-if="generationRunId" closable @close="clearRunFilter">
@@ -293,10 +293,10 @@ loadPage(currentPage.value)
 
     <!-- 保存为智能合集（命名弹窗） -->
     <a-modal v-model:visible="saveCollectionOpen" title="保存为智能合集" :width="460">
-      <p v-if="filtersActive" style="color: #999; font-size: 12px; margin-top: 0">
+      <p v-if="filtersActive" style="color: var(--ink-3); font-size: 12px; margin-top: 0">
         将把当前筛选条件保存为智能合集，合集内容随素材库动态更新。
       </p>
-      <p v-else style="color: #f0a020; font-size: 12px; margin-top: 0">
+      <p v-else style="color: var(--amber); font-size: 12px; margin-top: 0">
         当前没有筛选条件——智能合集会匹配全部素材。建议先设置筛选条件。
       </p>
       <a-input
@@ -381,7 +381,7 @@ loadPage(currentPage.value)
 
 .total-count {
   font-size: 14px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 .header-right {
@@ -398,9 +398,9 @@ loadPage(currentPage.value)
   flex-wrap: wrap;
   padding: 8px 12px;
   margin-bottom: 10px;
-  background: #fff7e6;
+  background: var(--sheet-2);
   border: 1px solid #ffd591;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   color: #874d00;
 }

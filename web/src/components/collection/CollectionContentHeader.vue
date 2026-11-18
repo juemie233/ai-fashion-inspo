@@ -42,7 +42,7 @@ const emit = defineEmits<{
     <div class="content-title">
       <h2>{{ current.name }}</h2>
       <span v-if="parentName" class="content-parent">{{ parentName }} /</span>
-      <a-tag v-if="current.kind === 'smart'" color="arcoblue" size="small">⚡ 智能合集</a-tag>
+      <a-tag v-if="current.kind === 'smart'" color="arcoblue" size="small">智能合集</a-tag>
       <a-tag v-if="isSystemManualRoot" color="gray" size="small">系统收藏 · 自动同步</a-tag>
       <a-tag v-if="current.auto_source" color="gray" size="small">抖音同步</a-tag>
       <span class="content-total">共 {{ total }} 个素材</span>
@@ -97,16 +97,52 @@ const emit = defineEmits<{
 }
 .content-total {
   font-size: 13px;
-  color: #999;
+  color: var(--ink-3);
 }
 /* 二级收藏夹的父级面包屑（一级名下没有这段） */
 .content-parent {
   font-size: 13px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 .content-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ── 印样台：合集标题是这摞样张的标签 ── */
+.content-header {
+  align-items: flex-end;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+
+.content-title {
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.content-title h2 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0;
+}
+
+.content-total {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.content-parent {
+  color: var(--ink-3);
+}
+
+.content-actions :deep(.arco-btn) {
+  border-radius: var(--radius-sm);
 }
 </style>

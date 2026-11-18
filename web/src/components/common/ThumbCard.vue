@@ -94,7 +94,7 @@ withDefaults(
         <a-spin v-else :size="18" />
       </div>
       <div v-else-if="status === 'done'" class="thumb-mask done">✓</div>
-      <div v-else-if="status === 'failed'" class="thumb-mask failed" :title="statusText">✕</div>
+      <div v-else-if="status === 'failed'" class="thumb-mask failed" :title="statusText"></div>
       <div v-else-if="status === 'duplicate'" class="thumb-mask dup" :title="statusText">⧉</div>
 
       <!-- 选中框 -->
@@ -112,9 +112,9 @@ withDefaults(
 <style scoped>
 .thumb-card {
   position: relative;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: #eef1f6;
+  background: var(--sheet-2);
 }
 
 /* 媒体区：按 aspectRatio 撑高，内部元素以此为基准定位 */
@@ -143,7 +143,7 @@ withDefaults(
   left: 4px;
   bottom: 4px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-size: 11px;

@@ -172,7 +172,7 @@ function onTypeChange() {
 <style scoped>
 .rule-row {
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -186,7 +186,7 @@ function onTypeChange() {
 .rule-index {
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
+  color: var(--ink-2);
   min-width: 44px;
 }
 .rule-params {
@@ -203,6 +203,6 @@ function onTypeChange() {
 }
 .scope-label {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 </style>

@@ -47,7 +47,7 @@ const currentPanel = computed(() => PANELS[activeTab.value])
 <template>
   <div class="adv-page">
     <div class="page-header">
-      <h2>标签高级管理</h2>
+      <h2 class="page-title">标签高级管理</h2>
       <a-button type="primary" @click="openBatchEdit()">批量高级编辑</a-button>
     </div>
 
@@ -112,9 +112,9 @@ const currentPanel = computed(() => PANELS[activeTab.value])
 .adv-nav {
   width: 120px;
   flex-shrink: 0;
-  background: #fff;
+  background: var(--sheet);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 8px 0;
   overflow-y: auto;
 }
@@ -122,26 +122,26 @@ const currentPanel = computed(() => PANELS[activeTab.value])
   padding: 10px 16px;
   cursor: pointer;
   font-size: 14px;
-  color: #4b5563;
+  color: var(--ink-2);
   border-left: 3px solid transparent;
   transition: all 0.15s;
 }
 .adv-nav-item:hover {
-  background: #f3f4f6;
+  background: var(--sheet-2);
 }
 .adv-nav-item.active {
-  color: #2a78d6;
-  background: #eef4fd;
-  border-left-color: #2a78d6;
+  color: var(--pine);
+  background: var(--sheet-2);
+  border-left-color: var(--pine);
   font-weight: 500;
 }
 /* 右侧工作区 */
 .adv-workspace {
   flex: 1;
   min-width: 0;
-  background: #fff;
+  background: var(--sheet);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 16px;
   overflow-y: auto;
 }
@@ -174,12 +174,51 @@ const currentPanel = computed(() => PANELS[activeTab.value])
   }
 
   .adv-nav-item.active {
-    border-bottom-color: #2a78d6;
+    border-bottom-color: var(--pine);
   }
 
   .adv-workspace {
     width: 100%;
     min-height: 0;
   }
+}
+
+/* ── 印样台页面书眉 ── */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-header h2.page-title {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: 30px;
+}
+
+/* 工作区跟随父宽，窄屏不再撑出 20px */
+.adv-workspace {
+  min-width: 0;
+  width: 100%;
+}
+
+/* 高级管理是密集工作区：窄屏下允许工作区自身横向滚动，不裁切页面 */
+.adv-page {
+  min-width: 0;
+}
+
+.adv-workspace {
+  overflow-x: auto;
+}
+
+/* 工作区同样按 border-box 收边 */
+.adv-page :deep(.adv-workspace) {
+  box-sizing: border-box;
+  max-width: 100%;
 }
 </style>

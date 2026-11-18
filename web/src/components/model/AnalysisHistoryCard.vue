@@ -259,9 +259,9 @@ const columns = computed<TableColumnData[]>(() => [
             title: '视频素材（缩略图生成中或缺失）',
             style:
               'width:48px;height:72px;display:flex;align-items:center;justify-content:center;' +
-              'border-radius:4px;background:#f2f3f5;color:#86909c;font-size:18px',
+              'border-radius: var(--radius-sm);background:var(--sheet-2);color:var(--ink-3);font-size:12px',
           },
-          ['🎬'],
+          ['视频'],
         )
       }
       const full = previewImagePath(row)
@@ -271,7 +271,7 @@ const columns = computed<TableColumnData[]>(() => [
         {
           class: 'thumb-cell',
           style:
-            'position:relative;width:48px;height:72px;cursor:pointer;border-radius:4px;overflow:hidden',
+            'position:relative;width:48px;height:72px;cursor:pointer;border-radius: var(--radius-sm);overflow:hidden',
           onMouseenter: () => startHoverPreview(full),
           onMouseleave: clearHoverPreview,
           // 打开方式遵循全局「素材打开模式」偏好
@@ -281,7 +281,8 @@ const columns = computed<TableColumnData[]>(() => [
           h('img', {
             src: getFileUrl(thumb),
             title: '点击查看素材详情',
-            style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;display:block',
+            style:
+              'width:48px;height:72px;object-fit:cover;border-radius: var(--radius-sm);display:block',
           }),
           h(
             'span',
@@ -354,7 +355,7 @@ const columns = computed<TableColumnData[]>(() => [
       const more = tags.length > limit ? ` +${tags.length - limit}` : ''
       return h('span', { style: 'display:flex;flex-wrap:wrap;gap:2px' }, [
         ...shown.map((t) => h(Tag, { key: t.name, size: 'small' }, () => t.name)),
-        more ? h('span', { style: 'font-size:11px;color:#999' }, more) : null,
+        more ? h('span', { style: 'font-size:11px;color:var(--ink-3)' }, more) : null,
       ])
     },
   },
@@ -367,7 +368,7 @@ const columns = computed<TableColumnData[]>(() => [
       const err = row.error
       // 成功记录不显示失败原因列（成功行本就没有错误，显示占位符即可）
       if (row.status === 'success') {
-        return h('span', { style: 'font-size:12px;color:#999' }, '-')
+        return h('span', { style: 'font-size:12px;color:var(--ink-3)' }, '-')
       }
       return err
         ? h(
@@ -399,13 +400,13 @@ const columns = computed<TableColumnData[]>(() => [
                   'span',
                   {
                     style:
-                      'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
+                      'font-size:12px;color:var(--seal);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
                   },
                   err,
                 ),
             },
           )
-        : h('span', { style: 'font-size:12px;color:#999' }, '-')
+        : h('span', { style: 'font-size:12px;color:var(--ink-3)' }, '-')
     },
   },
   {
@@ -573,7 +574,7 @@ const columns = computed<TableColumnData[]>(() => [
         @clear="emit('searchById')"
       >
         <template #suffix>
-          <a-button size="mini" @click="emit('searchById')">🔍</a-button>
+          <a-button size="mini" @click="emit('searchById')"></a-button>
         </template>
       </a-input>
       <a-date-picker
@@ -687,7 +688,7 @@ const columns = computed<TableColumnData[]>(() => [
   margin-bottom: 8px;
   background: #f0f7ff;
   border: 1px solid #d0e3ff;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
 }
 
@@ -701,7 +702,7 @@ const columns = computed<TableColumnData[]>(() => [
 }
 .tags-limit-label {
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 
 /* 悬停快速预览：固定定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界 */
@@ -714,7 +715,7 @@ const columns = computed<TableColumnData[]>(() => [
   justify-content: center;
   width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   opacity: 0;
@@ -744,9 +745,9 @@ const columns = computed<TableColumnData[]>(() => [
   max-width: 90vw;
   max-height: 88vh;
   max-height: 88dvh;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: #fff;
+  background: var(--sheet);
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
   animation: hover-preview-in 0.15s ease;
 }

@@ -376,7 +376,7 @@ async function handleApply() {
 
 <template>
   <a-card title="手机图剪裁" size="small" style="margin-bottom: 24px">
-    <p style="color: #999; font-size: 12px; margin: 0 0 12px">
+    <p style="color: var(--ink-3); font-size: 12px; margin: 0 0 12px">
       扫描手动上传素材中的手机全屏截图（仅「手动上传 + 竖屏」），
       <b>人工勾选确认后</b>执行裁剪。两种自动模式各对应一个平台的截图形态：
       <b>「自动检测黑边（小红书截图）」</b>——小红书浏览态截图，上下黑边包夹图片主体，
@@ -412,13 +412,15 @@ async function handleApply() {
           <a-input-number v-model="cropTop" :min="0" :max="40" style="width: 120px">
             <template #suffix>%</template>
           </a-input-number>
-          <span style="margin-left: 8px; font-size: 12px; color: #999">默认 3%（状态栏区域）</span>
+          <span style="margin-left: 8px; font-size: 12px; color: var(--ink-3)"
+            >默认 3%（状态栏区域）</span
+          >
         </a-form-item>
         <a-form-item label="底部裁剪">
           <a-input-number v-model="cropBottom" :min="0" :max="40" style="width: 120px">
             <template #suffix>%</template>
           </a-input-number>
-          <span style="margin-left: 8px; font-size: 12px; color: #999"
+          <span style="margin-left: 8px; font-size: 12px; color: var(--ink-3)"
             >默认 5%（底部导航栏/手势条）</span
           >
         </a-form-item>
@@ -426,12 +428,14 @@ async function handleApply() {
 
       <a-form-item label="数量上限">
         <a-input-number v-model="limit" :min="1" :max="1000" style="width: 120px" />
-        <span style="margin-left: 8px; font-size: 12px; color: #999">单次最多扫描的候选数</span>
+        <span style="margin-left: 8px; font-size: 12px; color: var(--ink-3)"
+          >单次最多扫描的候选数</span
+        >
       </a-form-item>
 
       <a-form-item label="AI 复核">
         <a-switch v-model="vlmReview" />
-        <span style="margin-left: 8px; font-size: 12px; color: #999">
+        <span style="margin-left: 8px; font-size: 12px; color: var(--ink-3)">
           VLM 逐候选判断顶部状态栏/底部进度条，阳性置顶并标注（较慢，约 1.3 秒/张）
         </span>
       </a-form-item>
@@ -443,13 +447,16 @@ async function handleApply() {
         <a-button v-if="nextCursor && !scanning" size="small" @click="handleRescan">
           重新扫描
         </a-button>
-        <span style="margin-left: 12px; font-size: 12px; color: #999">
+        <span style="margin-left: 12px; font-size: 12px; color: var(--ink-3)">
           默认勾选高/中置信候选，低置信需人工复核
         </span>
-        <span v-if="scannedCount > 0" style="margin-left: 12px; font-size: 12px; color: #999">
+        <span
+          v-if="scannedCount > 0"
+          style="margin-left: 12px; font-size: 12px; color: var(--ink-3)"
+        >
           已扫描 {{ scannedCount }} 张素材
         </span>
-        <span v-if="nextCursor" style="margin-left: 12px; font-size: 12px; color: #f0a020">
+        <span v-if="nextCursor" style="margin-left: 12px; font-size: 12px; color: var(--amber)">
           素材量较大，已返回一批候选；点击「继续扫描剩余素材」把未扫描的素材追加到列表
         </span>
       </a-form-item>
@@ -487,7 +494,7 @@ async function handleApply() {
           max-height: 72dvh;
           overflow-y: auto;
           background: #111;
-          border-radius: 8px;
+          border-radius: var(--radius-md);
           padding: 8px;
         "
       >
@@ -573,7 +580,7 @@ async function handleApply() {
 .crop-item {
   position: relative;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   border: 2px solid transparent;
   transition:
@@ -600,7 +607,7 @@ async function handleApply() {
 }
 
 .crop-item.checked {
-  border-color: #18a058;
+  border-color: var(--pine);
 }
 
 .crop-item.failed {
@@ -644,8 +651,8 @@ async function handleApply() {
 }
 
 .crop-check.checked {
-  background: #18a058;
-  border-color: #18a058;
+  background: var(--pine);
+  border-color: var(--pine);
 }
 
 /* 跳过明细：缩略图 + 原因 + 定位按钮 */
@@ -665,15 +672,15 @@ async function handleApply() {
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
-  border-radius: 6px;
-  background: #fafafa;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
 }
 
 .skip-thumb {
   width: 36px;
   height: 48px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: #eee;
   flex-shrink: 0;
 }
@@ -685,7 +692,7 @@ async function handleApply() {
 
 .skip-reason {
   font-size: 12px;
-  color: #333;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -693,13 +700,13 @@ async function handleApply() {
 
 .skip-meta {
   font-size: 11px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 /* 内容重复对比弹窗 */
 .dup-step {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
   margin-bottom: 10px;
 }
 
@@ -716,7 +723,7 @@ async function handleApply() {
 
 .dup-side-label {
   font-size: 12px;
-  color: #666;
+  color: var(--ink-2);
   margin-bottom: 6px;
 }
 
@@ -725,7 +732,7 @@ async function handleApply() {
   height: 52dvh;
   max-height: 480px;
   background: #111;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -741,7 +748,7 @@ async function handleApply() {
 
 .dup-side-meta {
   font-size: 11px;
-  color: #999;
+  color: var(--ink-3);
   margin-top: 6px;
 }
 
@@ -751,14 +758,14 @@ async function handleApply() {
   text-align: center;
   font-size: 13px;
   font-weight: 600;
-  color: #f0a020;
+  color: var(--amber);
   line-height: 1.5;
 }
 
 .dup-hint {
   margin: 12px 0 10px;
   font-size: 13px;
-  color: #333;
+  color: var(--ink);
 }
 
 .dup-actions {

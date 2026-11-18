@@ -224,11 +224,11 @@ onMounted(() => {
   gap: 10px;
   padding: 6px 10px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .group-member-row.primary {
-  border-color: #2a78d6;
-  background: #f7faff;
+  border-color: var(--pine);
+  background: var(--sheet-2);
 }
 .member-name {
   font-weight: 500;
@@ -237,11 +237,11 @@ onMounted(() => {
 }
 .primary-mark {
   font-size: 11px;
-  color: #2a78d6;
+  color: var(--pine);
   margin-left: 6px;
 }
 .bind-tip {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--ink-3);
 }
 </style>

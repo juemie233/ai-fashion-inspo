@@ -421,7 +421,6 @@ onUnmounted(() => {
           aria-label="关闭图片预览"
           @click="emit('close')"
         >
-          ✕
         </a-button>
       </div>
 
@@ -491,7 +490,7 @@ onUnmounted(() => {
   max-width: calc(100vw - 48px);
   max-height: calc(100dvh - 64px);
   object-fit: contain;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: transform 0.2s ease;
   transform-origin: center center;
   user-select: none;
@@ -514,7 +513,7 @@ onUnmounted(() => {
   color: #fff;
   font-size: 14px;
   background: rgba(0, 0, 0, 0.5);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 10px;
   pointer-events: none;
 }

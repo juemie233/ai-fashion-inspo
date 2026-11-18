@@ -223,7 +223,7 @@ function submit(): void {
 .fc-cell {
   position: relative;
   border: 2px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: pointer;
   background: var(--color-fill-2);
@@ -257,7 +257,7 @@ function submit(): void {
   gap: 8px;
   padding: 8px;
   border: 2px solid var(--color-border-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .fc-cluster.is-picked {
@@ -268,7 +268,7 @@ function submit(): void {
   width: 64px;
   height: 64px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: block;
 }
 .fc-cluster-meta {
@@ -286,7 +286,7 @@ function submit(): void {
   width: 40px;
   height: 40px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: block;
 }
 .fc-footer {

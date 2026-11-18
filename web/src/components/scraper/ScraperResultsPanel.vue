@@ -50,7 +50,7 @@ function previewSrc(item: ResultItem): string {
   <div class="results-panel">
     <a-spin :loading="loading">
       <div class="results-header">
-        <span>📋 结果（已加载 {{ items.length }}/{{ total }} 张）</span>
+        <span>结果（已加载 {{ items.length }}/{{ total }} 张）</span>
         <a-space>
           <a-button size="mini" @click="emit('select-all')">{{
             selectedIds.size === items.length ? '取消全选' : '全选'
@@ -114,9 +114,9 @@ function previewSrc(item: ResultItem): string {
 .results-panel {
   margin-top: 16px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 16px;
-  background: #fff;
+  background: var(--sheet);
 }
 .results-header {
   display: flex;
@@ -128,7 +128,7 @@ function previewSrc(item: ResultItem): string {
 }
 .results-empty {
   text-align: center;
-  color: #999;
+  color: var(--ink-3);
   padding: 32px 0;
   font-size: 13px;
 }
@@ -160,7 +160,7 @@ function previewSrc(item: ResultItem): string {
 .result-card {
   position: relative;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 /* extra 插槽覆盖元素（勾选/详情按钮）定位与悬停显示；ThumbCard 负责媒体/选中框/悬停大图 */
 .result-check {

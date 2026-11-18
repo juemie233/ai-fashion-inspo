@@ -165,7 +165,7 @@ function filterBlogger(input: string, option: { label?: string }): boolean {
 
 .meta-row label {
   font-size: 12px;
-  color: #666;
+  color: var(--ink-2);
   width: 80px;
   flex-shrink: 0;
   text-align: right;

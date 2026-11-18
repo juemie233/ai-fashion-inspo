@@ -54,6 +54,12 @@ async function loadCooccurrence(tagName: string) {
   }
 }
 
+/** 关闭共现提示 */
+function clearCooccurrence() {
+  cooccurrenceTags.value = []
+  cooccurrenceFor.value = ''
+}
+
 /** 标签项点击 */
 function onTagClick(tagName: string) {
   tagsStore.toggleTag(tagName)
@@ -98,7 +104,7 @@ const combineDesc = computed(() => {
 
     <!-- 已选标签预览 -->
     <div v-if="tagsStore.selectedTags.size > 0" class="active-filters">
-      <span style="font-size: 11px; color: #999">包含:</span>
+      <span style="font-size: 11px; color: var(--ink-3)">包含:</span>
       <a-tag
         v-for="name in [...tagsStore.selectedTags]"
         :key="'inc-' + name"
@@ -111,7 +117,7 @@ const combineDesc = computed(() => {
       </a-tag>
     </div>
     <div v-if="tagsStore.excludedTags.size > 0" class="active-filters excluded">
-      <span style="font-size: 11px; color: #999">排除:</span>
+      <span style="font-size: 11px; color: var(--ink-3)">排除:</span>
       <a-tag
         v-for="name in [...tagsStore.excludedTags]"
         :key="'exc-' + name"
@@ -128,12 +134,7 @@ const combineDesc = computed(() => {
     <div v-if="cooccurrenceTags.length > 0" class="cooccurrence-box">
       <div class="cooccurrence-title">
         「{{ cooccurrenceFor }}」常与以下标签一起出现：
-        <a-button
-          size="mini"
-          type="text"
-          @click="cooccurrenceTags = []; cooccurrenceFor = ''"
-          >✕</a-button
-        >
+        <a-button size="mini" type="text" @click="clearCooccurrence"></a-button>
       </div>
       <div class="cooccurrence-chips">
         <a-tag
@@ -203,11 +204,11 @@ const combineDesc = computed(() => {
 
 .combine-desc {
   font-size: 11px;
-  color: #3b82f6;
+  color: var(--pine);
   padding: 2px 8px;
   margin-bottom: 8px;
   background: #eff6ff;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   word-break: break-all;
   font-family: monospace;
 }
@@ -223,7 +224,7 @@ const combineDesc = computed(() => {
 .cooccurrence-box {
   background: #f0fdf4;
   border: 1px solid #bbf7d0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   margin-bottom: 8px;
 }
@@ -254,29 +255,29 @@ const combineDesc = computed(() => {
   align-items: center;
   gap: 4px;
   padding: 2px 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   cursor: pointer;
-  background: #f5f5f5;
+  background: var(--sheet-2);
   border: 1px solid #e5e5e5;
   transition: all 0.15s;
 }
 .tag-chip:hover {
-  border-color: #3b82f6;
+  border-color: var(--pine);
 }
 .tag-chip.selected {
   background: #3b82f620;
-  border-color: #3b82f6;
-  color: #3b82f6;
+  border-color: var(--pine);
+  color: var(--pine);
 }
 .tag-chip.excluded {
   background: #ef444420;
-  border-color: #ef4444;
-  color: #ef4444;
+  border-color: var(--seal);
+  color: var(--seal);
   text-decoration: line-through;
 }
 .usage {
   font-size: 10px;
-  color: #999;
+  color: var(--ink-3);
 }
 </style>

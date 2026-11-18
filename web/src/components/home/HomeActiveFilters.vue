@@ -93,7 +93,7 @@ const {
   gap: 4px;
   margin-bottom: 8px;
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
   flex-wrap: wrap;
 }
 </style>

@@ -16,7 +16,7 @@ const emit = defineEmits<{
 
 <template>
   <div v-if="history.length > 0 && !keyword" class="search-history">
-    <span style="font-size: 12px; color: #999">最近搜索：</span>
+    <span style="font-size: 12px; color: var(--ink-3)">最近搜索：</span>
     <a-tag
       v-for="(h, i) in history.slice(0, 6)"
       :key="i"

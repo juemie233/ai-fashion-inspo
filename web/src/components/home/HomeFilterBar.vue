@@ -230,8 +230,8 @@ function onOpenModeChange() {
   gap: 6px;
   padding: 8px 12px;
   margin-bottom: 8px;
-  background: #f8f9fa;
-  border-radius: 8px;
+  background: var(--sheet-2);
+  border-radius: var(--radius-md);
   flex-wrap: wrap;
 }
 
@@ -259,7 +259,7 @@ function onOpenModeChange() {
   transform: scale(1.15);
 }
 .color-swatch.active {
-  border-color: #2080f0;
+  border-color: var(--pine);
 }
 .color-chip {
   display: inline-block;

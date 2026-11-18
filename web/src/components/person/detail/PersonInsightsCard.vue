@@ -32,9 +32,9 @@ const qualitySegments = computed(() => {
   if (!q) return []
   const judged = q.approved + q.pending + q.rejected
   return [
-    { key: 'approved' as const, label: '通过', count: q.approved, color: '#00b42a' },
-    { key: 'pending' as const, label: '待审', count: q.pending, color: '#ff7d00' },
-    { key: 'rejected' as const, label: '拒绝', count: q.rejected, color: '#f53f3f' },
+    { key: 'approved' as const, label: '通过', count: q.approved, color: 'var(--jade)' },
+    { key: 'pending' as const, label: '待审', count: q.pending, color: 'var(--amber)' },
+    { key: 'rejected' as const, label: '拒绝', count: q.rejected, color: 'var(--seal)' },
   ].map((s) => ({
     ...s,
     percent: judged ? Math.round((s.count / judged) * 100) : 0,

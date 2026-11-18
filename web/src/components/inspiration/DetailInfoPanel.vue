@@ -316,7 +316,7 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
 
 .tag-category-label {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
   display: block;
   margin-bottom: 4px;
 }

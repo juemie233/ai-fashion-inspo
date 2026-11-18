@@ -235,7 +235,7 @@ onBeforeUnmount(() => {
       <div class="crop-modal-panel">
         <!-- 标题 + 关闭 -->
         <div class="crop-modal-header">
-          <span class="crop-modal-title">✂️ 裁剪图片</span>
+          <span class="crop-modal-title">裁剪图片</span>
           <a-button
             type="text"
             size="small"
@@ -243,7 +243,6 @@ onBeforeUnmount(() => {
             :disabled="cropping"
             @click="close"
           >
-            ✕
           </a-button>
         </div>
 
@@ -298,8 +297,8 @@ onBeforeUnmount(() => {
   width: min(92vw, 900px);
   max-height: 92vh;
   max-height: 92dvh;
-  background: #fff;
-  border-radius: 12px;
+  background: var(--sheet);
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -337,7 +336,7 @@ onBeforeUnmount(() => {
   height: min(62vh, 560px);
   height: min(62dvh, 560px);
   background: #1a1a1a;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -355,7 +354,7 @@ onBeforeUnmount(() => {
 .crop-tip {
   margin: 8px 0 0;
   text-align: center;
-  color: #86909c;
+  color: var(--ink-3);
   font-size: 12px;
 }
 
@@ -392,7 +391,7 @@ onBeforeUnmount(() => {
 /* 上下分割线：常显、加粗、亮色，作为可见的拖动手柄 */
 .crop-container .cropper-line.line-n,
 .crop-container .cropper-line.line-s {
-  background-color: #fff;
+  background-color: var(--sheet);
   height: 8px;
   opacity: 1;
   box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
@@ -401,8 +400,8 @@ onBeforeUnmount(() => {
 /* 上下中间手柄：白色横向圆角条，放大命中区域便于拖动 */
 .crop-container .cropper-point.point-n,
 .crop-container .cropper-point.point-s {
-  background-color: #fff;
-  border-radius: 4px;
+  background-color: var(--sheet);
+  border-radius: var(--radius-sm);
   height: 14px;
   margin-left: -26px;
   opacity: 1;

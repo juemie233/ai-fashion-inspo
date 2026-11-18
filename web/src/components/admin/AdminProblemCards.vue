@@ -17,10 +17,10 @@ const emit = defineEmits<{
 
 <template>
   <div class="stat-cards" style="margin-top: 16px">
-    <a-card size="small" :bordered="true" style="border-color: #f0a020">
-      <a-statistic v-if="stats" title="⚠️ 无标签素材" :value="stats.untagged_count" />
+    <a-card size="small" :bordered="true" style="border-color: var(--amber)">
+      <a-statistic v-if="stats" title="无标签素材" :value="stats.untagged_count" />
       <div v-else class="stat-custom">
-        <span class="stat-custom-title">⚠️ 无标签素材</span>
+        <span class="stat-custom-title">无标签素材</span>
         <span class="stat-custom-value">-</span>
       </div>
       <template #actions>
@@ -40,10 +40,10 @@ const emit = defineEmits<{
         </a-popconfirm>
       </template>
     </a-card>
-    <a-card size="small" :bordered="true" style="border-color: #d03050">
-      <a-statistic v-if="stats" title="❌ 分析失败素材" :value="stats.analysis_failed_count" />
+    <a-card size="small" :bordered="true" style="border-color: var(--seal)">
+      <a-statistic v-if="stats" title="分析失败素材" :value="stats.analysis_failed_count" />
       <div v-else class="stat-custom">
-        <span class="stat-custom-title">❌ 分析失败素材</span>
+        <span class="stat-custom-title">分析失败素材</span>
         <span class="stat-custom-value">-</span>
       </div>
       <template #actions>

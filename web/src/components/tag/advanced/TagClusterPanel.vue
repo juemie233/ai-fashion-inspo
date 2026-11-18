@@ -205,9 +205,9 @@ onBeforeUnmount(() => {
   gap: 20px;
   flex-wrap: wrap;
   padding: 12px;
-  background: #f8fafc;
+  background: var(--sheet-2);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   flex-shrink: 0;
 }
 .param-item {
@@ -217,21 +217,21 @@ onBeforeUnmount(() => {
 }
 .param-label {
   font-size: 13px;
-  color: #374151;
+  color: var(--ink-2);
 }
 .param-value {
   font-size: 13px;
-  color: #2a78d6;
+  color: var(--pine);
   font-weight: 600;
 }
 .param-hint {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .empty-tip {
   padding: 40px;
   text-align: center;
-  color: #9ca3af;
+  color: var(--ink-3);
   font-size: 14px;
 }
 .cluster-groups {
@@ -244,17 +244,17 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--ink-3);
 }
 .group-card {
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   transition: all 0.15s;
 }
 .group-card.checked {
-  border-color: #2a78d6;
-  background: #f7faff;
+  border-color: var(--pine);
+  background: var(--sheet-2);
 }
 .group-head {
   display: flex;
@@ -264,11 +264,11 @@ onBeforeUnmount(() => {
 }
 .group-reason {
   font-size: 13px;
-  color: #374151;
+  color: var(--ink-2);
 }
 .group-members-count {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .group-body {
   display: flex;
@@ -279,11 +279,11 @@ onBeforeUnmount(() => {
 .target-mark {
   margin-left: 4px;
   font-size: 11px;
-  color: #2a78d6;
+  color: var(--pine);
 }
 .apply-tip {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--ink-3);
   line-height: 1.6;
   margin-bottom: 12px;
 }

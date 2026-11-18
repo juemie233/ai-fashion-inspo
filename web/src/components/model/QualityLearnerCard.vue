@@ -37,7 +37,7 @@ onMounted(loadStatus)
           <a-tag :color="status.trained ? 'green' : 'gray'" size="small">
             {{ status.trained ? '已训练' : '未训练' }}
           </a-tag>
-          <span style="font-size: 12px; color: #666">
+          <span style="font-size: 12px; color: var(--ink-2)">
             自动拒绝阈值 {{ status.threshold }}（低置信度仍走 VLM 复审）
           </span>
         </div>
@@ -46,7 +46,10 @@ onMounted(loadStatus)
         <a-alert v-if="status.dataset?.error" type="warning" style="margin-bottom: 8px">
           {{ status.dataset.error }}
         </a-alert>
-        <div v-else-if="status.dataset" style="font-size: 12px; color: #666; margin-bottom: 8px">
+        <div
+          v-else-if="status.dataset"
+          style="font-size: 12px; color: var(--ink-2); margin-bottom: 8px"
+        >
           样本池：正 {{ status.dataset.positive_total ?? 0 }} / 负
           {{ status.dataset.negative_total ?? 0 }}
           <span style="margin-left: 12px">
@@ -70,12 +73,12 @@ onMounted(loadStatus)
               title: '误杀率',
               value: status.meta.metrics.false_reject_rate,
               valueStyle: {
-                color: status.meta.metrics.false_reject_rate > 0.05 ? '#d03050' : '#18a058',
+                color: status.meta.metrics.false_reject_rate > 0.05 ? 'var(--seal)' : 'var(--pine)',
               },
             },
           ]"
         />
-        <p v-if="status.meta" style="font-size: 11px; color: #999; margin: 0 0 8px">
+        <p v-if="status.meta" style="font-size: 11px; color: var(--ink-3); margin: 0 0 8px">
           最近训练 {{ formatDateTime(status.meta.trained_at) }} · 训练样本
           {{ status.meta.sample_total }}（正 {{ status.meta.positive }} / 负
           {{ status.meta.negative }}）· 验证集 {{ status.meta.metrics.test_size }} 条 · 混矩阵 TN
@@ -103,11 +106,11 @@ onMounted(loadStatus)
               重置（回滚纯 VLM）
             </a-button>
           </a-popconfirm>
-          <span v-if="!canTrain" style="font-size: 12px; color: #f0a020">
+          <span v-if="!canTrain" style="font-size: 12px; color: var(--amber)">
             样本不足（需正负至少各 1 条、共 ≥10 条含向量样本），先积累「质量差」垃圾桶/已拒绝素材
           </span>
         </a-space>
-        <p style="font-size: 11px; color: #999; margin: 8px 0 0">
+        <p style="font-size: 11px; color: var(--ink-3); margin: 8px 0 0">
           初筛器用 CLIP 图像向量训练 sklearn 分类器，高置信度垃圾直接拒绝、低置信度仍走 VLM
           复审；重置接口受 API Key 保护。
         </p>

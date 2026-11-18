@@ -70,7 +70,7 @@ function canMoveTag(group: TagCategoryGroup, tag: TagItem, direction: 'up' | 'do
 
 // 来源颜色
 function sourceColor(s: string) {
-  return s === 'ai_generated' ? '#8b5cf6' : s === 'manual' ? '#3b82f6' : '#9ca3af'
+  return s === 'ai_generated' ? '#6B5A6E' : s === 'manual' ? '#3F5D6B' : '#686C64'
 }
 
 // ===== 两段式删除确认（替代每行一个 popconfirm，大分组下显著降低组件开销） =====
@@ -203,7 +203,7 @@ onUnmounted(() => {
 
       <div
         :style="{
-          background: dragOverCategory === group.category ? '#3b82f620' : undefined,
+          background: dragOverCategory === group.category ? '#2E4B4020' : undefined,
           border:
             dragOverCategory === group.category ? '2px dashed #3b82f6' : '2px solid transparent',
           borderRadius: '8px',
@@ -247,7 +247,7 @@ onUnmounted(() => {
               :title="tag.pinned ? '取消置顶' : '置顶到最前'"
               @click.stop="emit('toggle-pin', tag)"
             >
-              📌
+              {{ tag.pinned ? '已置顶' : '置顶' }}
             </button>
             <span class="row-badge row-source" :style="{ background: sourceColor(tag.source) }">
               {{ SOURCE_LABELS[tag.source] || tag.source }}
@@ -335,7 +335,7 @@ onUnmounted(() => {
   width: 18px;
   height: 18px;
   margin: 0;
-  accent-color: #3b82f6;
+  accent-color: var(--pine);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -363,7 +363,7 @@ onUnmounted(() => {
   font-size: 11px;
   line-height: 1;
   padding: 3px 8px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   white-space: nowrap;
 }
 
@@ -384,7 +384,7 @@ onUnmounted(() => {
 }
 
 .row-name:hover {
-  color: #3b82f6;
+  color: var(--pine);
 }
 
 .row-actions {
@@ -405,9 +405,9 @@ onUnmounted(() => {
   background: transparent;
   padding: 2px 6px;
   font-size: 12px;
-  color: #2080f0;
+  color: var(--pine);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .row-act:hover {
@@ -415,7 +415,7 @@ onUnmounted(() => {
 }
 
 .row-act.danger {
-  color: #d03050;
+  color: var(--seal);
 }
 
 .row-act.danger:hover {
@@ -424,7 +424,7 @@ onUnmounted(() => {
 
 .row-act.confirming {
   color: #fff;
-  background: #d03050;
+  background: var(--seal);
 }
 
 .row-move {
@@ -433,7 +433,7 @@ onUnmounted(() => {
 }
 
 .row-move:disabled {
-  color: #c9cdd4;
+  color: var(--ink-3);
   cursor: not-allowed;
 }
 

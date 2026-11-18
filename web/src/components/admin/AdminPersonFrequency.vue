@@ -83,7 +83,7 @@ onMounted(load)
 
 <style scoped>
 .person-empty {
-  color: #999;
+  color: var(--ink-3);
   font-size: 13px;
   text-align: center;
   padding: 24px 0;

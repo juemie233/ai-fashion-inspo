@@ -62,7 +62,7 @@ const emit = defineEmits<{
 /* 排序模式 */
 .ordering-tip {
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
   margin: 0 0 8px;
 }
 .ordering-grid {
@@ -70,17 +70,17 @@ const emit = defineEmits<{
   flex-wrap: wrap;
   gap: 8px;
   padding: 12px;
-  background: #f8f9fa;
-  border-radius: 8px;
+  background: var(--sheet-2);
+  border-radius: var(--radius-md);
 }
 .ordering-card {
   width: 96px;
   height: 130px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: grab;
   border: 2px solid transparent;
-  background: #f2f3f5;
+  background: var(--sheet-2);
   position: relative;
 }
 
@@ -91,14 +91,14 @@ const emit = defineEmits<{
   display: flex;
   gap: 2px;
   background: rgba(0, 0, 0, 0.35);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px;
 }
 .ordering-card:active {
   cursor: grabbing;
 }
 .ordering-card:hover {
-  border-color: #94bfff;
+  border-color: var(--ink-3);
 }
 .ordering-card img {
   width: 100%;

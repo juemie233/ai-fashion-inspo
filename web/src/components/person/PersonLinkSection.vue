@@ -208,12 +208,12 @@ async function removePerson(person: PersonBrief) {
   padding: 3px 8px 3px 6px;
   border: 1px solid #e5e7eb;
   border-radius: 999px;
-  background: #f9fafb;
+  background: var(--sheet-2);
 }
 
 .linked-name {
   font-size: 13px;
-  color: #374151;
+  color: var(--ink-2);
   cursor: pointer;
 }
 
@@ -225,24 +225,24 @@ async function removePerson(person: PersonBrief) {
 
 .linked-remove {
   cursor: pointer;
-  color: #9ca3af;
+  color: var(--ink-3);
   font-size: 14px;
   line-height: 1;
   padding: 0 2px;
 }
 
 .linked-remove:hover {
-  color: #ef4444;
+  color: var(--seal);
 }
 
 /* 锁定态：人脸已确认，禁止解除（悬停不变红，not-allowed 光标） */
 .linked-remove.disabled {
   cursor: not-allowed;
-  color: #c9cdd4;
+  color: var(--ink-3);
 }
 
 .linked-remove.disabled:hover {
-  color: #c9cdd4;
+  color: var(--ink-3);
 }
 
 .person-select {

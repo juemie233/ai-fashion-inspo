@@ -138,7 +138,7 @@ const batchTagNamesModel = computed<string[]>({
 
 .similar-empty-hint {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 /* 加载失败用警示色，避免与「暂无相似素材」的灰提示混淆 */
@@ -148,7 +148,7 @@ const batchTagNamesModel = computed<string[]>({
 
 .similar-count {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 .batch-toolbar {
@@ -157,15 +157,15 @@ const batchTagNamesModel = computed<string[]>({
   gap: 8px;
   margin-bottom: 12px;
   padding: 10px 12px;
-  background: #fef6f7;
+  background: var(--seal-soft);
   border: 1px solid #f0d6dc;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   flex-wrap: wrap;
 }
 
 .batch-selected-count {
   font-size: 13px;
-  color: #e0465e;
+  color: var(--seal);
   font-weight: 600;
 }
 

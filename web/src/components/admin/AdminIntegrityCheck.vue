@@ -59,8 +59,8 @@ const orphanColumns: TableColumnData[] = [
 
     <!-- 缺失文件 -->
     <div v-if="missingFiles.length > 0" style="margin-bottom: 16px">
-      <h4 style="color: #d03050; margin: 0 0 8px">
-        ❌ 缺失文件 ({{ missingFiles.length }}) — 数据库有记录但文件不存在
+      <h4 style="color: var(--seal); margin: 0 0 8px">
+        缺失文件 ({{ missingFiles.length }}) — 数据库有记录但文件不存在
       </h4>
       <a-table
         :columns="missingColumns"
@@ -74,8 +74,8 @@ const orphanColumns: TableColumnData[] = [
 
     <!-- 孤立文件 -->
     <div v-if="orphanFiles.length > 0">
-      <h4 style="color: #f0a020; margin: 0 0 8px">
-        ⚠️ 孤立文件 ({{ orphanFiles.length }}) — 磁盘有文件但数据库无记录 · 共
+      <h4 style="color: var(--amber); margin: 0 0 8px">
+        孤立文件 ({{ orphanFiles.length }}) — 磁盘有文件但数据库无记录 · 共
         {{ formatBytes(orphanBytes) }}
       </h4>
       <a-table
@@ -90,7 +90,7 @@ const orphanColumns: TableColumnData[] = [
 
     <a-empty
       v-if="missingFiles.length === 0 && orphanFiles.length === 0 && !checking"
-      description="✅ 数据完整，未发现缺失或孤立文件"
+      description="数据完整，未发现缺失或孤立文件"
     />
   </a-card>
 </template>

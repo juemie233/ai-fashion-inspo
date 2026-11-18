@@ -74,7 +74,7 @@ onMounted(() => {
 .face-hint {
   margin: 8px 0;
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 /* 子服务离线提示：与扫描页同款告知方式 */
 .face-offline-alert {

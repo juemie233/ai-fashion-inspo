@@ -83,9 +83,10 @@ function onPageChange(page: number) {
   <a-card title="CDP 采集历史（浏览器搜索 / 博主页）" size="small">
     <template #extra>
       <a-space align="center" size="small">
-        <span v-if="stats.total > 0" style="font-size: 12px; color: #666"
-          >共 <b>{{ stats.total }}</b> · 成功 <b style="color: #18a058">{{ stats.completed }}</b> ·
-          失败 <b style="color: #d03050">{{ stats.failed }}</b> · {{ stats.rate }}%</span
+        <span v-if="stats.total > 0" style="font-size: 12px; color: var(--ink-2)"
+          >共 <b>{{ stats.total }}</b> · 成功
+          <b style="color: var(--pine)">{{ stats.completed }}</b> · 失败
+          <b style="color: var(--seal)">{{ stats.failed }}</b> · {{ stats.rate }}%</span
         >
         <a-select
           :model-value="filterPlatform"
@@ -154,7 +155,7 @@ function onPageChange(page: number) {
                 width: 24px;
                 height: 24px;
                 border-radius: 50%;
-                background: #2080f0;
+                background: var(--pine);
                 color: #fff;
                 font-size: 12px;
                 font-weight: bold;
@@ -171,13 +172,13 @@ function onPageChange(page: number) {
             style="
               margin-top: 16px;
               padding: 10px;
-              background: #f0f9eb;
-              border-radius: 6px;
-              color: #666;
+              background: var(--pine-soft);
+              border-radius: var(--radius-sm);
+              color: var(--ink-2);
               font-size: 12px;
             "
           >
-            💡 提示：小红书和抖音反爬严格，推荐使用<b>浏览器插件</b>一键抓取。
+            提示：小红书和抖音反爬严格，推荐使用<b>浏览器插件</b>一键抓取。
           </div>
         </div>
       </template>

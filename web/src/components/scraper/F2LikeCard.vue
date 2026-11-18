@@ -331,7 +331,7 @@ async function onSubmit() {
 
     <div v-if="status" class="f2l-status" :class="{ 'is-bad': !available }">
       <a-spin v-if="statusLoading" :size="12" />
-      <span>{{ available ? '✅' : '⚠️' }} {{ availabilityReason }}</span>
+      <span>{{ available ? '' : '' }} {{ availabilityReason }}</span>
       <a-link @click="loadStatus()">刷新状态</a-link>
     </div>
 
@@ -424,11 +424,11 @@ async function onSubmit() {
 }
 .f2l-label {
   font-size: 13px;
-  color: #4b5563;
+  color: var(--ink-2);
 }
 .f2l-unit {
   font-size: 13px;
-  color: #4b5563;
+  color: var(--ink-2);
 }
 .f2l-status {
   display: flex;
@@ -436,14 +436,14 @@ async function onSubmit() {
   gap: 8px;
   margin-top: 10px;
   padding: 8px 10px;
-  border-radius: 6px;
-  background: #f0f9eb;
+  border-radius: var(--radius-sm);
+  background: var(--pine-soft);
   color: #2f7d31;
   font-size: 13px;
   flex-wrap: wrap;
 }
 .f2l-status.is-bad {
-  background: #fff7e6;
+  background: var(--sheet-2);
   color: #a86a00;
 }
 .f2l-options {
@@ -456,21 +456,21 @@ async function onSubmit() {
 }
 .f2l-option-tip {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
   line-height: 1.6;
   flex: 1;
   min-width: 0;
 }
 .f2l-tips {
   margin-top: 10px;
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 12px;
   line-height: 1.8;
 }
 .f2l-tips code {
   padding: 0 3px;
   border-radius: 3px;
-  background: #f2f3f5;
+  background: var(--sheet-2);
 }
 .f2l-collect-head {
   display: flex;
@@ -487,7 +487,7 @@ async function onSubmit() {
   overflow-y: auto;
   padding: 8px 10px;
   border: 1px solid #f0f0f0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .f2l-collect-foot {
   margin-top: 10px;

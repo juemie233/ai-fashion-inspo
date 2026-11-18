@@ -187,7 +187,7 @@ async function handleExport() {
 <template>
   <div class="tag-page">
     <div class="page-header">
-      <h2>标签管理</h2>
+      <h2 class="page-title">标签管理</h2>
       <a-space>
         <a-button @click="openCreate" type="primary">
           {{ activeModal === 'create' ? '取消' : '新标签' }}
@@ -243,7 +243,7 @@ async function handleExport() {
         <a-spin :loading="loading">
           <div
             v-if="filteredGroups.length === 0 && !loading"
-            style="text-align: center; padding: 40px; color: #999"
+            style="text-align: center; padding: 40px; color: var(--ink-3)"
           >
             没有匹配的标签
           </div>
@@ -404,7 +404,7 @@ async function handleExport() {
 }
 .divider:hover::after,
 .divider.dragging::after {
-  background: #3b82f6;
+  background: var(--pine);
 }
 
 .right-panel {
@@ -448,5 +448,68 @@ async function handleExport() {
   .divider {
     display: none;
   }
+}
+
+/* ── 印样台页面书眉 ── */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-header h2.page-title {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: 30px;
+}
+
+/* ── 印样台：标签管理是「索引卡 + 样张」两栏 ── */
+.tag-page {
+  padding-bottom: 0;
+}
+
+.split-layout {
+  gap: 12px;
+}
+
+.left-panel {
+  padding: 14px;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.right-panel {
+  padding: 16px;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.divider::after {
+  background: var(--line-strong);
+}
+
+/* 排序切换：墨底页签，而不是彩色胶囊 */
+.tag-page :deep(.arco-radio-group-button) {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.tag-page :deep(.arco-radio-button) {
+  font-size: 12px;
+  color: var(--ink-2);
+  background: transparent;
+}
+
+.tag-page :deep(.arco-radio-button.arco-radio-checked) {
+  background: var(--ink);
+  color: var(--sheet);
 }
 </style>

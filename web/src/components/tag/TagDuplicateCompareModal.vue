@@ -233,7 +233,7 @@ function doMerge(target: 'tag_a' | 'tag_b') {
 
       <div class="cmp-actions">
         <a-space>
-          <a-button @click="randomPick" :disabled="!canRandom || busy"> 🎲 随机显示 </a-button>
+          <a-button @click="randomPick" :disabled="!canRandom || busy">随机显示 </a-button>
         </a-space>
         <a-space>
           <a-checkbox v-model="keepAlias">合并后保留源名为别名</a-checkbox>
@@ -257,7 +257,7 @@ function doMerge(target: 'tag_a' | 'tag_b') {
 }
 .cmp-similarity {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--ink-3);
   text-align: center;
 }
 .cmp-grid {
@@ -286,8 +286,8 @@ function doMerge(target: 'tag_a' | 'tag_b') {
 .cmp-img-box {
   height: 320px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #f9fafb;
+  border-radius: var(--radius-md);
+  background: var(--sheet-2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -301,12 +301,12 @@ function doMerge(target: 'tag_a' | 'tag_b') {
   justify-content: center;
 }
 .cmp-empty {
-  color: #9ca3af;
+  color: var(--ink-3);
   font-size: 13px;
 }
 .cmp-count {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
   text-align: center;
 }
 .cmp-actions {

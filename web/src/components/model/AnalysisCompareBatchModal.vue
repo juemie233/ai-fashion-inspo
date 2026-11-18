@@ -57,11 +57,11 @@ function recordSubtitle(record: CompareBatchRecord): string {
         <div v-if="data.thumbnail_path" style="text-align: center; margin-bottom: 16px">
           <img
             :src="getFileUrl(data.thumbnail_path)"
-            style="max-height: 180px; border-radius: 8px"
+            style="max-height: 180px; border-radius: var(--radius-md)"
           />
         </div>
 
-        <a-card title="📋 基本信息" size="small" style="margin-bottom: 12px">
+        <a-card title="基本信息" size="small" style="margin-bottom: 12px">
           <div style="display: flex; gap: 12px; flex-wrap: wrap">
             <div
               v-for="(a, idx) in data.analyses"
@@ -70,14 +70,14 @@ function recordSubtitle(record: CompareBatchRecord): string {
                 flex: 1;
                 min-width: 200px;
                 padding: 8px 10px;
-                background: #f5f5f5;
-                border-radius: 6px;
+                background: var(--sheet-2);
+                border-radius: var(--radius-sm);
                 font-size: 12px;
               "
             >
               <div style="font-weight: 600; margin-bottom: 2px">记录 {{ idx + 1 }}</div>
               <div>{{ recordSubtitle(a) }}</div>
-              <div style="color: #86909c">{{ formatDate(a.created_at) }}</div>
+              <div style="color: var(--ink-3)">{{ formatDate(a.created_at) }}</div>
               <div style="margin-top: 4px">
                 耗时
                 <a-tag :color="a.processing_time_ms ? 'green' : 'gray'" size="small">
@@ -87,16 +87,19 @@ function recordSubtitle(record: CompareBatchRecord): string {
                   {{ a.status === 'success' ? '成功' : '失败' }}
                 </a-tag>
               </div>
-              <div v-if="a.error" style="color: #d03050; margin-top: 4px; word-break: break-all">
+              <div
+                v-if="a.error"
+                style="color: var(--seal); margin-top: 4px; word-break: break-all"
+              >
                 {{ a.error }}
               </div>
             </div>
           </div>
         </a-card>
 
-        <a-card title="🔀 标签差异（并排对比）" size="small" style="margin-bottom: 12px">
+        <a-card title="标签差异（并排对比）" size="small" style="margin-bottom: 12px">
           <template #extra>
-            <span style="font-size: 12px; color: #86909c">
+            <span style="font-size: 12px; color: var(--ink-3)">
               <a-tag color="arcoblue" size="small">共有标签</a-tag>
               <a-tag color="orangered" size="small">差异标签</a-tag>
             </span>
@@ -128,9 +131,9 @@ function recordSubtitle(record: CompareBatchRecord): string {
           </div>
         </a-card>
 
-        <a-card v-if="data.tag_diff" title="🧩 差异汇总" size="small">
+        <a-card v-if="data.tag_diff" title="差异汇总" size="small">
           <div v-if="data.tag_diff.common.length" style="margin-bottom: 8px">
-            <span style="color: #2080f0; font-weight: 600; font-size: 12px">
+            <span style="color: var(--pine); font-weight: 600; font-size: 12px">
               = 共有 ({{ data.tag_diff.common.length }}):
             </span>
             <a-tag
@@ -144,7 +147,7 @@ function recordSubtitle(record: CompareBatchRecord): string {
             </a-tag>
           </div>
           <div v-if="data.tag_diff.differing.length">
-            <span style="color: #ff7d00; font-weight: 600; font-size: 12px">
+            <span style="color: var(--amber); font-weight: 600; font-size: 12px">
               ≠ 差异 ({{ data.tag_diff.differing.length }}):
             </span>
             <span
@@ -153,7 +156,9 @@ function recordSubtitle(record: CompareBatchRecord): string {
               style="margin: 1px; display: inline-flex; align-items: center; gap: 2px"
             >
               <a-tag size="small" color="orangered">{{ d.name }}</a-tag>
-              <span style="font-size: 11px; color: #999">记录 {{ differingWhere(d.name) }}</span>
+              <span style="font-size: 11px; color: var(--ink-3)"
+                >记录 {{ differingWhere(d.name) }}</span
+              >
             </span>
           </div>
           <a-empty
@@ -170,7 +175,7 @@ function recordSubtitle(record: CompareBatchRecord): string {
 .record-col-title {
   font-size: 12px;
   font-weight: 600;
-  color: #4e5969;
+  color: var(--ink-2);
   margin-bottom: 6px;
 }
 </style>

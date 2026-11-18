@@ -58,7 +58,7 @@ onUnmounted(stopPoll)
   <a-card title="抖音采集历史（f2 增量下载）" size="small" style="margin-bottom: 16px">
     <template #extra>
       <a-space align="center" size="small">
-        <span style="font-size: 12px; color: #666">
+        <span style="font-size: 12px; color: var(--ink-2)">
           共 <b>{{ total }}</b> 条{{ hasActive ? ' · 有任务进行中' : '' }}
         </span>
         <a-button size="mini" :loading="loading" @click="loadTasks()">刷新</a-button>

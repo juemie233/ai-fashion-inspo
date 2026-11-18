@@ -52,7 +52,7 @@ const multiIds = ref<string[]>([])
 const MAX_SELECT = 10
 const hasMore = ref(false)
 const total = ref(0)
-/** 「🎲 随机」按钮加载态（防连点抽多个） */
+/** 「随机」按钮加载态（防连点抽多个） */
 const randomLoading = ref(false)
 
 /** 请求序号：快速切筛选/搜索时，只允许最新一次响应落地（旧响应会污染新结果）。 */
@@ -276,7 +276,7 @@ function confirmMulti(): void {
         title="按当前筛选随机选一个姿势"
         @click="onRandom"
       >
-        🎲 随机
+        随机
       </a-button>
       <span class="pose-hint">共 {{ total }} 个姿势</span>
     </div>
@@ -361,7 +361,7 @@ function confirmMulti(): void {
   gap: 2px;
   padding: 0;
   border: 2px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--color-fill-2);
   cursor: pointer;
@@ -381,7 +381,7 @@ function confirmMulti(): void {
   height: 150px;
   object-fit: cover;
   display: block;
-  background: #f2f3f5;
+  background: var(--sheet-2);
 }
 
 .pose-card-meta,

@@ -180,7 +180,7 @@ function locateAllSkipped() {
         </div>
       </div>
     </DensityImageGrid>
-    <p style="font-size: 12px; color: #999; margin-top: 8px">
+    <p style="font-size: 12px; color: var(--ink-3); margin-top: 8px">
       点击缩略图查看大图，双击卡片切换勾选
     </p>
   </template>
@@ -236,7 +236,7 @@ function locateAllSkipped() {
 .crop-item {
   position: relative;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   border: 2px solid transparent;
   transition:
@@ -263,7 +263,7 @@ function locateAllSkipped() {
 }
 
 .crop-item.checked {
-  border-color: #18a058;
+  border-color: var(--pine);
 }
 
 .crop-item.failed {
@@ -307,8 +307,8 @@ function locateAllSkipped() {
 }
 
 .crop-check.checked {
-  background: #18a058;
-  border-color: #18a058;
+  background: var(--pine);
+  border-color: var(--pine);
 }
 
 /* 跳过明细：缩略图 + 原因 + 定位按钮 */
@@ -328,15 +328,15 @@ function locateAllSkipped() {
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
-  border-radius: 6px;
-  background: #fafafa;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
 }
 
 .skip-thumb {
   width: 36px;
   height: 48px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: #eee;
   flex-shrink: 0;
 }
@@ -348,7 +348,7 @@ function locateAllSkipped() {
 
 .skip-reason {
   font-size: 12px;
-  color: #333;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -356,6 +356,6 @@ function locateAllSkipped() {
 
 .skip-meta {
   font-size: 11px;
-  color: #999;
+  color: var(--ink-3);
 }
 </style>

@@ -264,7 +264,7 @@ function closeSkipManage() {
   max-height: 300px;
   overflow-y: auto;
   border: 1px solid #f0f0f0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 6px 10px;
   margin-bottom: 14px;
 }
@@ -285,7 +285,7 @@ function closeSkipManage() {
 
 .enrich-xhs {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 .enrich-progress {
@@ -300,7 +300,7 @@ function closeSkipManage() {
   overflow-y: auto;
   border: 1px solid #fde2e2;
   background: #fff7f7;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   margin-bottom: 14px;
 }

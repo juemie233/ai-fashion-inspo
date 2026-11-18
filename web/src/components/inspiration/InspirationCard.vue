@@ -349,7 +349,7 @@ function openDetail() {
 <style scoped>
 .card {
   background: var(--color-bg-2);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
   transition:
@@ -368,7 +368,7 @@ function openDetail() {
 .card-image {
   position: relative;
   width: 100%;
-  background: #f5f5f5;
+  background: var(--sheet-2);
 }
 .card-image img,
 .card-image video {
@@ -420,7 +420,7 @@ function openDetail() {
 .card-rate {
   margin-left: 2px;
   padding: 2px 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.75);
   font-size: 16px;
   min-height: 0;
@@ -437,7 +437,7 @@ function openDetail() {
   color: #fff;
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .sim-badge {
@@ -448,7 +448,7 @@ function openDetail() {
   color: #fff;
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   z-index: 2;
   white-space: nowrap;
 }
@@ -473,8 +473,8 @@ function openDetail() {
   transition: all 0.15s;
 }
 .select-checkbox.checked {
-  background: #e0465e;
-  border-color: #e0465e;
+  background: var(--seal);
+  border-color: var(--seal);
 }
 
 /* 浏览详情按钮：悬停卡片时出现，位于缩略图右下角 */
@@ -560,7 +560,7 @@ function openDetail() {
 }
 .author {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
 }
 
 .card-tags {

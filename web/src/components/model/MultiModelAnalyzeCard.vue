@@ -156,16 +156,16 @@ onMounted(loadOptions)
 }
 .form-label {
   font-size: 13px;
-  color: #4e5969;
+  color: var(--ink-2);
   width: 60px;
   flex-shrink: 0;
 }
 .form-tip {
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 .form-tip.warn {
-  color: #f53f3f;
+  color: var(--seal);
 }
 .submit-row {
   justify-content: flex-end;

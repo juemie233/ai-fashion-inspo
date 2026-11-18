@@ -458,7 +458,7 @@ onBeforeUnmount(() => {
   margin: 6px 0 12px;
   padding: 10px;
   border: 1px dashed var(--color-border-2);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--color-fill-1);
 }
 
@@ -496,7 +496,7 @@ onBeforeUnmount(() => {
   width: 42px;
   height: 56px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: block;
   background: var(--color-fill-2);
 }

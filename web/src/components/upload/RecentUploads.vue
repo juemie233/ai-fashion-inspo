@@ -62,10 +62,10 @@ const emit = defineEmits<{
   position: relative;
   width: 100%;
   padding-bottom: 150%;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
-  background: #f3f4f6;
+  background: var(--sheet-2);
   border: 1px solid #e5e7eb;
   transition:
     transform 0.15s,

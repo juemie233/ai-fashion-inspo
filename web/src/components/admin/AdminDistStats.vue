@@ -9,24 +9,24 @@ defineProps<{ stats: Stats | null }>()
 /** 来源类型颜色 */
 function sourceColor(t: string): string {
   const colors: Record<string, string> = {
-    xiaohongshu: '#ff2442',
-    douyin: '#111',
-    scraper: '#18a058',
-    manual_upload: '#2080f0',
-    browser_extension: '#f0a020',
+    xiaohongshu: 'var(--seal)',
+    douyin: 'var(--ink)',
+    scraper: 'var(--pine)',
+    manual_upload: 'var(--pine)',
+    browser_extension: 'var(--amber)',
   }
-  return colors[t] || '#999'
+  return colors[t] || 'var(--ink-3)'
 }
 
 /** 分析状态颜色 */
 function statusColor(s: string): string {
   const colors: Record<string, string> = {
-    done: '#18a058',
-    error: '#d03050',
-    pending: '#999',
-    none: '#999',
+    done: 'var(--pine)',
+    error: 'var(--seal)',
+    pending: 'var(--ink-3)',
+    none: 'var(--ink-3)',
   }
-  return colors[s] || '#999'
+  return colors[s] || 'var(--ink-3)'
 }
 </script>
 
@@ -67,7 +67,7 @@ function statusColor(s: string): string {
             <span class="dist-bar-wrap">
               <span
                 class="dist-bar"
-                style="background: #2080f0"
+                style="background: var(--pine)"
                 :style="{
                   width:
                     Math.max((m.count / Math.max(...stats.by_month.map((x) => x.count))) * 100, 2) +
@@ -110,16 +110,12 @@ function statusColor(s: string): string {
         <div v-if="stats?.by_media_type?.length">
           <div v-for="m in stats.by_media_type" :key="m.media_type" class="dist-item">
             <span>{{
-              m.media_type === 'image'
-                ? '🖼 图片'
-                : m.media_type === 'video'
-                  ? '🎬 视频'
-                  : m.media_type
+              m.media_type === 'image' ? '图片' : m.media_type === 'video' ? '视频' : m.media_type
             }}</span>
             <span class="dist-bar-wrap">
               <span
                 class="dist-bar"
-                style="background: #18a058"
+                style="background: var(--pine)"
                 :style="{ width: Math.max((m.count / stats.total_count) * 100, 2) + '%' }"
               >
               </span>
@@ -153,7 +149,7 @@ function statusColor(s: string): string {
   width: 70px;
   text-align: right;
   flex-shrink: 0;
-  color: #666;
+  color: var(--ink-2);
 }
 .dist-item span:last-child {
   width: 36px;
@@ -164,20 +160,20 @@ function statusColor(s: string): string {
 .dist-bar-wrap {
   flex: 1;
   height: 14px;
-  background: #f0f0f0;
-  border-radius: 7px;
+  background: var(--sheet-2);
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .dist-bar {
   display: block;
   height: 100%;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   transition: width 0.4s ease;
   min-width: 4px;
 }
 .dist-note {
   margin-top: 6px;
   font-size: 12px;
-  color: #8a8f99;
+  color: var(--ink-3);
 }
 </style>

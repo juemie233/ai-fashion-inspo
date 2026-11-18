@@ -20,7 +20,7 @@ defineProps<{ stats: Stats | null }>()
       { title: '标签总数', value: stats.total_tags ?? 0 },
       { title: '收藏数', value: stats.favorite_count ?? 0 },
       {
-        title: '📋 墓碑表记录',
+        title: '墓碑表记录',
         value: stats.tombstone_count ?? 0,
         highlight: true,
         note: '已采集 URL，防止重复入库',

@@ -89,7 +89,7 @@ const tagCategoryLabel: Record<string, string> = {
             <template v-for="tag in detail.tags.filter((t) => t.category === cat)" :key="tag.name">
               <a-tag size="small" style="border-radius: 999px">
                 {{ tag.name }}
-                <span style="font-size: 11px; color: #999; margin-left: 2px">{{
+                <span style="font-size: 11px; color: var(--ink-3); margin-left: 2px">{{
                   tag.confidence
                 }}</span>
               </a-tag>
@@ -110,9 +110,9 @@ const tagCategoryLabel: Record<string, string> = {
                 font-size: 12px;
                 white-space: pre-wrap;
                 word-break: break-all;
-                background: #f5f5f5;
+                background: var(--sheet-2);
                 padding: 12px;
-                border-radius: 6px;
+                border-radius: var(--radius-sm);
                 margin: 0;
               "
               >{{ detail.raw_response }}</pre>

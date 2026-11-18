@@ -23,6 +23,70 @@ echarts.use([
   CanvasRenderer,
 ])
 
+/** 图例类型：ECharts option 在主题合并时按「普通对象」处理 */
+type ChartOption = Record<string, unknown>
+
+/** 印样台图表色板（与全局 tokens 对齐；消费方未显式配色时生效） */
+const CHART_PALETTE = [
+  '#2E4B40',
+  '#A6402F',
+  '#3F6B57',
+  '#8A6A2F',
+  '#4F534D',
+  '#89A895',
+  '#C9BBA8',
+  '#6B5A6E',
+  '#7A5C43',
+  '#46606E',
+]
+
+/** 图表文字/线条的印样台色值（canvas 里不能用 CSS 变量，这里写同值常量） */
+const CHART_INK = {
+  text: '#1C201E',
+  sub: '#4F534D',
+  mute: '#686C64',
+  line: '#D9D7CD',
+  sheet: '#FAF9F4',
+  font: "'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif",
+}
+
+/** 在消费方 option 上补印样台默认值（色板/字体/坐标轴/提示框），不覆盖消费方显式设置 */
+function applyChartTheme(option: EChartsOption): EChartsOption {
+  const base = option as ChartOption
+  const themed: ChartOption = { ...base }
+  if (!themed.color) themed.color = [...CHART_PALETTE]
+  themed.textStyle = {
+    color: CHART_INK.sub,
+    fontFamily: CHART_INK.font,
+    ...(base.textStyle as ChartOption | undefined),
+  }
+  themed.tooltip = {
+    backgroundColor: CHART_INK.text,
+    borderWidth: 0,
+    textStyle: { color: CHART_INK.sheet, fontSize: 12 },
+    ...(base.tooltip as ChartOption | undefined),
+  }
+  themed.legend = {
+    textStyle: { color: CHART_INK.mute, fontSize: 12 },
+    ...(base.legend as ChartOption | undefined),
+  }
+  const axisDefaults: ChartOption = {
+    axisLine: { lineStyle: { color: CHART_INK.line } },
+    axisTick: { lineStyle: { color: CHART_INK.line } },
+    axisLabel: { color: CHART_INK.mute, fontSize: 11 },
+    splitLine: { lineStyle: { color: CHART_INK.line, type: 'dashed' } },
+  }
+  for (const key of ['xAxis', 'yAxis'] as const) {
+    const axis = base[key]
+    if (Array.isArray(axis)) {
+      themed[key] = axis.map((item) => ({ ...axisDefaults, ...(item as ChartOption) }))
+    } else if (axis && typeof axis === 'object') {
+      themed[key] = { ...axisDefaults, ...(axis as ChartOption) }
+    }
+  }
+  return themed as EChartsOption
+}
+
 const props = withDefaults(
   defineProps<{
     /** ECharts 配置项（深监听，变化时自动重绘；null 时显示空态） */
@@ -60,7 +124,7 @@ function render() {
   if (!props.option) return
   const c = ensureChart()
   if (c) {
-    c.setOption(props.option, true)
+    c.setOption(applyChartTheme(props.option), true)
     // 实例就绪后通知使用方绑定事件（仅在每次新 init 后触发一次）
     if (!readyFired) {
       readyFired = true

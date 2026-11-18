@@ -57,7 +57,7 @@ const reason = defineModel<TrashReason | null>('reason', { required: true })
 /* 移入垃圾桶原因弹窗 */
 .trash-reason-tip {
   margin: 0 0 14px;
-  color: #666;
+  color: var(--ink-2);
   font-size: 13px;
   line-height: 1.6;
 }

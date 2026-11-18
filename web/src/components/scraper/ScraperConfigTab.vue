@@ -83,13 +83,13 @@ function verifyBadge(cs: CookieStatus): { text: string; color: string } | null {
           }}</a-tag>
         </a-tooltip>
       </template>
-      <p style="font-size: 12px; color: #666; margin: 0">{{ cookieAgeHint(cs) }}</p>
-      <p style="font-size: 12px; color: #666; margin: 4px 0 0">{{ cs.hint }}</p>
+      <p style="font-size: 12px; color: var(--ink-2); margin: 0">{{ cookieAgeHint(cs) }}</p>
+      <p style="font-size: 12px; color: var(--ink-2); margin: 4px 0 0">{{ cs.hint }}</p>
       <p
         v-if="cs.verify && cs.verify.state !== 'valid'"
-        style="font-size: 12px; color: #f53f3f; margin: 4px 0 0"
+        style="font-size: 12px; color: var(--seal); margin: 4px 0 0"
       >
-        {{ cs.verify.state === 'invalid' ? '⚠ 已确认失效：' : '⚠ 未确认：' }}{{ cs.verify.detail }}
+        {{ cs.verify.state === 'invalid' ? '已确认失效：' : '未确认：' }}{{ cs.verify.detail }}
       </p>
       <template #actions>
         <a-space size="small">
@@ -124,7 +124,7 @@ function verifyBadge(cs: CookieStatus): { text: string; color: string } | null {
     :width="500"
     :footer="false"
   >
-    <p style="font-size: 12px; color: #666; margin-bottom: 8px">
+    <p style="font-size: 12px; color: var(--ink-2); margin-bottom: 8px">
       粘贴 {{ PLATFORM_LABELS[cookiePlatform] || cookiePlatform }} 的 Cookie JSON 数据
     </p>
     <a-textarea
@@ -152,7 +152,7 @@ function verifyBadge(cs: CookieStatus): { text: string; color: string } | null {
           <strong>{{ src.name }}</strong>
           <a-tag v-for="f in src.features" :key="f" size="small">{{ f }}</a-tag>
         </div>
-        <div style="font-size: 12px; color: #666; margin-top: 2px">{{ src.note }}</div>
+        <div style="font-size: 12px; color: var(--ink-2); margin-top: 2px">{{ src.note }}</div>
       </a-list-item>
     </a-list>
   </a-card>
@@ -168,8 +168,8 @@ function verifyBadge(cs: CookieStatus): { text: string; color: string } | null {
       <a-tag color="arcoblue" size="small">{{ tombstoneCount }} 个</a-tag>
     </div>
     <div v-if="showTombstone" class="tombstone-body">
-      <p style="margin: 8px 0 0; font-size: 12px; color: #666">
-        📌 墓碑表记录了所有曾下载过的图片 URL，采集时自动跳过，确保永不重复入库。当前共
+      <p style="margin: 8px 0 0; font-size: 12px; color: var(--ink-2)">
+        墓碑表记录了所有曾下载过的图片 URL，采集时自动跳过，确保永不重复入库。当前共
         <b>{{ tombstoneCount }}</b> 条。
       </p>
     </div>
@@ -199,11 +199,7 @@ function verifyBadge(cs: CookieStatus): { text: string; color: string } | null {
       :title="
         hint.name +
         ' — ' +
-        (hint.level === 'error'
-          ? '⚠️ 可靠性低'
-          : hint.level === 'warning'
-            ? '⚡ 需要配置'
-            : '✅ 推荐使用')
+        (hint.level === 'error' ? '可靠性低' : hint.level === 'warning' ? '需要配置' : '推荐使用')
       "
     >
       <ul style="margin: 4px 0; padding-left: 18px; font-size: 13px">

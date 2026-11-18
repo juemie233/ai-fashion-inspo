@@ -188,7 +188,7 @@ function getTableColumns() {
               'span',
               {
                 style: {
-                  color: '#d03050',
+                  color: 'var(--seal)',
                   cursor: 'pointer',
                   textDecoration: 'underline',
                   fontSize: '12px',
@@ -316,7 +316,7 @@ function expandedRowRender(row: ScraperTask) {
   return h('div', { style: { padding: '12px 24px', maxWidth: '700px' } }, [
     configText
       ? h('div', { style: { marginBottom: '8px' } }, [
-          h('span', { style: { color: '#999', fontSize: '12px' } }, '配置：'),
+          h('span', { style: { color: 'var(--ink-3)', fontSize: '12px' } }, '配置：'),
           h(
             'pre',
             { style: { margin: '4px 0', fontSize: '12px', whiteSpace: 'pre-wrap' } },
@@ -326,16 +326,16 @@ function expandedRowRender(row: ScraperTask) {
       : null,
     row.error
       ? h('div', [
-          h('span', { style: { color: '#d03050', fontSize: '12px' } }, '错误：'),
+          h('span', { style: { color: 'var(--seal)', fontSize: '12px' } }, '错误：'),
           h(
             'pre',
             {
               style: {
                 margin: '4px 0',
                 fontSize: '12px',
-                color: '#d03050',
+                color: 'var(--seal)',
                 whiteSpace: 'pre-wrap',
-                background: '#fef0f0',
+                background: 'var(--seal-soft)',
                 padding: '8px',
                 borderRadius: '4px',
               },
@@ -358,7 +358,7 @@ onUnmounted(() => {
 
 <template>
   <div class="scraper-page">
-    <h2>采集管理</h2>
+    <h2 class="page-title">采集管理</h2>
     <p class="subtitle">自动化采集小红书和抖音的穿搭内容</p>
 
     <a-tabs v-model:active-key="activeTab" type="line">
@@ -475,7 +475,7 @@ onUnmounted(() => {
   margin: 0 auto;
 }
 .subtitle {
-  color: #999;
+  color: var(--ink-3);
   margin-bottom: 16px;
 }
 /* 采集通道分区标题：抖音 f2 通道 / CDP 通道 */
@@ -485,6 +485,19 @@ onUnmounted(() => {
   border-left: 3px solid #165dff;
   font-size: 14px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--ink);
+}
+
+.scraper-page {
+  max-width: 1400px;
+  padding-bottom: 32px;
+}
+
+.subtitle {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0 0 20px;
+  max-width: 52em;
 }
 </style>

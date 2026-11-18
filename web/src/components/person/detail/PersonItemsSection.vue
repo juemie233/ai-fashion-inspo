@@ -209,7 +209,7 @@ function openWork(work: PersonWorkGroup): void {
           :title="hasImageItems ? '' : '当前页没有图片素材（视频不进图片灯箱）'"
           @click="emit('open-lightbox')"
         >
-          🖼️ 全屏浏览
+          全屏浏览
         </a-button>
         <!-- 随机浏览：素材 500+ 的博主靠这个才逛得动（与筛选条件共用） -->
         <a-button
@@ -219,7 +219,7 @@ function openWork(work: PersonWorkGroup): void {
           :title="total === 0 ? '该人物还没有素材' : '从当前筛选结果里随机抽一张来逛'"
           @click="emit('random-browse')"
         >
-          🎲 随机浏览
+          随机浏览
         </a-button>
         <a-button
           v-if="kind === 'blogger' && !unbindMode"
@@ -438,7 +438,7 @@ function openWork(work: PersonWorkGroup): void {
 }
 .work-card {
   position: relative;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: zoom-in;
   background: var(--color-fill-2);
@@ -454,7 +454,7 @@ function openWork(work: PersonWorkGroup): void {
   top: 6px;
   right: 6px;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgb(0 0 0 / 55%);
   color: #fff;
   font-size: 11px;

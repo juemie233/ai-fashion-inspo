@@ -130,11 +130,11 @@ function taskTypeLabel(type: string): string {
         />
         <div
           v-else-if="task.status === 'pending' && task.next_retry_at"
-          style="font-size: 12px; color: #f0a020"
+          style="font-size: 12px; color: var(--amber)"
         >
           等待自动重试中...
         </div>
-        <div v-else-if="task.status === 'paused'" style="font-size: 12px; color: #666">
+        <div v-else-if="task.status === 'paused'" style="font-size: 12px; color: var(--ink-2)">
           ⏸ 已暂停于 {{ task.progress }}%（{{ task.done }}/{{ task.total }}），恢复后从断点续算
         </div>
 
@@ -192,7 +192,11 @@ function taskTypeLabel(type: string): string {
         closable
       >
         <template #title>正在分析 {{ Object.keys(activeAnalyses).length }} 个素材...</template>
-        <div v-for="(status, id) in activeAnalyses" :key="id" style="font-size: 12px; color: #666">
+        <div
+          v-for="(status, id) in activeAnalyses"
+          :key="id"
+          style="font-size: 12px; color: var(--ink-2)"
+        >
           素材 {{ id.slice(0, 8) }}... — {{ status }}
         </div>
       </a-alert>
@@ -210,33 +214,33 @@ function taskTypeLabel(type: string): string {
     <!-- 排队中素材缩略图 -->
     <div v-if="pendingQueue.length > 0" class="pending-queue">
       <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px">
-        📋 排队中 ({{ pendingQueue.length }})
-        <span v-if="queuePaused" style="color: #f0a020; font-size: 12px"> — 已暂停</span>
+        排队中 ({{ pendingQueue.length }})
+        <span v-if="queuePaused" style="color: var(--amber); font-size: 12px"> — 已暂停</span>
       </div>
       <div class="pending-grid">
         <div v-for="item in pendingQueue" :key="item.inspiration_id" class="pending-card">
           <img
             v-if="item.thumbnail_path"
             :src="getFileUrl(item.thumbnail_path)"
-            style="width: 80px; height: 120px; object-fit: cover; border-radius: 4px"
+            style="width: 80px; height: 120px; object-fit: cover; border-radius: var(--radius-sm)"
           />
           <!-- 视频素材：file_path 是 mp4，不能当 <img> 加载（必破图），显示占位符 -->
           <div
             v-else-if="isVideoFile(item.file_path)"
             title="视频素材（缩略图生成中或缺失）"
             class="video-placeholder"
-          >
-            🎬
-          </div>
+          ></div>
           <img
             v-else-if="item.file_path"
             :src="getFileUrl(item.file_path)"
-            style="width: 80px; height: 120px; object-fit: cover; border-radius: 4px"
+            style="width: 80px; height: 120px; object-fit: cover; border-radius: var(--radius-sm)"
           />
-          <div style="font-size: 10px; color: #999; text-align: center; margin-top: 2px">
+          <div style="font-size: 10px; color: var(--ink-3); text-align: center; margin-top: 2px">
             {{ item.inspiration_id.slice(0, 6) }}...
           </div>
-          <div style="font-size: 10px; color: #666; text-align: center">{{ item.status }}</div>
+          <div style="font-size: 10px; color: var(--ink-2); text-align: center">
+            {{ item.status }}
+          </div>
           <a-button
             v-if="item.status === '排队中'"
             size="mini"
@@ -262,7 +266,7 @@ function taskTypeLabel(type: string): string {
 }
 .analyze-count-label {
   font-size: 13px;
-  color: #666;
+  color: var(--ink-2);
   white-space: nowrap;
 }
 
@@ -293,7 +297,7 @@ function taskTypeLabel(type: string): string {
 }
 .task-error {
   font-size: 12px;
-  color: #ef4444;
+  color: var(--seal);
 }
 .task-actions {
   display: flex;
@@ -316,8 +320,8 @@ function taskTypeLabel(type: string): string {
   align-items: center;
   padding: 4px;
   border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #fafafa;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
 }
 
 .video-placeholder {
@@ -326,9 +330,9 @@ function taskTypeLabel(type: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
-  background: #f2f3f5;
-  color: #86909c;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
+  color: var(--ink-3);
   font-size: 24px;
 }
 </style>

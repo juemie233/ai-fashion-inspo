@@ -408,7 +408,7 @@ async function fetchRowItems(record: GenerationRunBrief): Promise<GenerationCand
 async function loadDetail(record: GenerationRunBrief): Promise<void> {
   const rowId = record.id
   if (!details[rowId]) details[rowId] = { items: [], loading: false, error: null }
-  // ⚠ 必须从 reactive 容器里读回 **proxy** 再改：直接改赋进去的原始对象不会触发更新
+  //必须从 reactive 容器里读回 **proxy** 再改：直接改赋进去的原始对象不会触发更新
   // （踩过：展开行一直显示「这里没有候选图」还转圈）
   const state = details[rowId]
   if (state.loading) return

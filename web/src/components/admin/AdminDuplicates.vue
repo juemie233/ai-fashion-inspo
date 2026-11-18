@@ -40,7 +40,7 @@ const dupColumns: TableColumnData[] = [
             确定删除所有 {{ dupCount }} 个重复文件？<br />
             每组将保留评分最高的 1 个（优先有标签/收藏/AI已分析的素材）。<br />
             将释放约 {{ formatBytes(dupBytes) }} 空间。<br />
-            <b style="color: #d03050">此操作物理删除文件，不可撤销！</b>
+            <b style="color: var(--seal)">此操作物理删除文件，不可撤销！</b>
           </template>
           <a-button
             size="small"
@@ -73,8 +73,8 @@ const dupColumns: TableColumnData[] = [
     </a-alert>
 
     <div v-if="duplicates.length > 0">
-      <p style="color: #f0a020; margin-bottom: 12px">
-        ⚠️ 发现 {{ duplicates.length }} 组重复文件，共 {{ dupCount }} 个冗余副本，浪费
+      <p style="color: var(--amber); margin-bottom: 12px">
+        发现 {{ duplicates.length }} 组重复文件，共 {{ dupCount }} 个冗余副本，浪费
         {{ formatBytes(dupBytes) }} 空间
       </p>
       <div v-for="group in duplicates.slice(0, 20)" :key="group.hash" style="margin-bottom: 16px">
@@ -86,6 +86,6 @@ const dupColumns: TableColumnData[] = [
       </div>
     </div>
 
-    <a-empty v-else-if="!checking" description="✅ 未发现完全重复的文件" />
+    <a-empty v-else-if="!checking" description="未发现完全重复的文件" />
   </a-card>
 </template>

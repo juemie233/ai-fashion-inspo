@@ -272,7 +272,7 @@ onMounted(load)
 }
 .register-row {
   border: 1px solid var(--color-border-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -307,7 +307,7 @@ onMounted(load)
   width: 72px;
   height: 72px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border-2);
 }
 </style>

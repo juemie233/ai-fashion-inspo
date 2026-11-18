@@ -127,7 +127,7 @@ async function handleSave() {
     :width="520"
     @update:visible="emit('update:visible', $event)"
   >
-    <p style="color: #999; font-size: 12px; margin-top: 0">
+    <p style="color: var(--ink-3); font-size: 12px; margin-top: 0">
       智能合集按条件动态匹配素材库（不含垃圾桶素材），素材库变化时内容自动更新。
     </p>
     <a-form :model="form" label-align="left" :label-col-style="{ width: '84px' }" size="small">

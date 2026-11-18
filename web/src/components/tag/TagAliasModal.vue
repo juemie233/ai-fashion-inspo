@@ -64,7 +64,7 @@ async function handleDeleteAlias(aliasId: number) {
 
 <template>
   <a-modal v-model:visible="show" title="标签别名" :footer="false" :width="520">
-    <p v-if="tag" style="font-size: 13px; color: #999; margin-bottom: 12px">
+    <p v-if="tag" style="font-size: 13px; color: var(--ink-3); margin-bottom: 12px">
       「{{ tag.name }}」的别名：AI 识别到别名时会自动归为该标签
     </p>
     <a-space style="margin-bottom: 12px">
@@ -89,7 +89,7 @@ async function handleDeleteAlias(aliasId: number) {
           {{ a.alias }}
         </a-list-item>
       </a-list>
-      <div v-else-if="!aliasLoading" style="text-align: center; color: #999; padding: 20px">
+      <div v-else-if="!aliasLoading" style="text-align: center; color: var(--ink-3); padding: 20px">
         暂无别名
       </div>
     </a-spin>

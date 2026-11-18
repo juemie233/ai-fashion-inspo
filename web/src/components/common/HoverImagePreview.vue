@@ -110,9 +110,9 @@ onBeforeUnmount(clear)
 .hover-preview-panel {
   max-width: 90vw;
   max-height: 88vh;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: #fff;
+  background: var(--sheet);
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
   animation: hover-preview-in 0.15s ease;
 }

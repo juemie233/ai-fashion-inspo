@@ -86,7 +86,7 @@ defineEmits<{
 .profile-block h4 {
   margin: 0 0 10px;
   font-size: 14px;
-  color: #4b5563;
+  color: var(--ink-2);
 }
 
 .tag-chips {
@@ -101,7 +101,7 @@ defineEmits<{
   gap: 4px;
   padding: 3px 10px;
   border-radius: 999px;
-  background: #eef4ff;
+  background: var(--sheet-2);
   color: #2f5bd0;
   font-size: 13px;
   cursor: pointer;
@@ -136,7 +136,7 @@ defineEmits<{
 .trend-bucket {
   width: 72px;
   flex-shrink: 0;
-  color: #4b5563;
+  color: var(--ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -146,8 +146,8 @@ defineEmits<{
 .trend-bar {
   flex: 1;
   height: 8px;
-  background: #eef1f6;
-  border-radius: 4px;
+  background: var(--sheet-2);
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
@@ -155,21 +155,21 @@ defineEmits<{
   display: block;
   height: 100%;
   background: #7ba7f0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .trend-fill {
   display: block;
   height: 100%;
   background: #9aa7f0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .cat-count,
 .trend-count {
   width: 28px;
   text-align: right;
-  color: #6b7280;
+  color: var(--ink-3);
   font-size: 12px;
 }
 

@@ -224,12 +224,12 @@ function confirmEdit() {
 
   <!-- 批量评分弹窗 -->
   <a-modal v-model:visible="ratingModalOpen" title="批量评分" :width="420">
-    <p style="color: #999; font-size: 12px">
+    <p style="color: var(--ink-3); font-size: 12px">
       为所选 {{ count }} 个素材设置同一评分；0 星表示清除评分，可再次修改。
     </p>
     <div style="display: flex; align-items: center; gap: 12px">
       <a-rate v-model="ratingValue" allow-clear :count="5" />
-      <span style="color: #666; font-size: 12px">
+      <span style="color: var(--ink-2); font-size: 12px">
         {{ ratingValue > 0 ? `已选 ${ratingValue} 星` : '未选择（应用即清除评分）' }}
       </span>
     </div>
@@ -244,7 +244,7 @@ function confirmEdit() {
 
   <!-- 加标签弹窗 -->
   <a-modal v-model:visible="tagModalOpen" title="批量添加标签" :width="460">
-    <p style="color: #999; font-size: 12px">
+    <p style="color: var(--ink-3); font-size: 12px">
       为所选 {{ count }} 个素材批量关联标签（已关联的自动跳过）。
     </p>
     <a-select
@@ -267,7 +267,7 @@ function confirmEdit() {
 
   <!-- 编辑元数据弹窗 -->
   <a-modal v-model:visible="editModalOpen" title="批量编辑元数据" :width="460">
-    <p style="color: #999; font-size: 12px">
+    <p style="color: var(--ink-3); font-size: 12px">
       仅更新所选 {{ count }} 个素材中你显式填写的字段，其余保持不变。
     </p>
     <a-form
@@ -303,9 +303,9 @@ function confirmEdit() {
   flex-wrap: wrap;
   padding: 8px 12px;
   margin-bottom: 8px;
-  background: #eef4ff;
+  background: var(--sheet-2);
   border: 1px solid #c8d8f5;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 .batch-count {
   font-size: 13px;

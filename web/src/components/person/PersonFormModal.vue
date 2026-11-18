@@ -268,7 +268,7 @@ async function handleSubmit() {
           rel="noopener noreferrer"
           style="display: inline-block; margin-top: 6px; font-size: 12px"
         >
-          🔗 打开主页（新窗口）
+          打开主页（新窗口）
         </a-link>
       </a-form-item>
 
@@ -283,7 +283,7 @@ async function handleSubmit() {
             style="margin-left: 8px; padding: 0 4px; height: auto"
             @click="handleGenerateBio"
           >
-            ✨ AI 生成
+            AI 生成
           </a-button>
         </template>
         <a-textarea
@@ -339,7 +339,7 @@ async function handleSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #eef1f6;
+  background: var(--sheet-2);
   color: #4a5a7a;
   font-size: 22px;
   font-weight: 600;
@@ -355,7 +355,7 @@ async function handleSubmit() {
 
 .avatar-form-tip {
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
   line-height: 1.6;
 }
 
@@ -369,7 +369,7 @@ async function handleSubmit() {
   margin-left: 4px;
   border-radius: 50%;
   background: #e5e6eb;
-  color: #4e5969;
+  color: var(--ink-2);
   font-size: 11px;
   line-height: 1;
   cursor: help;

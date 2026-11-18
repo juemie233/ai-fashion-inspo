@@ -25,19 +25,19 @@ const trendGranularity = ref<'month' | 'week' | 'day'>('month')
 
 // ===== 类别 → 颜色（dataviz 参考色板，固定顺序，不循环；含新增 design_detail/material） =====
 const CATEGORY_COLORS: Record<string, string> = {
-  style: '#2a78d6',
-  item_type: '#eb6834',
-  color: '#1baf7a',
-  design_detail: '#14b8a6',
-  material: '#a16207',
-  body_part: '#eda100',
-  fit: '#e87ba4',
-  attribute: '#008300',
-  free: '#4a3aa7',
-  outfit: '#e34948',
+  style: '#2E4B40',
+  item_type: '#A6402F',
+  color: '#3F6B57',
+  design_detail: '#3F6B57',
+  material: '#8A6A2F',
+  body_part: '#8A6A2F',
+  fit: '#8A5F6A',
+  attribute: '#3F6B57',
+  free: '#6B5A6E',
+  outfit: '#A6402F',
 }
-const SERIES_BLUE = '#2a78d6'
-const MUTED_INK = '#898781'
+const SERIES_BLUE = '#2E4B40'
+const MUTED_INK = '#686C64'
 
 function categoryColor(cat: string): string {
   return CATEGORY_COLORS[cat] || MUTED_INK
@@ -93,7 +93,7 @@ const topOption = computed<EChartsOption | null>(() => {
       type: 'category',
       data: sorted.map((t) => t.name),
       axisLabel: {
-        color: '#52514e',
+        color: '#4F534D',
         fontSize: 11,
         // 长标签（如「娃娃领连衣裙」）若不设宽度会被截断：限宽 + 超出省略，悬停看全名
         width: 72,
@@ -109,7 +109,7 @@ const topOption = computed<EChartsOption | null>(() => {
         data: sorted.map((t) => t.usage_count),
         itemStyle: { color: SERIES_BLUE, borderRadius: [0, 4, 4, 0] },
         barMaxWidth: 14,
-        label: { show: true, position: 'right', color: '#52514e', fontSize: 11 },
+        label: { show: true, position: 'right', color: '#4F534D', fontSize: 11 },
       },
     ],
   }
@@ -134,7 +134,7 @@ const graphOption = computed<EChartsOption | null>(() => {
         layout: 'force',
         roam: true,
         force: { repulsion: 120, edgeLength: 80, gravity: 0.1 },
-        label: { show: true, position: 'right', fontSize: 11, color: '#52514e' },
+        label: { show: true, position: 'right', fontSize: 11, color: '#4F534D' },
         emphasis: { focus: 'adjacency', label: { fontWeight: 'bold' } },
         data: net.nodes.map((n) => ({
           id: n.id,
@@ -288,7 +288,7 @@ function onGranularityChange() {
   flex: 1 1 0;
   min-width: 0;
   border: 1px solid #e1e0d9;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;

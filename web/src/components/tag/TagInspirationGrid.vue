@@ -241,7 +241,9 @@ async function reanalyzeAiTagged() {
       <template #header-left>
         <h3 style="margin: 0">「{{ tag.name }}」</h3>
         <a-tag size="small" style="margin-left: 8px">{{ tag.usage_count }} 次</a-tag>
-        <span style="font-size: 13px; color: #999; margin-left: 8px">共 {{ total }} 个</span>
+        <span style="font-size: 13px; color: var(--ink-3); margin-left: 8px"
+          >共 {{ total }} 个</span
+        >
         <a-popconfirm
           content="将按当前提示词重新 AI 分析该标签下由 AI 打标的素材并覆盖其结果（手动/种子标签保留）；后台执行，可到任务中心查看进度。确定继续？"
           :ok-button-props="{ loading: reanalyzing }"
@@ -283,7 +285,7 @@ async function reanalyzeAiTagged() {
 
     <!-- 批量添加标签弹窗 -->
     <a-modal v-model:visible="showBatchAddModal" title="批量添加标签" :footer="false" :width="480">
-      <p style="font-size: 13px; color: #999; margin: 0 0 12px">
+      <p style="font-size: 13px; color: var(--ink-3); margin: 0 0 12px">
         将为选中的 {{ batchActionIds.length }} 个素材添加以下标签（已存在的关联自动跳过）：
       </p>
       <a-form
@@ -335,7 +337,7 @@ async function reanalyzeAiTagged() {
 
 <style scoped>
 .grid-placeholder {
-  color: #999;
+  color: var(--ink-3);
   text-align: center;
   padding: 60px 20px;
   font-size: 14px;

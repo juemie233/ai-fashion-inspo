@@ -22,20 +22,20 @@ const platformOption = computed<EChartsOption | null>(() => {
     legend: { top: 0, textStyle: { fontSize: 11 } },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: names, axisLabel: { fontSize: 11 } },
-    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#eee' } } },
+    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#D9D7CD' } } },
     series: [
       {
         name: '任务数',
         type: 'bar',
         data: rows.map((r) => r.tasks),
-        itemStyle: { color: '#2a78d6' },
+        itemStyle: { color: '#2E4B40' },
         barMaxWidth: 32,
       },
       {
         name: '入库素材',
         type: 'bar',
         data: rows.map((r) => r.added),
-        itemStyle: { color: '#1baf7a' },
+        itemStyle: { color: '#3F6B57' },
         barMaxWidth: 32,
       },
     ],
@@ -55,14 +55,14 @@ const dayOption = computed<EChartsOption | null>(() => {
       data: rows.map((r) => r.date.slice(5)),
       axisLabel: { fontSize: 11 },
     },
-    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#eee' } } },
+    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#D9D7CD' } } },
     series: [
       {
         name: '入库素材',
         type: 'line',
         smooth: true,
         data: rows.map((r) => r.added),
-        itemStyle: { color: '#1baf7a' },
+        itemStyle: { color: '#3F6B57' },
         areaStyle: { opacity: 0.08 },
       },
       {
@@ -70,7 +70,7 @@ const dayOption = computed<EChartsOption | null>(() => {
         type: 'line',
         smooth: true,
         data: rows.map((r) => r.failed),
-        itemStyle: { color: '#d03050' },
+        itemStyle: { color: '#A6402F' },
       },
     ],
   }
@@ -102,7 +102,7 @@ async function refresh() {
         "
         @click="toggle"
       >
-        <span>📊 采集统计（近 30 天）{{ expanded ? '▼' : '▶' }}</span>
+        <span>采集统计（近 30 天）{{ expanded ? '▼' : '▶' }}</span>
         <a-button v-if="expanded" size="mini" type="text" @click.stop="refresh">刷新</a-button>
       </div>
     </template>
@@ -166,23 +166,23 @@ async function refresh() {
   align-items: center;
   min-width: 84px;
   padding: 10px 14px;
-  border-radius: 8px;
-  background: #f6f6f4;
+  border-radius: var(--radius-md);
+  background: var(--sheet-2);
 }
 .stat-num {
   font-size: 20px;
   font-weight: bold;
-  color: #333;
+  color: var(--ink);
 }
 .stat-num.ok {
-  color: #18a058;
+  color: var(--pine);
 }
 .stat-num.bad {
-  color: #d03050;
+  color: var(--seal);
 }
 .stat-label {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
   margin-top: 2px;
 }
 .stats-charts {
@@ -192,17 +192,17 @@ async function refresh() {
 }
 .chart-box {
   border: 1px solid #eee;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 8px;
 }
 .chart-title {
   font-size: 12px;
-  color: #666;
+  color: var(--ink-2);
   text-align: center;
 }
 .stats-empty {
   text-align: center;
-  color: #999;
+  color: var(--ink-3);
   padding: 24px 0;
   font-size: 13px;
 }

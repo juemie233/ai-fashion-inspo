@@ -237,7 +237,7 @@ const refOptions = computed(() =>
 }
 .cmp-hint {
   font-size: 12px;
-  color: #8a8f99;
+  color: var(--ink-3);
 }
 .cmp-side {
   display: grid;
@@ -246,9 +246,9 @@ const refOptions = computed(() =>
 }
 .cmp-pane {
   border: 1px solid #e5e6eb;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  background: #f7f8fa;
+  background: var(--sheet-2);
 }
 .cmp-pane-head {
   display: flex;
@@ -256,12 +256,12 @@ const refOptions = computed(() =>
   gap: 6px;
   padding: 6px 8px;
   font-size: 12px;
-  color: #4e5969;
-  background: #fff;
+  color: var(--ink-2);
+  background: var(--sheet);
   border-bottom: 1px solid #e5e6eb;
 }
 .cmp-file {
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 11px;
 }
 .cmp-img {
@@ -270,7 +270,7 @@ const refOptions = computed(() =>
   height: 58vh;
   height: 58dvh;
   object-fit: contain;
-  background: #f2f3f5;
+  background: var(--sheet-2);
 }
 .cmp-empty {
   display: flex;
@@ -279,15 +279,15 @@ const refOptions = computed(() =>
   height: 58vh;
   height: 58dvh;
   font-size: 13px;
-  color: #8a8f99;
+  color: var(--ink-3);
 }
 .cmp-overlay {
   position: relative;
   height: 62vh;
   height: 62dvh;
   border: 1px solid #e5e6eb;
-  border-radius: 4px;
-  background: #f2f3f5;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
   overflow: hidden;
 }
 .cmp-overlay-img {
@@ -314,16 +314,16 @@ const refOptions = computed(() =>
   width: 64px;
   height: 64px;
   border: 2px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: pointer;
-  background: #f7f8fa;
+  background: var(--sheet-2);
 }
 .cmp-strip-item:hover {
-  border-color: #94bfff;
+  border-color: var(--ink-3);
 }
 .cmp-strip-item.is-current {
-  border-color: #165dff;
+  border-color: var(--pine);
 }
 .cmp-strip-item img {
   width: 100%;

@@ -346,7 +346,7 @@ onMounted(() => {
 }
 .face-tip {
   font-size: 12px;
-  color: #999;
+  color: var(--ink-3);
   padding: 4px 0;
 }
 .face-list {
@@ -362,7 +362,7 @@ onMounted(() => {
 }
 .face-index {
   font-size: 12px;
-  color: #666;
+  color: var(--ink-2);
   min-width: 56px;
 }
 

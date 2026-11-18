@@ -246,7 +246,7 @@ function confirm(): void {
 .pick-tip {
   flex: 1;
   font-size: 12px;
-  color: #8a8f99;
+  color: var(--ink-3);
 }
 .pick-strip {
   display: flex;
@@ -254,14 +254,14 @@ function confirm(): void {
   flex-wrap: wrap;
   padding: 8px;
   margin-bottom: 10px;
-  background: #f7f8fa;
-  border-radius: 4px;
+  background: var(--sheet-2);
+  border-radius: var(--radius-sm);
 }
 .pick-chip {
   position: relative;
   width: 54px;
   height: 54px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: #e5e6eb;
 }
@@ -279,7 +279,7 @@ function confirm(): void {
   min-width: 15px;
   height: 15px;
   padding: 0 3px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgb(22 93 255 / 90%);
   color: #fff;
   font-size: 10px;
@@ -312,16 +312,16 @@ function confirm(): void {
 .pick-item {
   position: relative;
   border: 2px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: pointer;
-  background: #f7f8fa;
+  background: var(--sheet-2);
 }
 .pick-item:hover {
-  border-color: #94bfff;
+  border-color: var(--ink-3);
 }
 .pick-item.is-picked {
-  border-color: #165dff;
+  border-color: var(--pine);
 }
 .pick-item img {
   width: 100%;
@@ -336,8 +336,8 @@ function confirm(): void {
   min-width: 18px;
   height: 18px;
   padding: 0 4px;
-  border-radius: 9px;
-  background: #165dff;
+  border-radius: var(--radius-md);
+  background: var(--pine);
   color: #fff;
   font-size: 11px;
   line-height: 18px;
@@ -346,7 +346,7 @@ function confirm(): void {
 .pick-empty {
   padding: 32px 0;
   text-align: center;
-  color: #8a8f99;
+  color: var(--ink-3);
   font-size: 13px;
 }
 .pick-more {

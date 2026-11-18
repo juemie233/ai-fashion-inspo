@@ -153,11 +153,11 @@ onMounted(loadStatus)
 }
 .f2a-label {
   font-size: 13px;
-  color: #1d2129;
+  color: var(--ink);
 }
 .f2a-tip {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .f2a-hint {
   margin-top: 6px;

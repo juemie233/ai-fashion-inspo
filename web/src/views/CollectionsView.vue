@@ -2,7 +2,7 @@
 /** 收藏合集页：左侧合集列表（拖拽排序）+ 右侧合集内容瀑布流。
  *
  * 手动合集：瀑布流 + 批量多选移出 + 「编辑排序」模式（缩略图条带拖拽编排展示顺序）；
- * 智能合集：⚡ 徽标 + 条件摘要，无加入/移出/排序（内容由条件动态决定），
+ * 智能合集：徽标 + 条件摘要，无加入/移出/排序（内容由条件动态决定），
  * 支持「编辑条件」「转手动（固化）」。
  */
 
@@ -305,7 +305,7 @@ onMounted(() => {
                   :src="getFileUrl(child.cover_thumbnail_path)"
                   alt=""
                 />
-                <span v-else class="folder-cover-empty">📂</span>
+                <span v-else class="folder-cover-empty">暂无封面</span>
               </div>
               <div class="folder-name" :title="child.name">{{ child.name }}</div>
               <div class="folder-count">{{ child.item_count ?? 0 }} 个素材</div>
@@ -446,7 +446,7 @@ onMounted(() => {
 
     <!-- 手动合集快速添加素材（按 ID） -->
     <a-modal v-model:visible="addOpen" title="添加素材到合集" :width="460">
-      <p style="color: #999; font-size: 12px">
+      <p style="color: var(--ink-3); font-size: 12px">
         输入素材 ID（可在素材库/详情页查看），多个用逗号或空格分隔。推荐在素材库用「批量选择 →
         加入合集」。
       </p>
@@ -492,9 +492,9 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   min-height: 420px;
-  background: #fff;
+  background: var(--sheet);
   border: 1px dashed #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 /* 分类节点（一级）的收藏夹卡片墙：像抖音的收藏夹列表，而不是混合素材墙 */
 .folder-list {
@@ -503,7 +503,7 @@ onMounted(() => {
 .folder-tip {
   margin: 0 0 10px;
   font-size: 12px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 .folder-grid {
   display: grid;
@@ -512,19 +512,19 @@ onMounted(() => {
 }
 .folder-card {
   border: 1px solid #e5e6eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
-  background: #fff;
+  background: var(--sheet);
   transition: all 0.15s;
 }
 .folder-card:hover {
-  border-color: #94bfff;
+  border-color: var(--ink-3);
   box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
 }
 .folder-cover {
   height: 96px;
-  background: #f7f8fa;
+  background: var(--sheet-2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -549,12 +549,12 @@ onMounted(() => {
 .folder-count {
   padding: 2px 10px 10px;
   font-size: 11px;
-  color: #86909c;
+  color: var(--ink-3);
 }
 .folder-unclassified {
   margin-top: 10px;
   font-size: 12px;
-  color: #ff7d00;
+  color: var(--amber);
 }
 .content-toolbar {
   display: flex;
@@ -567,9 +567,9 @@ onMounted(() => {
   gap: 10px;
   padding: 8px 12px;
   margin-bottom: 8px;
-  background: #fff7e6;
+  background: var(--sheet-2);
   border: 1px solid #ffd591;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 13px;
 }
 
@@ -577,5 +577,110 @@ onMounted(() => {
   display: flex;
   justify-content: center;
   padding: 24px 0;
+}
+
+/* ── 印样台：收藏合集（左索引 + 右印样纸）── */
+.collections-page {
+  gap: 20px;
+  max-width: 1680px;
+  padding-bottom: 32px;
+}
+
+.folder-tip {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.folder-grid {
+  gap: 14px;
+}
+
+.folder-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--sheet);
+  transition: border-color 0.12s ease;
+}
+
+.folder-card:hover {
+  border-color: var(--ink-3);
+  box-shadow: none;
+}
+
+.folder-cover {
+  background: var(--sheet-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-3);
+}
+
+.folder-cover-empty {
+  font-size: 11px;
+  opacity: 1;
+}
+
+.folder-name {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.folder-count {
+  color: var(--ink-3);
+}
+
+.folder-unclassified {
+  color: var(--amber);
+}
+
+.content-toolbar {
+  margin-bottom: 12px;
+}
+
+.remove-bar {
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+  border-radius: 0;
+}
+
+.collection-empty {
+  background: var(--sheet);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+}
+
+/* 900 以下：左列合集索引改为上下堆叠，宽度跟随内容区 */
+@media (max-width: 900px) {
+  .collections-page {
+    flex-direction: column;
+  }
+
+  .collections-page :deep(.collection-list) {
+    width: 100% !important;
+    max-width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+/* 内容区最小宽度归零：窄屏下由内部组件自己换行/横滑，而不是把父容器撑宽 */
+.collections-page,
+.collections-page :deep(.collection-content) {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .collections-page {
+    width: 100%;
+  }
+
+  .collections-page :deep(.collection-content) {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+/* 左栏是 padding 盒：width:100% 必须配 border-box，否则 padding 会把内容顶出视口 */
+.collections-page :deep(.collection-list) {
+  box-sizing: border-box;
 }
 </style>

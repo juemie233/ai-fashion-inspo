@@ -99,9 +99,9 @@ function needsGovern(s: CategoryStat): boolean {
 }
 
 function scoreColor(s: number): string {
-  if (s >= 85) return '#1baf7a'
-  if (s >= 60) return '#eda100'
-  return '#e34948'
+  if (s >= 85) return '#3F6B57'
+  if (s >= 60) return '#8A6A2F'
+  return '#A6402F'
 }
 
 /** 加载某问题类型的明细（分页） */
@@ -283,7 +283,7 @@ onBeforeUnmount(() => {
           <a-table-column title="未使用" :width="80" align="center" data-index="unused" />
           <a-table-column title="长尾率" :width="170" align="center">
             <template #cell="{ record }">
-              <span :style="{ color: needsGovern(record) ? '#e34948' : undefined }">{{
+              <span :style="{ color: needsGovern(record) ? '#A6402F' : undefined }">{{
                 percent(record.long_tail_rate)
               }}</span>
               <a-tag v-if="needsGovern(record)" color="red" size="small" class="govern-tag"
@@ -434,14 +434,14 @@ onBeforeUnmount(() => {
 }
 .score-card {
   min-width: 140px;
-  background: #f8fafc;
+  background: var(--sheet-2);
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
 }
 .score-label {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--ink-3);
 }
 .score-value {
   font-size: 28px;
@@ -450,24 +450,24 @@ onBeforeUnmount(() => {
 }
 .score-sub {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .issue-chip {
   flex: 1;
   min-width: 110px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   cursor: pointer;
   transition: all 0.15s;
 }
 .issue-chip.active {
-  border-color: #2a78d6;
-  background: #eef4fd;
+  border-color: var(--pine);
+  background: var(--sheet-2);
 }
 .chip-name {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--ink-3);
 }
 .chip-count {
   font-size: 20px;
@@ -501,7 +501,7 @@ onBeforeUnmount(() => {
 }
 .list-total {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ink-3);
 }
 .batch-bar {
   margin-top: 8px;
