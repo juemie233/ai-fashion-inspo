@@ -134,6 +134,13 @@ export function useTaskCenter() {
     startPoll()
   })
 
+  // 重新出现活动任务时确保轮询在跑：轮询空闲自停之后，用户再点「重试失败采集任务 /
+  // 恢复暂停任务」只会触发一次列表刷新；采集任务不走 task_event 推送，不重启轮询
+  // 进度条与状态就永远停在那里（必须重进页面才恢复）。
+  watch(hasActive, (active) => {
+    if (active && !pollRunning.value) startPoll()
+  })
+
   // ===== WebSocket 推送：任务事件驱动即时更新 =====
 
   // 全量刷新去抖：终态/新任务事件触发，300ms 合并避免事件风暴下频繁拉取

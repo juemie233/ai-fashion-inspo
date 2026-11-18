@@ -227,15 +227,6 @@ export default function SearchScreen() {
     [searchText, selectedTags, mode],
   )
 
-  /** 详情页改收藏后会递增 favoriteRevision：搜索页的 results 是本地状态，
-   * 单靠 store.items 同步不到；版本变化时重跑当前搜索。 */
-  const lastFavoriteRevisionRef = useRef(0)
-  useEffect(() => {
-    if (favoriteRevision === lastFavoriteRevisionRef.current) return
-    lastFavoriteRevisionRef.current = favoriteRevision
-    if (searched) void doSearch(1)
-  }, [favoriteRevision, searched, doSearch])
-
   /** 图像向量检索（相册选图与拍照共用）：拿到本地图片地址后跑 `/search/vector` */
   const runImageSearch = async (uri: string) => {
     const seq = ++searchSeqRef.current
@@ -259,6 +250,39 @@ export default function SearchScreen() {
       if (seq === searchSeqRef.current) setLoading(false)
     }
   }
+
+  /** 收藏态变化后重跑「同一条」向量检索（不改查询条件、不清空结果来源标记）。
+   *
+   * 不能直接复用 doSearch(1)：它会 setImageQueryUri(null)/setSemanticQuery(null)
+   * 并改跑关键词搜索，以图搜图的结果会被一次无关查询顶掉。
+   */
+  const refreshVectorResults = async () => {
+    const seq = ++searchSeqRef.current
+    try {
+      const hits = imageQueryUri
+        ? await vectorSearchByImage(imageQueryUri, PAGE_SIZE)
+        : semanticQuery
+          ? await vectorSearchByText(semanticQuery, PAGE_SIZE)
+          : null
+      if (!hits || seq !== searchSeqRef.current) return
+      setResults(hits.map((h) => h.inspiration).filter(Boolean))
+      setTotal(hits.length)
+    } catch {
+      // 刷新失败保留旧结果，不打断浏览（收藏态图标可能短暂落后，下次搜索会校正）
+    }
+  }
+
+  /** 详情页改收藏后会递增 favoriteRevision：搜索页的 results 是本地状态，
+   * 单靠 store.items 同步不到；版本变化时按「当前结果来源」重跑同一路检索。 */
+  const lastFavoriteRevisionRef = useRef(0)
+  useEffect(() => {
+    if (favoriteRevision === lastFavoriteRevisionRef.current) return
+    lastFavoriteRevisionRef.current = favoriteRevision
+    if (!searched) return
+    if (imageQueryUri || semanticQuery) void refreshVectorResults()
+    else void doSearch(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [favoriteRevision, searched, imageQueryUri, semanticQuery, doSearch])
 
   /** 以图搜图：相册选图 → 图像向量检索 */
   const doImageSearch = async () => {
