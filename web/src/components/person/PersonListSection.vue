@@ -13,12 +13,14 @@ import { usePersonList } from '@/composables/usePersonList'
 import { useBloggerImport } from '@/composables/useBloggerImport'
 import { useAvatarFill } from '@/composables/useAvatarFill'
 import { usePersonBatch } from '@/composables/usePersonBatch'
+import { useRatingBackfill } from '@/composables/useRatingBackfill'
 import PersonDuplicateModal from '@/components/person/PersonDuplicateModal.vue'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import PersonImportAlert from '@/components/person/PersonImportAlert.vue'
 import PersonTopList from '@/components/person/PersonTopList.vue'
 import PersonEnrichManager from '@/components/person/PersonEnrichManager.vue'
 import IpStatsPanel from '@/components/person/IpStatsPanel.vue'
+import RatingPickerModal from '@/components/common/RatingPickerModal.vue'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 import { getFileUrl } from '@/api/inspirations'
@@ -72,6 +74,29 @@ async function onFillAvatars() {
   await fillAvatars()
 }
 
+// ── 补全评分（仅穿搭博主）──
+/** 「补全评分」弹窗开关 */
+const ratingBackfillOpen = ref(false)
+/** 弹窗说明：范围 / 优先级 / 不覆盖规则都写在弹窗里，按钮上不堆字 */
+const RATING_BACKFILL_DESC =
+  '只补未评分素材，已评分的不覆盖。优先素材数 6+ 的博主、按素材数从少到多处理，' +
+  '让尽可能多的博主先有均分。选 1~5 星作为统一评分。'
+const {
+  running: ratingBackfillRunning,
+  progressText: ratingBackfillProgress,
+  start: startRatingBackfill,
+  stop: stopRatingBackfill,
+} = useRatingBackfill(async () => {
+  // 完成后刷新列表：博主的均分/已评数立刻反映出来
+  await store.reload()
+})
+
+/** 选好星级 → 关闭弹窗并提交后台任务（按钮上显示进度） */
+async function onRatingBackfillConfirm(rating: number) {
+  ratingBackfillOpen.value = false
+  await startRatingBackfill(rating)
+}
+
 /** 批量操作（多选 / 纳入追踪 / 删除 / 清头像 / 同名建议 / 头像覆盖率） */
 const {
   selectedKeys,
@@ -99,7 +124,10 @@ onMounted(() => {
   void loadCoverage()
 })
 
-onBeforeUnmount(stopAvatarFill)
+onBeforeUnmount(() => {
+  stopAvatarFill()
+  stopRatingBackfill()
+})
 
 /** 补全弹窗关闭后：刷新缺失计数与博主列表 */
 function afterEnrich() {
@@ -197,6 +225,16 @@ function handleExpandedChange(keys: Array<string | number>) {
       <div style="display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px">
         <a-button v-if="kind === 'blogger'" type="secondary" @click="enrichOpen = true">
           一键补全主页<template v-if="missingTotal > 0">（{{ missingTotal }}）</template>
+        </a-button>
+        <!-- 补全评分：给未评分素材补统一星级（后台任务，按钮上显示进度） -->
+        <a-button
+          v-if="kind === 'blogger'"
+          type="secondary"
+          :loading="ratingBackfillRunning"
+          :disabled="ratingBackfillRunning"
+          @click="ratingBackfillOpen = true"
+        >
+          补全评分<template v-if="ratingBackfillRunning">（{{ ratingBackfillProgress }}）</template>
         </a-button>
         <!-- 批量补头像：从博主自己的素材里裁真实人像，默认只补空缺 -->
         <a-popconfirm
@@ -370,6 +408,17 @@ function handleExpandedChange(keys: Array<string | number>) {
       v-if="kind === 'blogger'"
       v-model:visible="enrichOpen"
       @finished="afterEnrich"
+    />
+
+    <!-- 补全评分：只补未评分素材，已评分不覆盖；提交后走后台任务并轮询进度 -->
+    <RatingPickerModal
+      v-if="kind === 'blogger'"
+      v-model:visible="ratingBackfillOpen"
+      title="补全博主素材评分"
+      :description="RATING_BACKFILL_DESC"
+      confirm-text="开始补全"
+      :loading="ratingBackfillRunning"
+      @confirm="onRatingBackfillConfirm"
     />
   </div>
 </template>

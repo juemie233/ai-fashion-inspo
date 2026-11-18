@@ -5,6 +5,7 @@ import { computed, reactive, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { BatchUpdateFields } from '@/api/inspirations'
 import { bloggersApi } from '@/api/persons'
+import RatingPickerModal from '@/components/common/RatingPickerModal.vue'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
 const props = defineProps<{
@@ -114,11 +115,12 @@ function confirmLinkBloggers() {
 
 // ── 批量评分弹窗 ──
 const ratingModalOpen = ref(false)
-/** 0 = 未选择/清除；1~5 = 星数（Arco a-rate allow-clear 回 0） */
-const ratingValue = ref(0)
+/** 弹窗说明：把「为谁评、0 星含义」讲清楚（星级本身由公共弹窗管理） */
+const ratingDescription = computed(
+  () => `为所选 ${props.count} 个素材设置同一评分；0 星表示清除评分，可再次修改。`,
+)
 
 function openRatingModal() {
-  ratingValue.value = 0
   ratingModalOpen.value = true
 }
 
@@ -222,25 +224,16 @@ function confirmEdit() {
     <a-button size="mini" type="text" @click="emit('exit')">退出批量</a-button>
   </div>
 
-  <!-- 批量评分弹窗 -->
-  <a-modal v-model:visible="ratingModalOpen" title="批量评分" :width="420">
-    <p style="color: var(--ink-3); font-size: 12px">
-      为所选 {{ count }} 个素材设置同一评分；0 星表示清除评分，可再次修改。
-    </p>
-    <div style="display: flex; align-items: center; gap: 12px">
-      <a-rate v-model="ratingValue" allow-clear :count="5" />
-      <span style="color: var(--ink-2); font-size: 12px">
-        {{ ratingValue > 0 ? `已选 ${ratingValue} 星` : '未选择（应用即清除评分）' }}
-      </span>
-    </div>
-    <template #footer>
-      <div style="display: flex; justify-content: flex-end; gap: 8px">
-        <a-button size="small" @click="ratingModalOpen = false">取消</a-button>
-        <a-button size="small" @click="applyRating(0)">清除评分</a-button>
-        <a-button size="small" type="primary" @click="applyRating(ratingValue)"> 确定 </a-button>
-      </div>
-    </template>
-  </a-modal>
+  <!-- 批量评分弹窗（公共 RatingPickerModal；允许清除=提交 0 星，保留原行为） -->
+  <RatingPickerModal
+    v-model:visible="ratingModalOpen"
+    title="批量评分"
+    :description="ratingDescription"
+    confirm-text="确定"
+    allow-clear
+    allow-empty-confirm
+    @confirm="applyRating"
+  />
 
   <!-- 加标签弹窗 -->
   <a-modal v-model:visible="tagModalOpen" title="批量添加标签" :width="460">

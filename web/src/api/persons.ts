@@ -432,6 +432,31 @@ export const bloggersApi = {
     )
     return data
   },
+
+  /**
+   * 批量补全博主的未评分素材评分（后台任务）。
+   *
+   * 只给「还没有评分」的素材写统一星级，已评分的不覆盖；优先素材数 6+ 的博主、
+   * 按素材数从少到多处理（让尽量多的博主先有均分）。传 `bloggerIds` 时只处理这些博主。
+   */
+  async backfillRatings(rating: number, bloggerIds?: number[]): Promise<RatingBackfillTaskCreated> {
+    const { data } = await apiClient.post<RatingBackfillTaskCreated>('/bloggers/rating-backfill', {
+      rating,
+      // 不传/空数组 = 全部博主；只有显式选了范围才带上，避免后端把空数组当「什么都不做」
+      ...(bloggerIds && bloggerIds.length > 0 ? { blogger_ids: bloggerIds } : {}),
+    })
+    return data
+  },
+}
+
+/** 「补全博主未评分素材」任务的创建结果（仅本模块内部使用） */
+interface RatingBackfillTaskCreated {
+  /** 后台任务 ID（轮询 /tasks/{id} 看进度） */
+  task_id: number
+  /** 本次计划补全的未评分素材数 */
+  total: number
+  /** 后端返回的人话提示 */
+  message: string
 }
 
 /** 博主注销人脸 / 解绑素材的结果计数 */

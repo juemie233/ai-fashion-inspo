@@ -683,6 +683,7 @@ describe('可暂停/可取消白名单内容锁定（与后端 app/routers/tasks
     expect([...CANCELABLE_TASK_TYPES].sort()).toEqual(
       [
         'batch_analyze',
+        'blogger_rating_backfill',
         'face_match',
         'face_scan',
         'image_gen',
