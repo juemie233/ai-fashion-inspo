@@ -244,4 +244,65 @@ watch(
   padding: 24px;
   color: #999;
 }
+
+/* ── 印样台网格：收窄缝隙、去掉圆角与发光；定位用松烟绿角线而不是金色光晕 ── */
+.masonry-grid {
+  gap: 10px;
+}
+
+.masonry-column {
+  gap: 10px;
+}
+
+.masonry-grid.density-compact {
+  gap: 4px;
+}
+
+.masonry-grid.density-compact .masonry-column {
+  gap: 4px;
+}
+
+.masonry-grid.density-comfortable {
+  gap: 20px;
+}
+
+.masonry-grid.density-comfortable .masonry-column {
+  gap: 20px;
+}
+
+.masonry-cell.focused {
+  border-radius: 0;
+  box-shadow: none;
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+  animation: none;
+}
+
+.masonry-cell.focused::after {
+  content: '已定位';
+  top: 6px;
+  left: 6px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--pine);
+  color: var(--sheet);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.loading-bar {
+  color: var(--ink-3);
+  font-size: var(--type-13);
+}
+
+/* 空态：像一张未放样张的台面，文案留在页内而不是居中大图标 */
+.masonry-container :deep(.arco-empty) {
+  padding: 56px 24px;
+  border: 1px dashed var(--line-strong);
+  background: var(--sheet);
+}
+
+.masonry-container :deep(.arco-empty-description) {
+  color: var(--ink-3);
+}
 </style>

@@ -275,4 +275,205 @@ function onOpenModeChange() {
   align-items: center;
   gap: 6px;
 }
+
+/* ── 印样台「索引条」：筛选是一排索引项，选中的像页签一样露出朱砂底线 ── */
+.filter-bar {
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.filter-bar :deep(.arco-divider-vertical) {
+  height: 16px;
+  margin: 0 2px;
+  border-color: var(--line);
+}
+
+.filter-group {
+  gap: 3px;
+}
+
+/* 筛选 chip：默认是安静的文字索引，不用实心胶囊 */
+.filter-bar :deep(.arco-btn-size-mini) {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 400;
+  border-radius: 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-2);
+}
+
+.filter-bar :deep(.arco-btn-size-mini:hover) {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+/* 选中项：墨字 + 朱砂细底线（真实状态，不用整块高亮） */
+.filter-bar :deep(.arco-btn-primary.arco-btn-size-mini) {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--seal);
+}
+
+.filter-bar :deep(.arco-btn-text.arco-btn-size-mini) {
+  color: var(--ink-3);
+}
+
+/* 下拉控件：小号、方角、纸面 */
+.filter-bar :deep(.arco-select) {
+  border-radius: 2px;
+}
+
+.filter-bar :deep(.arco-select-view) {
+  border-radius: 2px;
+  border-color: var(--line);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.filter-bar :deep(.arco-select-view-value) {
+  font-size: 12px;
+}
+
+/* 密度 / 打开方式这种成组控件：细线方框，选中墨底 */
+.filter-bar :deep(.arco-btn-group .arco-btn) {
+  border-radius: 0;
+  height: 26px;
+  font-size: 12px;
+}
+
+.filter-bar :deep(.arco-radio-group-button) {
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.filter-bar :deep(.arco-radio-button) {
+  font-size: 12px;
+  color: var(--ink-2);
+  background: transparent;
+}
+
+.filter-bar :deep(.arco-radio-button.arco-radio-checked) {
+  background: var(--ink);
+  color: var(--sheet);
+}
+
+/* 主色调色板：方形色票，选中用墨色描边 */
+.color-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 1px;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(28, 32, 30, 0.1);
+}
+
+.color-swatch:hover {
+  transform: none;
+  box-shadow: 0 0 0 1px var(--ink-3);
+}
+
+.color-swatch.active {
+  border-color: var(--sheet);
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
+@media (max-width: 767px) {
+  .filter-bar {
+    padding: 8px 10px;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .filter-bar :deep(.arco-divider-vertical) {
+    display: none;
+  }
+
+  .filter-group {
+    flex-wrap: nowrap;
+  }
+}
+
+/* 窄屏：筛选条整体横向滚动（一行），控件组自身不换行、不撑高 */
+@media (max-width: 767px) {
+  .filter-bar {
+    align-items: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 8px 10px;
+    min-height: 56px;
+  }
+
+  .filter-bar > div[style*='flex: 1'] {
+    display: none;
+  }
+
+  .control-group {
+    flex-wrap: nowrap;
+    flex: 0 0 auto;
+  }
+
+  .control-group :deep(.arco-radio-group) {
+    display: flex;
+    flex-wrap: nowrap;
+  }
+
+  .color-filter {
+    flex-wrap: nowrap;
+    flex: 0 0 auto;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+}
+
+/* 触屏：色票与单选组也保持 ≥36 的可点高度/尺寸（与 task-12 的触控下限一致） */
+@media (pointer: coarse) {
+  .filter-bar :deep(.arco-radio-button) {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .filter-bar :deep(.arco-btn-group .arco-btn) {
+    min-height: 36px;
+  }
+
+  .color-swatch {
+    width: 22px;
+    height: 22px;
+  }
+
+  .filter-bar :deep(.arco-select-view) {
+    min-height: 36px;
+  }
+}
+
+/* 色板组自身允许换行（25 个色票在 768 宽会超出筛选条） */
+.color-filter {
+  flex-wrap: wrap;
+}
+
+@media (pointer: coarse) {
+  .color-swatch {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* 375：主色调色板对手机过密，交给搜索页的颜色筛选；筛选条保持单行可横滑 */
+@media (max-width: 767px) {
+  .color-filter {
+    display: none;
+  }
+}
 </style>

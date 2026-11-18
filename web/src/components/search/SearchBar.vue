@@ -2,6 +2,7 @@
 /** 搜索栏：标签名自动补全 + 关键词搜索 + 智能粘贴。 */
 
 import { ref, watch, onUnmounted } from 'vue'
+import { IconSearch } from '@arco-design/web-vue/es/icon'
 import { fetchSuggestions } from '@/api/search'
 
 const inputValue = ref('')
@@ -82,7 +83,7 @@ function selectSuggestion(val: string) {
       size="large"
     >
       <template #prefix>
-        <span style="font-size: 16px; margin-right: 4px">🔍</span>
+        <IconSearch :size="16" style="margin-right: 6px; color: var(--ink-3)" />
       </template>
     </a-auto-complete>
   </div>
@@ -91,5 +92,28 @@ function selectSuggestion(val: string) {
 <style scoped>
 .search-bar {
   width: 100%;
+}
+
+/* ── 印样台搜索：一条横向检索条，而不是大号圆角搜索框 ── */
+.search-bar :deep(.arco-input-wrapper) {
+  height: 52px;
+  padding: 0 16px;
+  background: var(--sheet);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  font-size: 16px;
+}
+
+.search-bar :deep(.arco-input-wrapper:hover) {
+  border-color: var(--ink-3);
+}
+
+.search-bar :deep(.arco-input-wrapper.arco-input-focus) {
+  border-color: var(--pine);
+  background: #fff;
+}
+
+.search-bar :deep(.arco-input) {
+  font-size: 16px;
 }
 </style>

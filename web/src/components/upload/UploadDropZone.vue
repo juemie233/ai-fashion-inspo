@@ -45,7 +45,6 @@ function onUrlInput(value: string | null) {
 
 <template>
   <div class="upload-zone" :class="{ 'has-queue': hasQueue }">
-    <div class="upload-icon-wrap">📤</div>
     <p class="upload-title">上传穿搭素材</p>
     <p class="upload-desc">
       <span class="upload-desc-hover">拖拽文件到此处、Ctrl+V 粘贴、或点击下方按钮</span>
@@ -57,7 +56,7 @@ function onUrlInput(value: string | null) {
 
     <div class="upload-actions">
       <a-button type="primary" size="large" @click="openFilePicker">选择文件</a-button>
-      <a-button size="large" @click="openFolder">📁 导入文件夹</a-button>
+      <a-button size="large" @click="openFolder">导入文件夹</a-button>
     </div>
 
     <input
@@ -175,5 +174,85 @@ function onUrlInput(value: string | null) {
   max-width: 500px;
   margin-left: auto;
   margin-right: auto;
+}
+
+/* ── 印样投递口：一张空白的样张纸，四角裁切标记；不用 emoji 图标与紫色描边 ── */
+.upload-zone {
+  position: relative;
+  padding: 44px 32px 32px;
+  background: var(--sheet);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  text-align: left;
+}
+
+/* 四角裁切标记：投递口本身就是一张待放样张 */
+.upload-zone::before,
+.upload-zone::after {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.upload-zone::before {
+  top: 10px;
+  left: 10px;
+  border-top: 1.5px solid var(--ink-3);
+  border-left: 1.5px solid var(--ink-3);
+}
+
+.upload-zone::after {
+  right: 10px;
+  bottom: 10px;
+  border-right: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+}
+
+.upload-zone:hover {
+  border-color: var(--ink-3);
+  background: var(--sheet);
+}
+
+.upload-title {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.upload-desc {
+  margin: 0 0 6px;
+  font-size: var(--type-16);
+  line-height: 1.8;
+  color: var(--ink-2);
+  max-width: 34em;
+}
+
+.upload-formats {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-bottom: 20px;
+}
+
+.upload-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.url-import {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  max-width: 560px;
+}
+
+.has-queue {
+  padding: 28px 24px 24px;
 }
 </style>

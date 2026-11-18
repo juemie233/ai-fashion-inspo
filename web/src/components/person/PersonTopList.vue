@@ -65,4 +65,46 @@ defineEmits<{
 .top-name {
   font-weight: 500;
 }
+
+/* ── 印样台：热门人物是选角名单，名次是真实序列（用印刷数字，不做圆形徽章）── */
+.top-card {
+  margin-top: 16px;
+}
+
+.top-row {
+  padding: 9px 4px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.top-row:last-child {
+  border-bottom: 0;
+}
+
+.top-row:hover {
+  background: var(--paper);
+}
+
+.top-rank {
+  width: 28px;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.top-row:first-child .top-rank,
+.top-row:nth-child(2) .top-rank,
+.top-row:nth-child(3) .top-rank {
+  color: var(--seal);
+}
+
+.top-name {
+  font-weight: 500;
+  color: var(--ink);
+}
 </style>

@@ -93,9 +93,9 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
         :status="detail.is_favorite ? 'danger' : undefined"
         @click="emit('favorite')"
       >
-        {{ detail.is_favorite ? '❤️ 已收藏' : '🤍 收藏' }}
+        {{ detail.is_favorite ? '已收藏' : '收藏' }}
       </a-button>
-      <a-button size="small" @click="emit('openCollection')">📁 加入合集</a-button>
+      <a-button size="small" @click="emit('openCollection')">加入合集</a-button>
       <!-- 五星评分：仅整数，点击星设置，再点已选星清除（0 分） -->
       <div class="rating-box" title="评分（0~5，点击星设置，再点清除）">
         <a-rate
@@ -109,7 +109,7 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
         </span>
       </div>
       <a :href="getFileUrl(detail.file_path)" :download="downloadFileName" class="download-link">
-        <a-button>⬇️ {{ detail.media_type === 'video' ? '下载视频' : '下载原图' }}</a-button>
+        <a-button>{{ detail.media_type === 'video' ? '下载视频' : '下载原图' }}</a-button>
       </a>
       <template v-if="detail.deleted_at">
         <a-button type="secondary" @click="emit('restore')">恢复</a-button>
@@ -375,6 +375,127 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
   }
 }
 
+@media (max-width: 900px) {
+  .info-section {
+    width: 100%;
+  }
+}
+
+/* ── 印样台：右栏是一张档案标签卡 ──
+ * 操作行用细线收口，信息行像档案表（label 小字、值正文字号），
+ * 收藏按钮用朱砂「留版」边框而不是整块红。 */
+.info-section {
+  width: 380px;
+  max-width: 100%;
+}
+
+.info-actions {
+  gap: 8px;
+  padding-bottom: 18px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.info-actions :deep(.arco-btn) {
+  border-radius: 2px;
+}
+
+.info-actions :deep(.arco-btn-status-danger.arco-btn-primary) {
+  background: transparent;
+  border-color: var(--seal);
+  color: var(--seal);
+}
+
+.info-actions :deep(.arco-btn-primary:not(.arco-btn-status-danger)) {
+  background: var(--pine);
+  border-color: var(--pine);
+}
+
+.rating-box {
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.rating-value {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  color: var(--seal);
+  font-size: 13px;
+}
+
+.info-meta {
+  margin-bottom: 28px;
+}
+
+.info-meta :deep(.arco-descriptions-item-label) {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+  background: var(--sheet-2);
+  width: 88px;
+}
+
+.info-meta :deep(.arco-descriptions-item-value) {
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.info-meta :deep(.arco-descriptions-border .arco-descriptions-item) {
+  border-color: var(--line);
+}
+
+.info-meta :deep(.arco-descriptions-bordered .arco-descriptions-view) {
+  border-color: var(--line);
+}
+
+.info-meta :deep(.arco-descriptions-bordered .arco-descriptions-item) {
+  border-color: var(--line);
+}
+
+/* 标签区：一条细线分隔 + 小字类别名，标签本身已改成方角细线 */
+.tags-section {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.tags-header h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.tags-header :deep(.arco-btn) {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.tag-category-label {
+  font-size: 11px;
+  color: var(--ink-3);
+  letter-spacing: 0;
+  margin-bottom: 6px;
+}
+
+.tag-group {
+  margin-bottom: 16px;
+}
+
+.tag-chips {
+  gap: 5px;
+}
+
+.tag-category-label + .tag-chips {
+  margin-top: 2px;
+}
+
+.tags-section :deep(.arco-empty) {
+  border: 1px dashed var(--line-strong);
+  padding: 24px 12px;
+}
+
+/* 900 以下右栏回到整宽（必须放在最后，覆盖上面的固定 380px） */
 @media (max-width: 900px) {
   .info-section {
     width: 100%;

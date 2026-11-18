@@ -1,21 +1,24 @@
 <script setup lang="ts">
-/** 类目标签：黑色细边框 + 深灰文字 + 类目色点，全站统一（卡片、搜索结果、详情页、相似推荐共用）。 */
+/** 类目标签：类目色点 + 方角细线，全站统一（卡片、搜索结果、详情页、相似推荐共用）。
+ *
+ * 色点只承担「类目」这一个真实信息；色板取印样台的低饱和墨色系，
+ * 避免彩色胶囊与朱砂/松烟绿主色抢注意力。 */
 
-/** 类目 → 色点颜色（design_detail/material 为类别体系优化新增的维度） */
+/** 类目 → 色点颜色（印样台低饱和色板；design_detail/material 为类别体系优化新增的维度） */
 const CATEGORY_COLORS: Record<string, string> = {
-  style: '#8b5cf6',
-  item_type: '#3b82f6',
-  color: '#f59e0b',
-  design_detail: '#14b8a6',
-  material: '#a16207',
-  fit: '#ec4899',
-  attribute: '#6b7280',
-  atmosphere: '#22c55e',
-  expression: '#f472b6',
-  leg_posture: '#0ea5e9',
-  free: '#9ca3af',
-  outfit: '#e11d48',
-  body_part: '#10b981',
+  style: '#6b5a6e',
+  item_type: '#3f5d6b',
+  color: '#a0763a',
+  design_detail: '#4f6b60',
+  material: '#7a5c43',
+  fit: '#8a5a5f',
+  attribute: '#6e726d',
+  atmosphere: '#4e6b54',
+  expression: '#8a5f6a',
+  leg_posture: '#46606e',
+  free: '#8c8f8a',
+  outfit: '#a6402f',
+  body_part: '#5d6e52',
 }
 
 defineProps<{
@@ -28,7 +31,7 @@ defineProps<{
 
 <template>
   <span class="category-tag" :class="'size-' + (size || 'tiny')">
-    <span class="dot" :style="{ backgroundColor: CATEGORY_COLORS[category] || '#9ca3af' }" />
+    <span class="dot" :style="{ backgroundColor: CATEGORY_COLORS[category] || '#8c8f8a' }" />
     <slot />
   </span>
 </template>
@@ -38,24 +41,24 @@ defineProps<{
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid #000;
-  border-radius: 999px;
-  color: #333;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--ink-2);
   background: transparent;
   white-space: nowrap;
   line-height: 1.4;
 }
 .size-tiny {
-  font-size: 12px;
-  padding: 1px 8px;
+  font-size: 11px;
+  padding: 0 5px;
 }
 .size-small {
-  font-size: 13px;
-  padding: 2px 10px;
+  font-size: 12px;
+  padding: 1px 7px;
 }
 .dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   flex-shrink: 0;
 }

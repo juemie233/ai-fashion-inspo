@@ -2,6 +2,7 @@
 /** 向量搜索入口：语义搜索 + 以图搜图。 */
 
 import { ref, computed } from 'vue'
+import { IconImage, IconSearch } from '@arco-design/web-vue/es/icon'
 
 const props = defineProps<{
   /** 语义搜索执行中 */
@@ -52,10 +53,12 @@ function onImagePicked(e: Event) {
         @press-enter="emit('semanticSearch')"
       />
       <a-button type="primary" size="small" :loading="loading" @click="emit('semanticSearch')">
-        🧠 语义搜索
+        <IconSearch :size="14" style="margin-right: 4px" />语义搜索
       </a-button>
       <a-divider direction="vertical" style="margin: 0 4px" />
-      <a-button size="small" :loading="loading" @click="openImagePicker"> 🖼️ 以图搜图 </a-button>
+      <a-button size="small" :loading="loading" @click="openImagePicker">
+        <IconImage :size="14" style="margin-right: 4px" />以图搜图
+      </a-button>
       <input
         ref="imageFileInput"
         type="file"
@@ -73,5 +76,27 @@ function onImagePicked(e: Event) {
   align-items: center;
   margin-bottom: 8px;
   flex-wrap: wrap;
+}
+
+/* 375：语义搜索输入独占一行，按钮换行；去掉竖直分隔线 */
+@media (max-width: 767px) {
+  .vector-search-section :deep(.arco-space) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .vector-search-section :deep(.arco-space-item) {
+    max-width: 100%;
+  }
+
+  .vector-search-section :deep(.arco-input-wrapper) {
+    width: 100% !important;
+  }
+
+  .vector-search-section :deep(.arco-divider-vertical) {
+    display: none;
+  }
 }
 </style>

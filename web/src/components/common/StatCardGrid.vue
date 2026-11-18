@@ -105,4 +105,57 @@ withDefaults(
   color: var(--color-text-3);
   margin-top: 6px;
 }
+
+/* ── 印样台：统计是档案索引数字，不是圆角 KPI 卡 ── */
+:deep(.arco-card) {
+  border-radius: 0;
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  background: transparent;
+  box-shadow: none;
+}
+
+:deep(.arco-card-body) {
+  padding: 12px 16px 14px 0;
+}
+
+:deep(.arco-statistic-title) {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+}
+
+:deep(.arco-statistic-value) {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.stat-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stat-custom-title {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.stat-custom-value {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: 28px;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.stat-note {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 4px;
+}
 </style>

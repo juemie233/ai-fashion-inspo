@@ -1,31 +1,482 @@
-/* Arco Design 全局主题（设计令牌 CSS 变量覆盖）。
+/* 印样台 · 全局设计令牌与 Arco 主题
  *
- * 迁移期策略：Arco 与 Naive 并存时，本文件只影响 Arco 组件；
- * Naive UI 有独立的 CSS 变量体系，互不干扰，可安全全局引入。
- * 浅色/深色切换：body[arco-theme='dark'] 下再覆盖一组变量（P2 阶段补充）。
+ * 设计方向「衣函 · 印样台」：把素材库当成摄影接触印样台 / 时装档案室来设计——
+ * 纸面、墨线、松烟绿主操作，朱砂只用于「留版」（收藏/选中/危险）；
+ * 数字用 Georgia 老式数字（档案编号感），中文用系统无衬线，界面保持安静。
+ *
+ * 文件职责：
+ * 1. 设计令牌（色板 / 字号阶梯 / 间距 / 圆角）——页面组件只引用变量，不写死颜色；
+ * 2. Arco 变量映射（primary 用 RGB 三元组，其它颜色用完整色值）；
+ * 3. 基础排版 + 全局组件精修（按钮 / 输入 / 标签 / 表格 / 弹层 / 空态 / 焦点）。
  */
 
 :root {
-  /* 主色：项目绿（与 Naive 时代一致的品牌色，保持跨库视觉连续） */
-  --primary-1: #e8f7ef;
-  --primary-2: #cdeedc;
-  --primary-3: #a5e0c1;
-  --primary-4: #74cfa0;
-  --primary-5: #42bb7d;
-  --primary-6: #18a058; /* 主色基准 */
-  --primary-7: #158a4c;
-  --primary-8: #10703d;
-  --primary-9: #0c5a31;
-  --primary-10: #084726;
+  /* ── 印样台色板 ───────────────────────────────────────────── */
+  --paper: #efede6; /* 底：冷调石纸 */
+  --sheet: #faf9f4; /* 面：样张纸 */
+  --sheet-2: #f4f2ea; /* 次级面（表头 / 分栏底） */
+  --ink: #1c201e; /* 主文 / 墨线 */
+  --ink-2: #4f534d; /* 次文（纸面对比 6.4:1） */
+  --ink-3: #686c64; /* 弱文 / 12px 元信息（纸面 4.58:1，满足 4.5） */
+  --line: #d9d7cd; /* 细线 */
+  --line-strong: #b9b8ad; /* 强调线 */
+  --pine: #2e4b40; /* 主操作 / 导航（松烟绿） */
+  --pine-deep: #22382f;
+  --pine-soft: #e5eae3;
+  --seal: #a6402f; /* 朱砂：收藏 / 选中 / 危险 */
+  --seal-soft: #f3e4de;
+  --jade: #3f6b57; /* 成功 / 在线 */
+  --amber: #8a6a2f; /* 警告 */
 
-  /* 圆角：比 Arco 默认更圆润，贴合卡片化布局 */
+  /* ── 字阶（12 微标 / 13 元信息 / 14 控件 / 16 正文 / 20 小节 / 28 页题 / 40 大数）── */
+  --font-sans:
+    'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei',
+    system-ui, sans-serif;
+  --font-numeric: Georgia, 'Times New Roman', 'Songti SC', serif;
+  --type-12: 12px;
+  --type-13: 13px;
+  --type-14: 14px;
+  --type-16: 16px;
+  --type-20: 20px;
+  --type-28: 28px;
+  --type-40: 40px;
+  --leading-body: 1.8;
+
+  /* ── 间距（8 栅格为主）与圆角：印刷品的直角，不用大圆角 ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 5px;
+  --shadow-print: 5px 5px 0 rgba(28, 32, 30, 0.14); /* 印刷偏移影：只给弹层 */
+
+  /* ── Arco 主色映射：松烟绿（RGB 三元组，Arco 用 rgb(var(--primary-N))）── */
+  --primary-1: 235, 239, 235;
+  --primary-2: 213, 224, 216;
+  --primary-3: 181, 200, 187;
+  --primary-4: 137, 168, 149;
+  --primary-5: 92, 132, 111;
+  --primary-6: 46, 75, 64; /* 主色基准 */
+  --primary-7: 38, 62, 53;
+  --primary-8: 31, 51, 43;
+  --primary-9: 24, 40, 34;
+  --primary-10: 17, 29, 24;
+  /* 蓝色系一并收进松烟绿：避免旧 Arco 蓝标签/链接破坏色板 */
+  --arcoblue-1: 235, 239, 235;
+  --arcoblue-2: 213, 224, 216;
+  --arcoblue-3: 181, 200, 187;
+  --arcoblue-4: 137, 168, 149;
+  --arcoblue-5: 92, 132, 111;
+  --arcoblue-6: 46, 75, 64;
+  --arcoblue-7: 38, 62, 53;
+  --arcoblue-8: 31, 51, 43;
+  --arcoblue-9: 24, 40, 34;
+  --arcoblue-10: 17, 29, 24;
+  /* 危险色：朱砂（仅收藏/删除/错误） */
+  --danger-1: 248, 235, 231;
+  --danger-2: 240, 213, 205;
+  --danger-3: 228, 181, 168;
+  --danger-4: 213, 141, 122;
+  --danger-5: 190, 98, 75;
+  --danger-6: 166, 64, 47;
+  --danger-7: 143, 53, 38;
+  --danger-8: 118, 42, 30;
+  --danger-9: 92, 32, 22;
+  --danger-10: 66, 22, 15;
+  /* 成功 / 警告：降饱和，融入纸面色板 */
+  --success-6: 63, 107, 87;
+  --success-5: 94, 133, 114;
+  --warning-6: 138, 106, 47;
+
+  /* ── Arco 语义变量 ── */
+  --color-text-1: var(--ink);
+  --color-text-2: var(--ink-2);
+  --color-text-3: var(--ink-3);
+  --color-text-4: #b4b7b0;
+  --color-bg-1: var(--paper);
+  --color-bg-2: var(--sheet);
+  --color-bg-3: var(--sheet);
+  --color-bg-4: var(--sheet-2);
+  --color-bg-5: #fff;
+  --color-bg-popup: var(--sheet);
+  --color-border-1: var(--line);
+  --color-border-2: var(--line);
+  --color-border-3: var(--line-strong);
+  --color-border-4: var(--ink-3);
+  --color-fill-1: #f3f1ea;
+  --color-fill-2: #ebe9e1;
+  --color-fill-3: #e2e0d7;
+  --color-fill-4: #d7d5cb;
   --border-radius-none: 0;
-  --border-radius-small: 6px;
-  --border-radius-medium: 8px;
-  --border-radius-large: 12px;
+  --border-radius-small: 2px;
+  --border-radius-medium: 3px;
+  --border-radius-large: 5px;
+  --border-radius-circle: 50%;
 
-  /* 字体：优先系统字体栈，中文用苹方/雅黑 */
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* ── 基础排版 ─────────────────────────────────────────────── */
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--type-14);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 中文正文段落：16px / 1.8（技能中文排版规则） */
+.u-body {
+  font-size: var(--type-16);
+  line-height: var(--leading-body);
+  color: var(--ink-2);
+  max-width: 40em;
+}
+
+/* 档案数字：Georgia 老式数字 + 等宽数字，给计数/评分/日期用 */
+.u-num {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: 0;
+}
+
+/* 元信息小标：只用于真实字段名，不做装饰性 eyebrow */
+.u-label {
+  font-size: var(--type-12);
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+/* 墨线分隔：页面/区块的结构线 */
+.u-rule {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+p {
+  color: var(--ink-2);
+}
+
+a {
+  color: var(--pine);
+}
+
+::selection {
+  background: rgba(46, 75, 64, 0.22);
+}
+
+/* 键盘焦点：清晰可见，鼠标点击不出现 */
+:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+/* 细滚动条（工作台长时间滚动，弱化视觉噪音） */
+.main-content::-webkit-scrollbar,
+.arco-modal-body::-webkit-scrollbar,
+.arco-drawer-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.main-content::-webkit-scrollbar-thumb,
+.arco-modal-body::-webkit-scrollbar-thumb,
+.arco-drawer-body::-webkit-scrollbar-thumb {
+  background: #cfcdc3;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 5px;
+}
+
+/* ── 按钮：直角、克制；主操作松烟绿，次操作墨线描边 ── */
+.arco-btn {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.arco-btn-primary:not(.arco-btn-disabled) {
+  background: var(--pine);
+  border-color: var(--pine);
+  color: var(--sheet);
+}
+
+.arco-btn-primary:not(.arco-btn-disabled):hover {
+  background: var(--pine-deep);
+  border-color: var(--pine-deep);
+}
+
+.arco-btn-secondary:not(.arco-btn-disabled),
+.arco-btn-outline:not(.arco-btn-disabled) {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+}
+
+.arco-btn-secondary:not(.arco-btn-disabled):hover,
+.arco-btn-outline:not(.arco-btn-disabled):hover {
+  background: var(--sheet);
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+
+.arco-btn-text:not(.arco-btn-disabled) {
+  color: var(--ink-2);
+}
+
+.arco-btn-text:not(.arco-btn-disabled):hover {
+  background: transparent;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.arco-btn-size-mini.arco-btn-shape-square,
+.arco-btn-size-small.arco-btn-shape-square {
+  border-radius: var(--radius-sm);
+}
+
+/* 危险操作：朱砂描边而非整块红，降低噪点 */
+.arco-btn-status-danger.arco-btn-primary {
+  background: var(--seal);
+  border-color: var(--seal);
+}
+
+.arco-btn-status-danger.arco-btn-primary:hover {
+  background: #8f3526;
+  border-color: #8f3526;
+}
+
+.arco-btn-secondary.arco-btn-status-danger:not(.arco-btn-disabled) {
+  color: var(--seal);
+  border-color: #d8b3a9;
+}
+
+/* ── 输入 / 下拉：纸面底 + 墨线边框 ── */
+.arco-input-wrapper,
+.arco-select-view,
+.arco-textarea,
+.arco-input-number {
+  background: var(--sheet);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+
+.arco-input-wrapper:hover,
+.arco-select-view:hover,
+.arco-textarea:hover,
+.arco-input-number:hover {
+  border-color: var(--ink-3);
+}
+
+.arco-input-wrapper.arco-input-focus,
+.arco-select-focused .arco-select-view,
+.arco-input-number.arco-input-number-focus {
+  border-color: var(--pine);
+  background: #fff;
+}
+
+.arco-input::placeholder,
+.arco-select-view-value-placeholder {
+  color: var(--ink-3);
+}
+
+.arco-select-option-selected,
+.arco-select-option:hover {
+  background: var(--pine-soft);
+  color: var(--ink);
+}
+
+/* ── 标签：方角细线，不作彩色胶囊 ── */
+.arco-tag {
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.arco-tag-size-small {
+  font-size: var(--type-12);
+}
+
+/* ── 卡片 / 弹层 / 抽屉：纸面、墨线、印刷偏移影 ── */
+.arco-card {
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.arco-card-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.arco-card .arco-card-header-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.arco-modal,
+.arco-drawer {
+  background: var(--sheet);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-print);
+}
+
+.arco-modal-header,
+.arco-drawer-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.arco-modal-title,
+.arco-drawer-title {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.arco-modal-footer,
+.arco-drawer-footer {
+  border-top: 1px solid var(--line);
+}
+
+.arco-modal-mask,
+.arco-drawer-mask {
+  background: rgba(28, 32, 30, 0.38);
+}
+
+/* 弹层里的确认/提示内容用正文色 */
+.arco-popconfirm-content,
+.arco-tooltip-content {
+  color: var(--ink);
+}
+
+.arco-tooltip-content {
+  background: var(--ink);
+  border-radius: var(--radius-sm);
+}
+
+/* ── 表格：表头纸色、行线墨色，数字等宽 ── */
+.arco-table {
+  border-radius: var(--radius-sm);
+  background: var(--sheet);
+}
+
+.arco-table-th {
+  background: var(--sheet-2) !important;
+  color: var(--ink-2);
+  font-weight: 500;
+  border-bottom: 1px solid var(--line-strong) !important;
+}
+
+.arco-table-td {
+  border-bottom: 1px solid var(--line) !important;
+  color: var(--ink);
+}
+
+.arco-table-tr:hover .arco-table-td {
+  background: #f6f4ed !important;
+}
+
+.arco-table .arco-table-td [class*='num'],
+.arco-table .arco-table-td .arco-statistic-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 标签页：下划线用主墨线，不用蓝条 ── */
+.arco-tabs-tab {
+  color: var(--ink-2);
+}
+
+.arco-tabs-tab:hover {
+  color: var(--ink);
+}
+
+.arco-tabs-tab-active {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.arco-tabs-nav-ink {
+  background-color: var(--ink);
+  height: 2px;
+}
+
+.arco-tabs-header-nav::before {
+  background: var(--line);
+}
+
+/* ── 分页 / 评分 / 进度 / 空态 ── */
+.arco-pagination-item {
+  border-radius: var(--radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.arco-pagination-item-active {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+.arco-rate-character {
+  color: var(--ink-3);
+}
+
+.arco-rate-character-full {
+  color: var(--seal);
+}
+
+.arco-progress-bar {
+  background: var(--line);
+}
+
+.arco-empty-description {
+  color: var(--ink-3);
+}
+
+.arco-spin-icon {
+  color: var(--pine);
+}
+
+.arco-divider {
+  border-color: var(--line);
+}
+
+.arco-switch-checked {
+  background: var(--pine);
+}
+
+/* ── 动效纪律：尊重减少动效偏好；只保留状态反馈的短过渡 ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -35,6 +35,8 @@ const cropOpen = defineModel<boolean>('cropOpen', { required: true })
     </div>
     <div v-else class="main-image-wrap">
       <img :src="mainImageSrc" alt="穿搭素材" @click="lightboxOpen = true" class="main-image" />
+      <!-- 留版标记：收藏的样张四角出现朱砂裁切标记（与素材网格一致的状态语言） -->
+      <div v-if="detail.is_favorite" class="crop-marks" aria-hidden="true" />
       <!-- 裁剪入口：仅图片素材显示（视频缩略图/非图片不显示） -->
       <a-button
         v-if="!detail.deleted_at"
@@ -43,7 +45,7 @@ const cropOpen = defineModel<boolean>('cropOpen', { required: true })
         @click.stop="cropOpen = true"
         title="裁剪图片（保留中间区域，裁掉上下部分）"
       >
-        ✂️ 裁剪
+        裁剪
       </a-button>
     </div>
 
@@ -69,25 +71,77 @@ const cropOpen = defineModel<boolean>('cropOpen', { required: true })
 /* 主图容器：相对定位，供右上角裁剪入口按钮悬浮 */
 .main-image-wrap {
   position: relative;
+  padding: 12px;
+  background: var(--sheet);
+  border: 1px solid var(--line);
 }
 
 /* 裁剪入口：悬浮在图片右上角，不与图片的点击开灯箱冲突 */
 .crop-entry-btn {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 20px;
+  right: 20px;
   z-index: 2;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  border-radius: 2px;
+  background: rgba(250, 249, 244, 0.94);
+  border: 1px solid var(--line-strong);
+  box-shadow: none;
 }
 
 .main-image {
   width: 100%;
-  border-radius: 12px;
+  border-radius: 0;
   cursor: zoom-in;
   object-fit: contain;
   max-height: 85vh;
   max-height: 85dvh;
-  background: #f5f5f5;
+  background: var(--sheet-2);
+}
+
+/* 留版裁切标记（与素材卡片同一套状态语言） */
+.crop-marks {
+  position: absolute;
+  inset: 20px;
+  pointer-events: none;
+  z-index: 2;
+  background-image:
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal)),
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal)),
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal)),
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal));
+  background-repeat: no-repeat;
+  background-size:
+    18px 1.5px,
+    1.5px 18px,
+    18px 1.5px,
+    1.5px 18px,
+    18px 1.5px,
+    1.5px 18px,
+    18px 1.5px,
+    1.5px 18px;
+  background-position:
+    left top,
+    left top,
+    right top,
+    right top,
+    left bottom,
+    left bottom,
+    right bottom,
+    right bottom;
+}
+
+@media (max-width: 767px) {
+  .main-image-wrap {
+    padding: 8px;
+  }
+
+  .crop-entry-btn {
+    top: 14px;
+    right: 14px;
+  }
+
+  .crop-marks {
+    inset: 14px;
+  }
 }
 </style>

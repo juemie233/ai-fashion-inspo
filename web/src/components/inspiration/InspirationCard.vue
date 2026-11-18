@@ -81,6 +81,15 @@ function displayTags() {
   return props.item.tags?.slice(0, 4).map((t) => t.tag) ?? []
 }
 
+/** 说明区是否有可见内容：AI 生成素材的来源标签已由顶部徽标承担，
+ *  若再没有作者/标签，说明区整块不渲染，样张直接收边（接触印样的留白更干净）。 */
+const hasCaption = computed(
+  () =>
+    Boolean(props.item.source_type && !props.item.is_ai_generated) ||
+    Boolean(props.item.source_author) ||
+    displayTags().length > 0,
+)
+
 /** 分析状态标签 */
 function analysisStatusLabel(): string | null {
   if (props.item.analysis_status === 'analyzing') return '分析中...'
@@ -128,6 +137,11 @@ function openDetail() {
 <template>
   <div
     class="card"
+    :class="{
+      'is-favorite': item.is_favorite,
+      'is-selected': selectable && selected,
+      'is-rejected': item.quality_status === 'rejected',
+    }"
     :role="selectable ? 'checkbox' : 'button'"
     :aria-checked="selectable ? selected : undefined"
     :aria-label="cardAriaLabel"
@@ -160,6 +174,13 @@ function openDetail() {
           loading="lazy"
         />
       </template>
+
+      <!-- 留版标记：收藏 / 批量选中的样张四角出现朱砂裁切标记（状态即标记，不做装饰） -->
+      <div
+        v-if="item.is_favorite || (selectable && selected)"
+        class="crop-marks"
+        aria-hidden="true"
+      />
 
       <!-- 视频播放角标 -->
       <div v-if="item.media_type === 'video'" class="video-badge" title="视频">▶</div>
@@ -301,10 +322,10 @@ function openDetail() {
     </div>
 
     <!-- 信息区 -->
-    <div class="card-body">
+    <div v-if="hasCaption" class="card-body">
       <!-- 来源（空来源不渲染，避免出现空白胶囊） -->
       <div class="card-source">
-        <a-tag v-if="item.source_type" size="small" color="arcoblue">
+        <a-tag v-if="item.source_type && !item.is_ai_generated" size="small" color="arcoblue">
           {{ sourceLabel(item.source_type) }}
         </a-tag>
         <span v-if="item.source_author" class="author">@{{ item.source_author }}</span>
@@ -546,5 +567,197 @@ function openDetail() {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+/* ── 印样台外观覆盖（第二 style 块：只覆盖视觉，不改原结构/交互）── */
+.card {
+  position: relative;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  overflow: hidden;
+  transition: border-color 0.12s ease;
+}
+
+/* 悬停只加深墨线，不做上浮/发光（反模板：不是每张卡片都悬浮） */
+@media (hover: hover) {
+  .card:hover {
+    transform: none;
+    box-shadow: none;
+    border-color: var(--ink-3);
+  }
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+
+.card-image {
+  background: var(--sheet-2);
+}
+
+.card-image img,
+.card-image video {
+  filter: saturate(0.96);
+}
+
+.card:hover .card-image img,
+.card:hover .card-image video {
+  filter: saturate(1);
+}
+
+/* 留版裁切标记：四个角的朱砂角线，由渐变一次画成 */
+.crop-marks {
+  position: absolute;
+  inset: 6px;
+  pointer-events: none;
+  z-index: 4;
+  background-image:
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal)),
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal)),
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal)),
+    linear-gradient(var(--seal), var(--seal)), linear-gradient(var(--seal), var(--seal));
+  background-repeat: no-repeat;
+  background-size:
+    14px 1.5px,
+    1.5px 14px,
+    14px 1.5px,
+    1.5px 14px,
+    14px 1.5px,
+    1.5px 14px,
+    14px 1.5px,
+    1.5px 14px;
+  background-position:
+    left top,
+    left top,
+    right top,
+    right top,
+    left bottom,
+    left bottom,
+    right bottom,
+    right bottom;
+}
+
+.video-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 2px;
+  background: rgba(28, 32, 30, 0.72);
+  font-size: 13px;
+}
+
+/* 操作层：方角纸面按钮，不用圆形浮钮 */
+.card-overlay {
+  top: 6px;
+  right: 6px;
+  gap: 2px;
+}
+
+.card-overlay :deep(.arco-btn) {
+  border-radius: 2px;
+  background: rgba(250, 249, 244, 0.92);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+}
+
+.card-overlay :deep(.arco-btn:hover) {
+  background: var(--sheet);
+  border-color: var(--ink-3);
+}
+
+.card-overlay :deep(.arco-btn-primary.arco-btn-status-danger) {
+  background: var(--seal);
+  border-color: var(--seal);
+  color: var(--sheet);
+}
+
+.card-rate {
+  border-radius: 2px;
+  background: rgba(250, 249, 244, 0.92);
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.analysis-badge,
+.sim-badge {
+  border-radius: 2px;
+  background: rgba(28, 32, 30, 0.74);
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+/* 批量勾选：方角墨线，选中朱砂 */
+.select-checkbox {
+  width: 22px;
+  height: 22px;
+  border-radius: 2px;
+  background: rgba(250, 249, 244, 0.92);
+  border: 1px solid var(--line-strong);
+}
+
+.select-checkbox.checked {
+  background: var(--seal);
+  border-color: var(--seal);
+}
+
+.view-detail-btn {
+  border-radius: 2px;
+  background: rgba(28, 32, 30, 0.72);
+}
+
+/* 说明栏：样张纸上的手写标签行 */
+.card-body {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--sheet);
+}
+
+.card-source {
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.card-source :deep(.arco-tag) {
+  height: 18px;
+  line-height: 16px;
+  padding: 0 5px;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 2px;
+}
+
+.author {
+  font-size: 12px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-tags {
+  gap: 3px;
+}
+
+.quality-badges {
+  top: 6px;
+  left: 6px;
+  gap: 3px;
+}
+
+/* 状态徽标收进印样台色系：AI=墨、拒绝=朱砂、待审核=灰墨（紫色留给旧页面，第二阶段统一） */
+.quality-badge.ai :deep(.status-badge) {
+  background: var(--ink) !important;
+}
+
+.quality-badge.rejected :deep(.status-badge) {
+  background: var(--seal) !important;
+}
+
+.quality-badge.pending :deep(.status-badge) {
+  background: rgba(28, 32, 30, 0.55) !important;
 }
 </style>

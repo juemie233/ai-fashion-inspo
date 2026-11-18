@@ -52,7 +52,7 @@ function onOutfitEnter(e: KeyboardEvent) {
     <div class="outfit-tags-header">
       <h4>穿搭大标签</h4>
       <a-button size="mini" type="outline" :loading="aiSuggesting" @click="emit('ai-suggest')">
-        ✨ AI 生成
+        AI 生成
       </a-button>
     </div>
 
@@ -167,5 +167,47 @@ function onOutfitEnter(e: KeyboardEvent) {
 /* 可点击跳转搜索的标签 */
 .tag-clickable {
   cursor: pointer;
+}
+
+/* ── 印样台：穿搭大标签是右栏里的一节档案区，不用粉色卡片 ── */
+.outfit-tags-section {
+  padding: 16px 0 0;
+  margin-bottom: 20px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.outfit-tags-header h4 {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.outfit-tags-section :deep(.arco-tag) {
+  background: transparent !important;
+  border: 1px solid var(--line-strong);
+  color: var(--ink) !important;
+}
+
+.outfit-tag-hint {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.outfit-tag-add {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.outfit-tag-add :deep(.arco-select) {
+  min-width: 0;
+}
+
+@media (max-width: 767px) {
+  .outfit-tag-add :deep(.arco-select) {
+    flex: 1 1 160px;
+  }
 }
 </style>

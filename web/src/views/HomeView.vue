@@ -410,4 +410,173 @@ loadPage(currentPage.value)
   justify-content: center;
   padding: 24px 0;
 }
+
+/* ── 印样台页眉：左对齐标题 + 老式数字计数，右操作保持次级按钮 ── */
+.home-page {
+  max-width: 1680px;
+  margin: 0 auto;
+}
+
+.page-header {
+  align-items: flex-end;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.header-left {
+  align-items: baseline;
+  gap: 14px;
+}
+
+.header-left h2 {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.total-count {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: 16px;
+  color: var(--ink-2);
+  padding-left: 14px;
+  border-left: 1px solid var(--line-strong);
+}
+
+.header-right {
+  display: flex;
+  gap: 8px;
+}
+
+/* 定位模式横幅：档案便签样式，不用黄色圆角块 */
+.focus-banner {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--pine);
+  border-radius: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.pagination-wrapper {
+  border-top: 1px solid var(--line);
+  padding: 20px 0 8px;
+}
+
+@media (max-width: 767px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+  }
+
+  .header-left h2 {
+    font-size: 26px;
+  }
+}
+
+/* 375 / 窄屏：分页（页码 + 每页条数选择）允许换行，不产生横向溢出 */
+@media (max-width: 767px) {
+  .pagination-wrapper :deep(.arco-pagination) {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 8px;
+    max-width: 100%;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination-list) {
+    flex-wrap: wrap;
+  }
+}
+
+/* 768~900（iPad 竖屏）：标题与操作按钮允许换行，避免页眉横向溢出 */
+@media (max-width: 900px) {
+  .page-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+  }
+
+  .header-left {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+}
+
+/* 375：分页强制换行，避免页码列表把内容撑出视口 */
+@media (max-width: 767px) {
+  .pagination-wrapper :deep(.arco-pagination) {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    justify-content: center;
+    width: 100%;
+    row-gap: 8px;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination-list) {
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    max-width: 100%;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination-options) {
+    display: none;
+  }
+}
+
+/* 分页列表宽度跟随视口，保证换行真的生效（Arco list 默认 max-content） */
+@media (max-width: 767px) {
+  .pagination-wrapper :deep(.arco-pagination) {
+    width: 100% !important;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination-list) {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+/* 375：分页只保留 上一页 / 当前页 / 下一页 —— 页码列表是 inline 流，换行不可靠 */
+@media (max-width: 767px) {
+  .pagination-wrapper
+    :deep(
+      .arco-pagination-item:not(.arco-pagination-item-prev):not(.arco-pagination-item-next):not(
+          .arco-pagination-item-active
+        ):not(.arco-pagination-item-jumper)
+    ) {
+    display: none !important;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination-options),
+  .pagination-wrapper :deep(.arco-pagination-total) {
+    display: none !important;
+  }
+}
+
+/* 375：页眉操作改成一行横滑，避免四个按钮占去两行高度 */
+@media (max-width: 600px) {
+  .header-right {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: 100%;
+    padding-bottom: 2px;
+  }
+
+  .header-right :deep(.arco-btn) {
+    flex: 0 0 auto;
+  }
+}
 </style>

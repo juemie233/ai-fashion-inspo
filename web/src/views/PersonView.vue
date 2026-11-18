@@ -26,9 +26,10 @@ watch(activeKind, (kind) => {
   <div class="person-page">
     <div class="page-header">
       <div>
-        <h2>人物管理</h2>
+        <h2 class="page-title">人物管理</h2>
         <a-typography-text type="secondary" style="font-size: 13px">
-          穿搭博主与职业模特已独立管理：博主（平台主页/小红书号/CSV 导入）与模特（写真照片组）业务逻辑分别演进
+          穿搭博主与职业模特已独立管理：博主（平台主页/小红书号/CSV
+          导入）与模特（写真照片组）业务逻辑分别演进
         </a-typography-text>
       </div>
       <a-button type="primary" @click="router.push('/face-scan')">人脸库扫描</a-button>
@@ -58,5 +59,53 @@ watch(activeKind, (kind) => {
 }
 .page-header h2 {
   margin: 0 0 4px;
+}
+
+/* ── 印样台人物页：选角板式页眉 ── */
+.person-page {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.page-header {
+  align-items: flex-end;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-title {
+  margin: 0 0 4px;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.page-header :deep(.arco-typography) {
+  font-size: 13px;
+  color: var(--ink-2);
+  max-width: 46em;
+  line-height: 1.8;
+}
+
+@media (max-width: 767px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .page-title {
+    font-size: 26px;
+  }
+}
+
+/* 768~900（iPad 竖屏）：页眉允许换行 */
+@media (max-width: 900px) {
+  .page-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
 }
 </style>

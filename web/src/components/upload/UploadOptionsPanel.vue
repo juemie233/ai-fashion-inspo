@@ -170,4 +170,23 @@ function filterBlogger(input: string, option: { label?: string }): boolean {
   flex-shrink: 0;
   text-align: right;
 }
+
+/* ── 印样台：上传选项是档案标签，label 小字 + 方角控件 ── */
+.meta-grid {
+  gap: 12px 20px;
+  padding-top: 4px;
+}
+
+.meta-row label {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.meta-row :deep(.arco-input-wrapper),
+.meta-row :deep(.arco-select-view),
+.meta-row :deep(.arco-input-number) {
+  border-radius: 2px;
+  background: var(--sheet);
+}
 </style>

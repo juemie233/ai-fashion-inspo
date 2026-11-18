@@ -442,12 +442,11 @@ onUnmounted(() => {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <h2>上传素材</h2>
+    <h2 class="page-title">上传素材</h2>
 
     <!-- 拖拽覆盖层 -->
     <div v-if="isDragging" class="drag-overlay">
       <div class="drag-hint">
-        <div class="drag-icon">📥</div>
         <p>松开以上传{{ dragCount > 0 ? ` ${dragCount} 个` : '' }}文件</p>
       </div>
     </div>
@@ -538,7 +537,6 @@ onUnmounted(() => {
   inset: 0;
   z-index: 999;
   background: rgba(99, 102, 241, 0.15);
-  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -558,5 +556,47 @@ onUnmounted(() => {
   font-size: 24px;
   font-weight: 600;
   margin: 0;
+}
+
+/* ── 印样台页眉（与素材库同一条排印规则）── */
+.upload-page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding-bottom: 48px;
+}
+
+.page-title {
+  margin: 0 0 18px;
+  padding-bottom: 14px;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+
+/* 拖拽覆盖层：纸面 + 墨线，不用紫色渐变毛玻璃 */
+.drag-overlay {
+  background: rgba(239, 237, 230, 0.82);
+  backdrop-filter: none;
+}
+
+.drag-hint {
+  padding: 28px 40px;
+  background: var(--sheet);
+  border: 1px solid var(--ink);
+  color: var(--ink);
+}
+
+.drag-hint p {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+@media (max-width: 767px) {
+  .page-title {
+    font-size: 26px;
+  }
 }
 </style>

@@ -53,7 +53,7 @@ const {
 
 <template>
   <div class="search-page">
-    <h2>高级搜索</h2>
+    <h2 class="page-title">高级搜索</h2>
 
     <!-- 搜索栏 -->
     <div class="search-section">
@@ -159,6 +159,38 @@ const {
 @media (max-width: 767px) {
   .search-layout {
     flex-direction: column;
+  }
+}
+
+/* ── 印样台搜索页：页眉与素材库同一条排印规则 ── */
+.search-page {
+  max-width: 1680px;
+  margin: 0 auto;
+}
+
+.page-title {
+  margin: 0 0 20px;
+  padding-bottom: 14px;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+
+.search-section {
+  margin-bottom: 14px;
+  max-width: 980px;
+}
+
+.search-layout {
+  gap: 20px;
+  margin-top: 6px;
+}
+
+@media (max-width: 767px) {
+  .page-title {
+    font-size: 26px;
   }
 }
 </style>

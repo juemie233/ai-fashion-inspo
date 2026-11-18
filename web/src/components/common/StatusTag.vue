@@ -75,10 +75,11 @@ const titleText = computed(() => props.title || meta.value?.title || '')
 
 .status-badge {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 1px 7px;
+  border-radius: 2px;
   color: #fff;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.5;
+  font-weight: 500;
 }
 </style>

@@ -156,7 +156,9 @@ function handleExpandedChange(keys: Array<string | number>) {
           @keydown="onSearchKeydown"
           @clear="store.reload()"
         >
-          <template #prefix>🔍</template>
+          <template #prefix>
+            <span class="search-prefix" aria-hidden="true" />
+          </template>
         </a-input>
         <a-select
           v-model="store.platform"
@@ -480,5 +482,45 @@ function handleExpandedChange(keys: Array<string | number>) {
   font-size: 11px;
   color: #c0c4cc;
   margin-top: 4px;
+}
+
+/* ── 印样台：人物列表的工具区与表格都落在纸面上 ── */
+.filter-card,
+.table-card {
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--sheet);
+  margin-bottom: 16px;
+}
+
+.filter-card :deep(.arco-card-body) {
+  padding: 14px 16px;
+}
+
+.filter-card :deep(.arco-input-wrapper),
+.filter-card :deep(.arco-select-view) {
+  border-radius: 2px;
+  background: var(--paper);
+}
+
+/* 搜索框前缀：一根竖墨线代替 emoji 放大镜 */
+.search-prefix {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  margin-right: 8px;
+  background: var(--line-strong);
+}
+
+.table-card :deep(.arco-table) {
+  border-radius: 0;
+}
+
+.table-card :deep(.arco-table-th) {
+  background: var(--sheet-2);
+}
+
+.table-card :deep(.arco-btn) {
+  border-radius: 2px;
 }
 </style>

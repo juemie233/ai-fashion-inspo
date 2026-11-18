@@ -673,4 +673,98 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
     flex-direction: column;
   }
 }
+
+/* ── 印样台详情：装裱样张 + 右侧档案标签；顶部导航是一条细线书眉 ── */
+.detail-page {
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.detail-layout {
+  gap: 28px;
+}
+
+.detail-topbar {
+  align-items: center;
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-topbar :deep(.arco-breadcrumb) {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.detail-topbar :deep(.arco-breadcrumb-item:last-child) {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.browse-nav {
+  gap: 10px;
+}
+
+.browse-position {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: 14px;
+  color: var(--ink-2);
+  padding-right: 10px;
+  border-right: 1px solid var(--line);
+}
+
+/* 出图入口：两枚文本批注链接，安静地放在浏览导航右侧 */
+.detail-gen-link {
+  margin-left: 2px;
+  font-size: 12px;
+  color: var(--ink-3);
+  padding: 2px 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.detail-gen-link:hover {
+  color: var(--ink);
+  border-bottom-color: var(--ink-3);
+}
+
+@media (max-width: 767px) {
+  .detail-topbar {
+    gap: 8px;
+  }
+
+  .detail-layout {
+    gap: 20px;
+  }
+}
+
+@media (max-width: 767px) {
+  .browse-nav {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .detail-gen-link {
+    white-space: nowrap;
+  }
+}
+
+/* 详情页容器整宽展开（Arco spin 默认 inline-block 会被右侧栏的 380px 撑宽） */
+.detail-page {
+  width: 100%;
+}
+
+.detail-page :deep(.arco-spin) {
+  display: block;
+  width: 100%;
+}
+
+.detail-layout {
+  min-width: 0;
+}
+
+.image-section {
+  min-width: 0;
+}
 </style>

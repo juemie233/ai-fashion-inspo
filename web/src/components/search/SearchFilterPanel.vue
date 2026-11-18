@@ -260,4 +260,26 @@ const favoriteOnlyModel = computed({
     width: 100%;
   }
 }
+
+/* ── 印样台：筛选面板是一张窄索引卡，始终贴住墨线 ── */
+.filter-panel {
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--sheet);
+  box-shadow: none;
+}
+
+.filter-panel :deep(.arco-card-header) {
+  border-bottom: 1px solid var(--line);
+  background: var(--sheet-2);
+}
+
+.filter-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-row:last-child {
+  border-bottom: 0;
+}
 </style>

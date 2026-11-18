@@ -260,4 +260,76 @@ const sortModeModel = computed({
   justify-content: center;
   padding: 24px 0;
 }
+
+/* ── 印样台：结果区顶部是一条书眉，计数用老式数字 ── */
+.result-panel {
+  min-width: 0;
+}
+
+.result-header-row {
+  align-items: baseline;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+}
+
+.result-count {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.no-result-hint {
+  border: 1px dashed var(--line-strong);
+  background: var(--sheet);
+  border-radius: 0;
+}
+
+/* 结果分页在 900 以下允许换行；375 隐藏每页条数选择，避免横向溢出 */
+@media (max-width: 900px) {
+  .pagination-wrapper {
+    display: flex;
+    justify-content: center;
+    max-width: 100%;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination) {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    justify-content: center;
+    width: 100% !important;
+    row-gap: 8px;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination-list) {
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .pagination-wrapper :deep(.arco-pagination-options) {
+    display: none;
+  }
+}
+
+/* 375：结果分页同样只保留 上一页 / 当前页 / 下一页 */
+@media (max-width: 767px) {
+  .pagination-wrapper
+    :deep(
+      .arco-pagination-item:not(.arco-pagination-item-prev):not(.arco-pagination-item-next):not(
+          .arco-pagination-item-active
+        ):not(.arco-pagination-item-jumper)
+    ) {
+    display: none !important;
+  }
+
+  .pagination-wrapper :deep(.arco-pagination-options),
+  .pagination-wrapper :deep(.arco-pagination-total) {
+    display: none !important;
+  }
+}
 </style>

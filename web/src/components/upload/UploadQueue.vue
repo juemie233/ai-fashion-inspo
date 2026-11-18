@@ -26,10 +26,12 @@ const emit = defineEmits<{
   <div class="queue-section">
     <div class="queue-header">
       <span>上传队列 ({{ queue.length }})</span>
-      <span style="font-size:12px;color:#999">
+      <span style="font-size: 12px; color: #999">
         待上传 {{ pending }} · 已完成 {{ done }} · 失败 {{ failed }}
         <template v-if="dups > 0"> · 跳过 {{ dups }}</template>
-        <template v-if="uploading && speed"> · <span style="color:#6366f1">{{ speed }}</span></template>
+        <template v-if="uploading && speed">
+          · <span style="color: #6366f1">{{ speed }}</span></template
+        >
       </span>
       <a-space>
         <a-button size="mini" @click="emit('clear')" :disabled="uploading">清空队列</a-button>
@@ -37,12 +39,7 @@ const emit = defineEmits<{
     </div>
 
     <div class="queue-grid">
-      <div
-        v-for="item in queue"
-        :key="item.id"
-        class="queue-card"
-        :class="item.status"
-      >
+      <div v-for="item in queue" :key="item.id" class="queue-card" :class="item.status">
         <ThumbCard :alt="item.file.name">
           <template #media>
             <video
@@ -121,9 +118,15 @@ const emit = defineEmits<{
   border: 2px solid #e5e7eb;
 }
 
-.queue-card.done { border-color: #22c55e; }
-.queue-card.failed { border-color: #ef4444; }
-.queue-card.duplicate { border-color: #f59e0b; }
+.queue-card.done {
+  border-color: #22c55e;
+}
+.queue-card.failed {
+  border-color: #ef4444;
+}
+.queue-card.duplicate {
+  border-color: #f59e0b;
+}
 
 .queue-video-badge {
   position: absolute;
@@ -157,7 +160,7 @@ const emit = defineEmits<{
   right: 0;
   font-size: 10px;
   color: #fff;
-  background: rgba(0,0,0,0.6);
+  background: rgba(0, 0, 0, 0.6);
   padding: 2px 4px;
   text-align: center;
 }
@@ -169,8 +172,50 @@ const emit = defineEmits<{
   right: 0;
   font-size: 10px;
   color: #fff;
-  background: rgba(239,68,68,0.8);
+  background: rgba(239, 68, 68, 0.8);
   padding: 2px 4px;
   text-align: center;
+}
+
+/* ── 印样台：排队像一叠待印的样张，方角细线卡 ── */
+.queue-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.queue-header {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.queue-grid {
+  gap: 10px;
+}
+
+.queue-card {
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--sheet);
+}
+
+.queue-card:hover {
+  border-color: var(--ink-3);
+  box-shadow: none;
+}
+
+.queue-card-status {
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+.queue-card-name {
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.queue-card-error {
+  color: var(--seal);
+  font-size: 11px;
 }
 </style>

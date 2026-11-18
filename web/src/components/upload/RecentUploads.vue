@@ -67,7 +67,9 @@ const emit = defineEmits<{
   cursor: pointer;
   background: #f3f4f6;
   border: 1px solid #e5e7eb;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
 }
 
 .recent-card:hover {
@@ -103,5 +105,26 @@ const emit = defineEmits<{
 
 .recent-card:hover .recent-card-overlay {
   opacity: 1;
+}
+
+.recent-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.recent-grid {
+  gap: 10px;
+}
+
+.recent-card {
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--sheet);
+}
+
+.recent-card:hover {
+  box-shadow: none;
+  border-color: var(--ink-3);
 }
 </style>
