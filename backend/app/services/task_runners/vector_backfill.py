@@ -546,23 +546,39 @@ async def _flush_vector_batches(
 
     写入行数与攒批数不符时记 warning（跳过的为维度不匹配/含 NaN 等非法向量）。
     幂等：batch_upsert 先删同批旧向量再插入，重复任务不会产生重复向量。
+
+    **返回的 ID 必须是「真正写进去的」**：写入侧会静默跳过维度不匹配/含 NaN 的
+    向量，若把这些 ID 也算进成功样本，收尾抽查抽到它们就会把「维度不匹配」误报成
+    「向量库被外部删除」并抛 PermanentTaskError（任务失败、全部 ID 重新入队）。
+    因此只在行数对不上时才用 ``filter_writable_vectors`` 反查（同一套过滤规则）。
     """
     text_ids: list[str] = []
     image_ids: list[str] = []
     text_ok = image_ok = 0
+
+    def _ok_ids(kind: str, items: list[tuple[str, list[float]]], written: int) -> list[str]:
+        """行数与攒批数一致 → 全部算成功；否则剔除写入侧会跳过的非法向量。"""
+        if written == len(items):
+            return [iid for iid, _ in items]
+        valid, dropped = vector_store.filter_writable_vectors(kind, items)
+        if dropped:
+            logger.warning(
+                f"{kind} 向量批量写入 {written}/{len(items)} 条，"
+                f"{len(dropped)} 条因维度不匹配/含 NaN/Inf 被跳过（已从落库抽查样本剔除）"
+            )
+        else:
+            logger.warning(f"{kind} 向量批量写入 {written}/{len(items)} 条")
+        return [iid for iid, _ in valid]
+
     if pending_text:
         written = await vector_store.batch_upsert_vectors("text", pending_text)
         text_ok = written
-        text_ids = [iid for iid, _ in pending_text]
-        if written != len(pending_text):
-            logger.warning(f"文本向量批量写入 {written}/{len(pending_text)} 条")
+        text_ids = _ok_ids("text", pending_text, written)
         pending_text.clear()
     if pending_image:
         written = await vector_store.batch_upsert_vectors("image", pending_image)
         image_ok = written
-        image_ids = [iid for iid, _ in pending_image]
-        if written != len(pending_image):
-            logger.warning(f"图像向量批量写入 {written}/{len(pending_image)} 条")
+        image_ids = _ok_ids("image", pending_image, written)
         pending_image.clear()
     return text_ok, text_ids, image_ok, image_ids
 

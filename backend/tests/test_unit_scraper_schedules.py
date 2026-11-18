@@ -383,7 +383,8 @@ class TestRunDueSchedules:
         async with async_session() as db:
             triggered = await sched_module.run_due_schedules(db)
 
-        assert triggered == 1  # 仍计入触发（节奏照常推进）
+        # 节奏照常推进，但建任务失败不计入「已触发」——否则日志把失败报成成功
+        assert triggered == 0
         async with async_session() as db:
             refreshed = await db.get(ScraperSchedule, sched.id)
         assert refreshed.next_run_at > utcnow()

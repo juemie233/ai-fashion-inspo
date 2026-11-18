@@ -186,6 +186,9 @@ async def _load_pending_items(
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.media_type).where(
             Inspiration.id.in_(inspiration_ids),
+            # 垃圾桶素材不参与打标：任务创建后才被删的素材没必要再花 Ollama 时间，
+            # 且把分析结果写回垃圾桶素材会与其删除状态自相矛盾
+            Inspiration.deleted_at.is_(None),
             Inspiration.media_type.in_(("image", "video")),
         )
     )
@@ -531,6 +534,9 @@ async def _load_items(
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.media_type).where(
             Inspiration.id.in_(inspiration_ids),
+            # 垃圾桶素材不参与打标：任务创建后才被删的素材没必要再花 Ollama 时间，
+            # 且把分析结果写回垃圾桶素材会与其删除状态自相矛盾
+            Inspiration.deleted_at.is_(None),
             Inspiration.media_type.in_(("image", "video")),
         )
     )

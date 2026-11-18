@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tag import InspirationTag, Tag, TagAlias
 from app.models.tag_history import TagHistory
+from app.utils.time import format_utc
 
 # 冲突检测/回滚需要比较的「可编辑」字段（不含派生计数）
 _EDITABLE_FIELDS = (
@@ -220,7 +221,8 @@ async def list_history(
                 "before": json.loads(r.before_snapshot),
                 "after": json.loads(r.after_snapshot),
                 "meta": json.loads(r.meta) if r.meta else None,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                # 带 Z 后缀：isoformat() 输出 naive UTC 无时区，前端会当本地时间解析
+                "created_at": format_utc(r.created_at),
             }
         )
     return {"items": items, "total": total, "page": page, "size": size}

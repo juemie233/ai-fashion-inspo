@@ -19,6 +19,14 @@ from app.utils.time import utcnow
 """拒绝原因码白名单（与 prompt 里的枚举保持一致；approved 时为 None）。"""
 REASON_CODES = {"not_outfit", "single_item", "partial", "low_quality", "ad", "other"}
 
+"""`quality_reason_code` 的全集（可落进该字段的所有合法值）。
+
+与 ``REASON_CODES`` 的差别只在系统自产码：``prefilter_reject`` 由初筛器直接写入
+（见 ``check_image_quality``），模型不会也不应该返回它。误判反馈的原因码校验要
+用本集合——用 ``REASON_CODES`` 会拒绝把「被初筛器误杀」当成纠错原因。
+"""
+SYSTEM_REASON_CODES = REASON_CODES | {"prefilter_reject"}
+
 
 async def _ollama_vision_chat(
     image_data: str, prompt: str, model_cfg: dict, temperature: float
@@ -428,9 +436,11 @@ async def check_image_quality(
     reason = str(parsed.get("reason", "")).strip() or ("穿搭照片" if is_outfit else "非穿搭内容")
     status = "approved" if is_outfit else "rejected"
     # 结构化原因码：模型给了合法值就用，否则按判定兜底（rejected → not_outfit），
-    # approved 一律 None。自由文本 reason 仍保留（人看），code 用于筛选与统计。
+    # approved **一律 None**。自由文本 reason 仍保留（人看），code 用于筛选与统计。
+    # 先判 is_outfit 再取值：模型在通过时也可能顺手给个 reason_code（如 partial），
+    # 直接采用会让 approved 素材带上拒绝原因码，筛选/统计把它算成被拒项。
     code_raw = str(parsed.get("reason_code", "")).strip()
-    reason_code = code_raw if code_raw in REASON_CODES else (None if is_outfit else "not_outfit")
+    reason_code = None if is_outfit else (code_raw if code_raw in REASON_CODES else "not_outfit")
     if stats is not None:
         stats["reason_code"] = reason_code
 

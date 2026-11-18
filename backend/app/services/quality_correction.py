@@ -11,7 +11,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration, QualityCorrection
-from app.services.ai_service.quality import REASON_CODES
+from app.services.ai_service.quality import SYSTEM_REASON_CODES
+from app.utils.time import format_utc
 
 VALID_STATUS = ("approved", "rejected")
 
@@ -41,8 +42,10 @@ async def record_correction(
     """
     if corrected_status not in VALID_STATUS:
         raise ValueError("corrected_status 只能是 approved 或 rejected")
-    if reason_code is not None and reason_code not in REASON_CODES:
-        # 白名单校验：否则任意字符串会写进 quality_reason_code，前端「按原因筛选」永远匹配不上
+    if reason_code is not None and reason_code not in SYSTEM_REASON_CODES:
+        # 白名单校验用 SYSTEM_REASON_CODES（模型码 + 系统自产码）：只认 REASON_CODES
+        # 会拒绝 prefilter_reject，导致「被初筛器误杀」这类最常见误判无法提交纠错。
+        # 反向意义同前：否则任意字符串会写进 quality_reason_code，前端「按原因筛选」匹配不上
         raise ValueError(f"reason_code 不合法：{reason_code}")
 
     inspiration = await db.get(Inspiration, inspiration_id)
@@ -102,7 +105,8 @@ async def list_corrections(
             "corrected_status": r.corrected_status,
             "reason_code": r.reason_code,
             "note": r.note,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            # 带 Z 后缀：isoformat() 输出 naive UTC 无时区，前端会当本地时间解析
+            "created_at": format_utc(r.created_at),
         }
         for r in rows
     ]

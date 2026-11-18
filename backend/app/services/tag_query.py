@@ -421,7 +421,7 @@ async def list_watch_tags(
         ``{"days","max_usage","cutoff","total","items":[{"id","name","category",
         "created_at","usage_count"}]}``。
     """
-    from app.utils.time import utcnow
+    from app.utils.time import format_utc, utcnow
 
     cutoff = utcnow() - timedelta(days=days)
     usage_subq = (
@@ -477,7 +477,8 @@ async def list_watch_tags(
                 "id": tid,
                 "name": name,
                 "category": category,
-                "created_at": created_at,
+                # 带 Z 后缀：裸 datetime 序列化后无时区，前端会当本地时间解析
+                "created_at": format_utc(created_at),
                 "usage_count": cnt,
             }
             for tid, name, category, created_at, cnt in rows

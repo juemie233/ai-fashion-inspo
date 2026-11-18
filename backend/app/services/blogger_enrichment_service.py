@@ -51,6 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.models.person import Blogger, BloggerEnrichmentSkip
+from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -813,7 +814,8 @@ async def list_skipped(db: AsyncSession) -> list[dict]:
             "blogger_id": skip.blogger_id,
             "name": name,
             "reason": skip.reason,
-            "created_at": skip.created_at.isoformat(),
+            # 带 Z 后缀：isoformat() 输出 naive UTC 无时区，前端会当本地时间解析
+            "created_at": format_utc(skip.created_at),
         }
         for skip, name in rows.all()
     ]

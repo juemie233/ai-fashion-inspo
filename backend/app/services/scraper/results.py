@@ -144,7 +144,8 @@ async def get_task_results(
                 "media_type": i.media_type,
                 "source_url": i.source_url,
                 "is_favorite": i.is_favorite,
-                "created_at": str(i.created_at) if i.created_at else None,
+                # 带 Z 后缀：str(datetime) 无时区，前端会当本地时间解析
+                "created_at": format_utc(i.created_at),
             }
             for i in items
         ],

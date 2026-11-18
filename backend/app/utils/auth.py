@@ -119,6 +119,12 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     ("POST", "/api/scraper/tasks/{task_id}/results/batch-delete"),
     # f2 结果审查的「彻底删除」（不可恢复；同批的移入垃圾桶/还原属可恢复操作，不进清单）
     ("POST", "/api/scraper/f2-tasks/{task_id}/results/delete"),
+    # 出图批次丢弃：删除该批次尚未入库的候选目录，文件不可恢复
+    # （DELETE /api/scraper/schedules/{id} 只是删一条可重建的计划配置，
+    #  与「配置修改不进清单」同口径，刻意不列入）
+    ("DELETE", "/api/generate/runs/{run_id}"),
+    # 合集删除：手动合集会级联删掉全部成员关系（成员清单不可恢复）
+    ("DELETE", "/api/collections/{collection_id}"),
     # 任务队列历史记录删除（仅终态任务，物理删除）
     ("DELETE", "/api/tasks/{task_id}"),
     # 模型卸载（删除磁盘模型）

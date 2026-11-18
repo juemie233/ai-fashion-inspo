@@ -436,6 +436,27 @@ def _delete_ids_sync(kind: str, inspiration_ids: list[str], chunk_size: int = 50
         )
 
 
+def filter_writable_vectors(
+    kind: str, items: list[tuple[str, list[float]]]
+) -> tuple[list[tuple[str, list[float]]], list[str]]:
+    """按写入侧同一套规则过滤向量，返回 (可写入项, 会被丢弃的 ID)。
+
+    维度不符或含 NaN/Inf 的向量在实际写入时会被静默跳过。调用方若要判断
+    「哪些 ID 真的写进去了」（典型场景：回填任务写完后抽查落库），必须先用
+    本函数对齐口径——否则会把被跳过的 ID 也当成写入成功，抽查必然误报。
+    """
+    expected_dim = _dim(kind)
+    valid: list[tuple[str, list[float]]] = []
+    dropped: list[str] = []
+    for inspiration_id, vector in items:
+        vec = [float(x) for x in vector]
+        if len(vec) != expected_dim or not all(math.isfinite(x) for x in vec):
+            dropped.append(inspiration_id)
+            continue
+        valid.append((inspiration_id, vec))
+    return valid, dropped
+
+
 def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
     """同步批量写入多条向量（先删同批旧向量再单次 add，实现真 upsert）。
 
@@ -449,20 +470,14 @@ def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
     if not items:
         return 0
     expected_dim = _dim(kind)
+    valid, dropped = filter_writable_vectors(kind, items)
+    for inspiration_id in dropped:
+        logger.warning(
+            f"批量写入向量跳过 (kind={kind}, id={inspiration_id}): "
+            f"维度与期望 {expected_dim} 不符，或含 NaN/Inf"
+        )
     rows = []
-    for inspiration_id, vector in items:
-        vec = [float(x) for x in vector]
-        if len(vec) != expected_dim:
-            logger.warning(
-                f"批量写入向量维度不匹配 (kind={kind}, id={inspiration_id}): "
-                f"期望 {expected_dim}，实际 {len(vec)}，跳过"
-            )
-            continue
-        if not all(math.isfinite(x) for x in vec):
-            logger.warning(
-                f"批量写入向量含非法值（NaN/Inf）(kind={kind}, id={inspiration_id})，跳过"
-            )
-            continue
+    for inspiration_id, vec in valid:
         rows.append({
             "id": uuid.uuid4().hex,
             "inspiration_id": inspiration_id,

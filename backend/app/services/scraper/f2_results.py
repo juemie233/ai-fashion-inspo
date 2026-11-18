@@ -29,6 +29,7 @@ from app.services.inspiration_trash import (
     batch_trash_inspirations,
     restore_inspiration,
 )
+from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,8 @@ async def get_f2_task_results(
                 "is_favorite": bool(row.is_favorite),
                 "trash_reason": row.trash_reason,
                 "source_platform_id": row.source_platform_id,
-                "created_at": str(row.created_at or ""),
+                # 带 Z 后缀：str(datetime) 无时区，前端会当本地时间解析
+                "created_at": format_utc(row.created_at) or "",
             }
         if item["author"]:
             author_counter[item["author"]] = author_counter.get(item["author"], 0) + 1
@@ -220,8 +222,8 @@ async def get_f2_task_results(
         "task": {
             "id": task.id,
             "status": task.status,
-            "created_at": str(task.created_at or ""),
-            "updated_at": str(task.updated_at or ""),
+            "created_at": format_utc(task.created_at) or "",
+            "updated_at": format_utc(task.updated_at) or "",
             "error": task.error,
             **_result_summary(task),
         },

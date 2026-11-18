@@ -164,6 +164,20 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         await db.commit()
         return
 
+    # 任务创建后才被移入垃圾桶的素材不参与审核：垃圾桶里的素材可能已被用户按
+    # 「隐私」等原因删除，审核写入会把 quality_status 改回 approved/rejected，
+    # 自动处置分支还会用「质量差」覆盖原 trash_reason（隐私图因此进了负样本）。
+    trashed_ids = set(
+        (
+            await db.execute(
+                select(Inspiration.id).where(
+                    Inspiration.id.in_(inspiration_ids),
+                    Inspiration.deleted_at.is_not(None),
+                )
+            )
+        ).scalars().all()
+    )
+
     # 加载待审核的图片素材（执行期间可能已被人工翻案）：
     # 随机复审不限制状态，覆盖重审已审查素材；普通审核仅保留仍 pending 的
     stmt = select(
@@ -173,6 +187,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         Inspiration.thumbnail_path,
     ).where(
         Inspiration.id.in_(inspiration_ids),
+        Inspiration.deleted_at.is_(None),
         # 视频也参与审核（老 #1）：视觉模型只吃图片，视频用上传时 ffmpeg 抽的首帧缩略图。
         # 没有缩略图的视频退回原文件，会因读图失败保持 pending 并在原因里写明（不静默漏审）。
         Inspiration.media_type.in_(("image", "video")),
@@ -197,16 +212,23 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
             select(Inspiration.id).where(
                 Inspiration.id.in_(inspiration_ids),
                 # 与上面口径一致：图片 + 视频都算「可审核」
+                # （这里刻意**不**过滤垃圾桶，好让 trashed 单独计数，不从 not_image 里混淆）
                 Inspiration.media_type.in_(("image", "video")),
             )
         )
     ).scalars().all()
+    trashed_image_ids = trashed_ids.intersection(existing_image_ids)
     # not_image 现语义为「既不是图片也不是视频」（如音频/文档），含义已在文档说明
     skipped_not_image = len(inspiration_ids) - len(existing_image_ids)
-    skipped_not_pending = 0 if is_random else len(existing_image_ids) - len(items)
+    skipped_not_pending = (
+        0
+        if is_random
+        else len(existing_image_ids) - len(trashed_image_ids) - len(items)
+    )
     skipped_detail = {
         "not_image": max(0, skipped_not_image),
         "not_pending": max(0, skipped_not_pending),
+        "trashed": len(trashed_image_ids),
         "total": max(0, len(inspiration_ids) - len(items)),
     }
 

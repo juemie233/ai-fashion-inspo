@@ -242,15 +242,21 @@ async def run_due_schedules(db: AsyncSession) -> int:
 
         launched_id: int | None = None
         try:
-            task = ScraperTask(
-                platform=sched.platform,
-                status="pending",
-                config=json.dumps(_build_schedule_task_config(sched), ensure_ascii=False),
-            )
-            db.add(task)
-            await db.flush()
-            await db.refresh(task)
-            launched_id = task.id
+            # 用 SAVEPOINT 包住建任务这一段：失败只回滚这一小段，会话不会停在
+            # 失败事务里（否则后面的 commit() 抛 PendingRollbackError，整轮调度
+            # 直接中断，本轮剩余到期计划一个都跑不到）。
+            # 也不能 rollback() 整个事务：那会连上面的乐观锁认领一起撤销，
+            # 同一个坏计划会在每个 tick 无限重试刷日志。
+            async with db.begin_nested():
+                task = ScraperTask(
+                    platform=sched.platform,
+                    status="pending",
+                    config=json.dumps(_build_schedule_task_config(sched), ensure_ascii=False),
+                )
+                db.add(task)
+                await db.flush()
+                await db.refresh(task)
+                launched_id = task.id
         except Exception as e:
             logger.warning(f"[定时采集] 计划 {sched.id} 创建任务失败: {e}")
 
@@ -261,10 +267,11 @@ async def run_due_schedules(db: AsyncSession) -> int:
                 .values(last_task_id=launched_id)
             )
         await db.commit()
-        if launched_id is not None:
-            task_row = await db.get(ScraperTask, launched_id)
-            if task_row:
-                # 启动失败时由 _safe_launch 把任务置 failed，避免永久 pending
-                await _safe_launch(db, task_row)
+        if launched_id is None:
+            continue  # 建任务失败不计入 triggered（否则日志把失败报成已触发）
+        task_row = await db.get(ScraperTask, launched_id)
+        if task_row:
+            # 启动失败时由 _safe_launch 把任务置 failed，避免永久 pending
+            await _safe_launch(db, task_row)
         triggered += 1
     return triggered

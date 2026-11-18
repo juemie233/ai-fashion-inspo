@@ -42,8 +42,12 @@ def _scan_root(f2, fetch_mode: str) -> Path:
 def _resolve_authors(f2, bloggers: dict, explicit: list[str], include_unknown: bool) -> set[str] | None:
     """解析「本次要计哪些作者」的产物（None = 不过滤）。
 
-    与 ``execute_f2_import`` 的白名单口径一致：库内一个抖音博主都没有时没有依据，
-    退回「全部」；显式点名作者时以点名为准（并集）。
+    **必须与 ``execute_f2_import`` 的白名单口径逐条对齐**：此前这里用「并集」、
+    执行侧用「交集」，点名一个未登记作者时预览有数（known ∪ 点名）、实际入库 0 条。
+    现在的口径：
+    - 库内一个抖音博主都没有，或勾了「包含未登记账号」：只按点名单过滤；
+    - 否则允许范围 = 库内博主名 ∪ 按 ``sec_user_id`` 命中的 f2 昵称；
+    - 显式点名作者时取**交集**（点名未登记作者 → 空集 → 一个都不导入）。
     """
     scope = {a.strip() for a in explicit if a.strip()}
     if include_unknown or not bloggers:
@@ -55,8 +59,8 @@ def _resolve_authors(f2, bloggers: dict, explicit: list[str], include_unknown: b
         logger.warning(f"读取 f2 用户库失败，预览退化为不限作者: {exc}")
         return scope or None
     known, _unknown = f2.select_known_authors(authors, bloggers)
-    known_keys = {f2.normalize_author(a["nickname"]) for a in known}
-    return (known_keys | scope) if scope else known_keys
+    allowed_keys = set(bloggers) | {f2.normalize_author(a["nickname"]) for a in known}
+    return (scope & allowed_keys) if scope else allowed_keys
 
 
 def preview_import_sync(
@@ -129,7 +133,8 @@ def preview_import_sync(
         "works": len({d.item.work_key for d in to_import}),
         "skipped": dict(skipped),
         "deferred_works": deferred_works,
-        "authors_scope": sorted(plan_authors) if plan_authors else None,
+        # 用 is not None 判定：空集合表示「一个都不导入」，与 None（不过滤）是两回事
+        "authors_scope": sorted(plan_authors) if plan_authors is not None else None,
         "has_any": True,
         "hash_cache": cache_stats,
     }

@@ -46,10 +46,15 @@ async def update_inspiration(
         inspiration.quality_reviewed_by = "human"
         if data.quality_status in ("approved", "pending"):
             inspiration.quality_reason = None
+            # 结构化原因码必须一起清：只清自由文本会让「按原因码筛选/统计」
+            # 继续把这条已通过（或待审）的素材算成被拒项
+            inspiration.quality_reason_code = None
         else:
             # rejected：显式传入的原因优先；未传时清空旧原因，避免
             # 「旧拒绝原因张冠李戴」（如上一轮 rejected 的原因残留到新一轮）
             inspiration.quality_reason = data.quality_reason
+            # 人工拒绝没有结构化原因码（请求体不带该字段），旧码同样不能留
+            inspiration.quality_reason_code = None
 
     if data.is_ai_generated is not None:
         # 人工复核翻案：标记或取消「疑似 AI」标记。
@@ -119,8 +124,10 @@ async def batch_update_inspirations(
         # 人工（含批量）改质量状态 → 记来源
         values["quality_reviewed_by"] = "human"
         # 与单条更新语义一致：翻案为 approved/pending 清空原因；
-        # rejected 时本函数无原因参数，一并清空旧原因避免张冠李戴
+        # rejected 时本函数无原因参数，一并清空旧原因避免张冠李戴。
+        # 结构化原因码同理必须一起清，否则按原因码筛选时已通过的素材仍会被算成被拒项。
         values["quality_reason"] = None
+        values["quality_reason_code"] = None
 
     if len(values) == 1:  # 仅 updated_at，无任何业务字段
         return 0

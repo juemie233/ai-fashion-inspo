@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration, utcnow
 from app.models.tag import InspirationTag
+from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +115,9 @@ async def person_insights(
         "monthly": monthly,
         "quality": quality,
         "media": media,
-        "first_added": str(first_added) if first_added else None,
-        "last_added": str(last_added) if last_added else None,
+        # 必须走 format_utc 带 Z 后缀：str(datetime) 没有时区，前端会按本地时间解析
+        "first_added": format_utc(first_added),
+        "last_added": format_utc(last_added),
     }
 
 

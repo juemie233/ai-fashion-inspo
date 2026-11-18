@@ -19,7 +19,7 @@ from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filt
 from app.models.tag import InspirationTag, Tag
 from app.models.tag_correction import TagCorrection
 from app.services.tag_service import get_or_create_tag
-from app.utils.time import utcnow
+from app.utils.time import format_utc, utcnow
 
 # 反馈原因 -> 执行动作（noted = 仅记录）
 REASON_ACTIONS: dict[str, str] = {
@@ -192,7 +192,8 @@ async def list_tag_corrections(
                 "log_id": row.log_id,
                 "prompt_version": row.prompt_version,
                 "model_name": row.model_name,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
+                # 带 Z 后缀：isoformat() 输出 naive UTC 无时区，前端会当本地时间解析
+                "created_at": format_utc(row.created_at),
             }
             for row in rows
         ],
