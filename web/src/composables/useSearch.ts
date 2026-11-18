@@ -169,6 +169,9 @@ export function useSearch() {
     if (mediaFilter.value) query.media_type = mediaFilter.value
     if (analysisFilter.value) query.analysis_status = analysisFilter.value
     if (dateFrom.value) query.date_from = dateFrom.value
+    // 结束日期按「含当天」传原始日期即可：后端 build_inspiration_query 会把
+    // YYYY-MM-DD 换算成次日零点取 <（见 inclusive_date_upper_bound），
+    // 前端再加一天会变成少两天。
     if (dateTo.value) query.date_to = dateTo.value
     if (ratingMin.value) query.rating_min = Number(ratingMin.value)
     if (favoriteOnly.value) query.is_favorite = true

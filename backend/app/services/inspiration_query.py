@@ -1,6 +1,8 @@
 """灵感素材查询：列表分页筛选、详情、主色调统计。"""
 
 import asyncio
+import re
+from datetime import date, timedelta
 from typing import Any
 
 from fastapi import HTTPException
@@ -21,6 +23,30 @@ from app.models.tag import InspirationTag, Tag
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+_ISO_DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def inclusive_date_upper_bound(value: str) -> str:
+    """把「截止日期（含当天）」换算成「次日零点」的字符串上界，配合 ``<`` 使用。
+
+    日期选择器给的是 ``YYYY-MM-DD``，而 ``created_at`` 存的是
+    ``YYYY-MM-DD HH:MM:SS.ffffff``；直接写 ``created_at <= 'YYYY-MM-DD'``
+    按字典序比较会把结束日期当天整天排除（``'2026-11-18 10:00' > '2026-11-18'``）。
+
+    非纯日期入参（已带时间的精确上界）原样返回。所有「截止日期」筛选都必须
+    走这里，别各页面自己加一天——加在前端会漏掉其它客户端，也让已保存的
+    智能合集条件继续少一天。
+    """
+    if not _ISO_DATE_ONLY.match(value):
+        return value
+    try:
+        return (date.fromisoformat(value) + timedelta(days=1)).isoformat()
+    except ValueError as exc:
+        # 形如 "2026-13-40" 的非法日期：原样返回，让上层按字符串比较（空结果好过 500）
+        logger.debug("inclusive_date_upper_bound: 非法日期入参 %r（%s）", value, exc)
+        return value
 
 
 def inspiration_load_options() -> tuple:
@@ -188,7 +214,10 @@ async def list_inspirations(
     if date_from:
         query = query.where(Inspiration.created_at >= date_from)
     if date_to:
-        query = query.where(Inspiration.created_at <= date_to)
+        # 「截止日」含当天：换算成次日零点后取 <（见 inclusive_date_upper_bound）
+        query = query.where(
+            Inspiration.created_at < inclusive_date_upper_bound(date_to)
+        )
 
     # 标签筛选（AND 语义：素材须同时包含所有给定标签）
     if include_tags:
@@ -420,7 +449,10 @@ def build_filters_from_query_json(query_json: dict) -> list[ColumnElement[bool]]
         conditions.append(Inspiration.created_at >= start_date)
     end_date = query_json.get("end_date")
     if isinstance(end_date, str) and end_date:
-        conditions.append(Inspiration.created_at <= end_date)
+        # 与素材库 date_to 同口径：截止日含当天（已保存的旧合集条件也随之修正）
+        conditions.append(
+            Inspiration.created_at < inclusive_date_upper_bound(end_date)
+        )
 
     return conditions
 
