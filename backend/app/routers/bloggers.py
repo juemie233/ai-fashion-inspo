@@ -18,6 +18,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -223,6 +224,56 @@ async def fill_missing_avatars(
         "task_id": task.id,
         "total": total,
         "message": f"本次将为 {total} 位博主补全头像",
+    }
+
+
+class RatingBackfillRequest(BaseModel):
+    """「补全评分」请求体：统一星级 + 可选博主范围（只此一处使用，就近定义）。"""
+
+    rating: int = Field(..., ge=1, le=5, description="统一星级（1~5）")
+    blogger_ids: list[int] | None = Field(
+        default=None, description="限定博主范围；不传/空 = 全部满足门槛的博主"
+    )
+
+
+@router.post("/rating-backfill", status_code=status.HTTP_201_CREATED)
+async def backfill_blogger_ratings(
+    payload: RatingBackfillRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """给博主名下「未评分」素材批量补统一星级（人物页「补全评分」）。
+
+    - 不传 ``blogger_ids``：处理所有有未评分素材的博主；素材总数 > 5 的优先
+      （按素材数升序，先让刚够统计门槛的博主有均分），其余素材较少的博主排在后面；
+      同数按 id 升序；
+    - 传 ``blogger_ids``：按指定范围补（用户已明确选择）；
+    - 只补 ``rating`` 为空 / 0 且未删除的素材，**已评分绝不覆盖**；
+    - 返回 ``task_id``，进度/逐博主明细通过 ``GET /api/tasks/{id}`` 轮询；
+      任务在运行中可取消（``POST /api/tasks/{id}/cancel``），已补的保留。
+    """
+    from app.services.task_runners.blogger_rating_backfill import (
+        create_rating_backfill_task,
+    )
+
+    task, total = await create_rating_backfill_task(
+        db, payload.rating, payload.blogger_ids
+    )
+    if task is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "没有可补评分的素材：目标博主需满足「关联未删除素材数 > 5」"
+                "且名下仍有未评分素材"
+            ),
+        )
+    blogger_count = len((task.result or {}).get("blogger_ids") or [])
+    return {
+        "task_id": task.id,
+        "total": total,
+        "message": (
+            f"本次将为 {blogger_count} 位博主的 {total} 条未评分素材"
+            f"补全为 {payload.rating} 星评分"
+        ),
     }
 
 
