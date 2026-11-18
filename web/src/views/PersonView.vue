@@ -32,7 +32,17 @@ watch(activeKind, (kind) => {
           导入）与模特（写真照片组）业务逻辑分别演进
         </a-typography-text>
       </div>
-      <a-button type="primary" @click="router.push('/face-scan')">人脸库扫描</a-button>
+      <div class="page-actions">
+        <!-- 优先评分只在穿搭博主 tab 出现：模特没有「作品评分」业务 -->
+        <a-button
+          v-if="activeKind === 'blogger'"
+          type="secondary"
+          @click="router.push('/person-rating')"
+        >
+          优先评分
+        </a-button>
+        <a-button type="primary" @click="router.push('/face-scan')">人脸库扫描</a-button>
+      </div>
     </div>
 
     <a-tabs v-model:active-key="activeKind" type="line">
@@ -59,6 +69,13 @@ watch(activeKind, (kind) => {
 }
 .page-header h2 {
   margin: 0 0 4px;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* ── 印样台人物页：选角板式页眉 ── */

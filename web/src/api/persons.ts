@@ -3,7 +3,7 @@
 import { createPersonApi } from './personBase'
 import apiClient from './client'
 // 只导入本文件**代码里**用到的类型；其余类型由下方 `export type { ... } from` 直接转发
-import type { Blogger, PersonPlatform } from '@shared/types/person'
+import type { Blogger, PersonBrief, PersonPlatform } from '@shared/types/person'
 
 export type {
   Blogger,
@@ -148,6 +148,39 @@ export interface PersonInspirationsOut {
   total: number
   page: number
   size: number
+}
+
+/** 人物优先评分队列项（GET /api/bloggers/rating-priority） */
+export interface BloggerRatingPriorityItem {
+  blogger_id: number
+  name: string
+  platform: PersonPlatform
+  avatar_path?: string | null
+  /** 该博主的图片素材总数（未删除） */
+  image_count: number
+  /** 已评分图片数（rating > 0） */
+  rated_count: number
+  /** 未评分图片数（rating 为空或 0） */
+  unrated_count: number
+  /** 已评分图片的平均分；没有样本时为 null（页面显示 --） */
+  rating_average?: number | null
+  /** 覆盖率 = 已评 / 图片素材数（0~1） */
+  coverage: number
+}
+
+/** 人物优先评分队列响应（仅本模块内部使用） */
+interface BloggerRatingPriorityOut {
+  items: BloggerRatingPriorityItem[]
+  /** 符合「还有未评分图片」的博主总数（不受 limit 影响） */
+  total: number
+}
+
+/** 博主随机未评分图片响应（仅本模块内部使用） */
+interface BloggerRandomRatingOut {
+  person: PersonBrief
+  items: PersonInspiration[]
+  /** 满足筛选（未评分图片）的素材总数 */
+  total: number
 }
 
 /** IP 属地统计响应（人物管理页地域分布） */
@@ -430,6 +463,33 @@ export const bloggersApi = {
     const { data } = await apiClient.post<{ message: string }>(
       `/bloggers/${id}/bind-face/${inspirationId}`,
     )
+    return data
+  },
+
+  /**
+   * 人物优先评分队列：按「已评占比升序」返回还有未评分图片素材的博主。
+   *
+   * 后端口径（2026-11-18 用户确认）：只统计未删除的**图片**；纳入所有还有未评分
+   * 图片的博主（不设素材数门槛）；排序 = 已评占比 → 已评数 → 图片素材数 → id。
+   * `total` 是符合条件的人物总数（不受 limit 影响），用于页面显示队列规模。
+   */
+  async fetchRatingPriority(limit = 1000): Promise<BloggerRatingPriorityOut> {
+    const { data } = await apiClient.get<BloggerRatingPriorityOut>('/bloggers/rating-priority', {
+      params: { limit },
+    })
+    return data
+  },
+
+  /**
+   * 随机抽当前博主的未评分图片（人物优先评分页逐张评）。
+   *
+   * 只抽 `media_type=image` 且 `rating` 为空/0 的未删除素材；当前博主评完会返回空
+   * `items`，前端据此自动切下一位博主。
+   */
+  async fetchRandomUnratedImage(bloggerId: number): Promise<BloggerRandomRatingOut> {
+    const { data } = await apiClient.get<BloggerRandomRatingOut>(`/bloggers/${bloggerId}/random`, {
+      params: { unrated: true, media_type: 'image', size: 1 },
+    })
     return data
   },
 }

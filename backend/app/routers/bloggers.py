@@ -487,6 +487,25 @@ async def duplicate_names_api(db: AsyncSession = Depends(get_db)) -> dict:
     return {"groups": groups, "total": len(groups)}
 
 
+@router.get("/rating-priority")
+async def blogger_rating_priority(
+    limit: int = Query(1000, ge=1, le=2000, description="最多返回多少位博主"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """人物优先评分队列：按「已评占比升序」返回还有未评分图片素材的博主。
+
+    用户已确认的口径（2026-11-18）：
+    - 只统计图片素材（``media_type=image``、未删除）；纳入**所有**还有未评分图片的
+      博主（不设素材数门槛）；
+    - 排序升序：已评占比（rated_count/image_count）→ 已评数 → 图片素材数 → id；
+    - 已评 = ``rating>0``；未评 = ``rating`` 为空或 0；``rating_average`` 只算已评图片。
+
+    前端「人物优先评分」页用它排队，再用
+    ``GET /api/bloggers/{id}/random?unrated=true&media_type=image`` 逐张抽未评分图片。
+    """
+    return await blogger_service.rating_priority(db, limit)
+
+
 @router.get("/{blogger_id}", response_model=BloggerDetailOut)
 async def get_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """获取博主详情（含素材数与风格画像）。"""
@@ -724,6 +743,7 @@ async def blogger_random_inspirations(
     quality_status: str | None = Query(None, pattern="^(approved|pending|rejected)$"),
     tag_name: str | None = None,
     rating_min: int | None = Query(None, ge=1, le=5),
+    unrated: bool = Query(False, description="仅未评分素材（rating 为空或 0）"),
     favorite: bool = Query(False),
     face_matched: bool = Query(False),
     db: AsyncSession = Depends(get_db),
@@ -733,6 +753,9 @@ async def blogger_random_inspirations(
     为什么单独一个接口：详情页素材可达 3,426 条，分页翻不完；随机浏览是「看看她都有
     什么」的最短路径。筛选参数与 `/inspirations` **完全一致**，所以在当前筛选结果里
     随机也成立（前端把同一份 filters 传进来即可）。
+
+    ``unrated=true`` 只抽未评分素材（rating 为空或 0），与其它筛选可组合；
+    「人物优先评分」页传 ``unrated=true&media_type=image`` 抽当前博主的未评分图片。
 
     Returns:
         ``{"person", "items": [...], "total": 满足筛选条件的素材总数}``；
@@ -746,6 +769,7 @@ async def blogger_random_inspirations(
         quality_status=quality_status,
         tag_name=tag_name,
         rating_min=rating_min,
+        unrated=unrated,
         favorite=favorite,
         face_matched=face_matched,
     )

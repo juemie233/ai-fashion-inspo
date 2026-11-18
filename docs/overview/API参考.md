@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-16，共 23 个模块 / 332 个端点）。
+> **状态**：自动生成（2026-11-18，共 23 个模块 / 333 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -17,7 +17,7 @@
 | [ai_quality](#ai_quality) | `/api/ai` | 12 |
 | [ai_reset](#ai_reset) | `/api/ai` | 1 |
 | [ai_settings](#ai_settings) | `/api/ai` | 15 |
-| [bloggers](#bloggers) | `/api/bloggers` | 42 |
+| [bloggers](#bloggers) | `/api/bloggers` | 43 |
 | [collections](#collections) | `/api/collections` | 10 |
 | [face_scan](#face_scan) | `/api/face-match、/api/face-scan` | 15 |
 | [files](#files) | `/api/files` | 2 |
@@ -203,6 +203,7 @@
 | `GET` | `/api/bloggers/avatars/coverage` | `avatar_coverage_api` | 头像覆盖率：``{"total", "with_avatar", "fillable"}``（人物管理页统计卡片用）。 |
 | `POST` | `/api/bloggers/avatars/clear` | `clear_avatars_api` | 批量清除头像。**必须明确指定范围**：``{"ids": [...]}`` 或 ``{"all": true}``。 |
 | `GET` | `/api/bloggers/duplicate-names` | `duplicate_names_api` | 同名博主建议（供合并/删除）：归一化昵称相同的记录分组返回。 |
+| `GET` | `/api/bloggers/rating-priority` | `blogger_rating_priority` | 人物优先评分队列：按「已评占比升序」返回还有未评分图片素材的博主。 |
 | `GET` | `/api/bloggers/{blogger_id}` | `get_blogger` | 获取博主详情（含素材数与风格画像）。 |
 | `PATCH` | `/api/bloggers/{blogger_id}` | `update_blogger` | 更新博主信息（部分更新；显式传 null 的字段会被清空）。 |
 | `POST` | `/api/bloggers/{blogger_id}/resolve-douyin-profile` | `resolve_douyin_profile_api` | 解析抖音博主的主页标识（sec_user_id + 主页链接），供「下载所有作品」直接可用。 |

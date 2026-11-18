@@ -637,6 +637,9 @@ class PersonServiceBase:
             clauses.append(Inspiration.quality_status == filters["quality_status"])
         if filters.get("rating_min"):
             clauses.append(Inspiration.rating >= filters["rating_min"])
+        if filters.get("unrated"):
+            # 未评分 = rating 为空或 0（与首页随机评分、素材列表的 unrated 筛选同一口径）
+            clauses.append(or_(Inspiration.rating.is_(None), Inspiration.rating == 0))
         if filters.get("favorite"):
             clauses.append(Inspiration.is_favorite.is_(True))
         if filters.get("tag_name"):
@@ -784,6 +787,7 @@ class PersonServiceBase:
         quality_status: str | None = None,
         tag_name: str | None = None,
         rating_min: int | None = None,
+        unrated: bool = False,
         favorite: bool = False,
         face_matched: bool = False,
     ) -> dict | None:
@@ -813,6 +817,7 @@ class PersonServiceBase:
             "quality_status": quality_status,
             "tag_name": tag_name,
             "rating_min": rating_min,
+            "unrated": unrated,
             "favorite": favorite,
             "face_matched": face_matched,
         }
@@ -1027,6 +1032,104 @@ class PersonServiceBase:
             .limit(limit)
         )
         return [self._to_dict(p, cnt) for p, cnt in result.all()]
+
+    async def rating_priority(self, db: AsyncSession, limit: int = 200) -> dict:
+        """按「已评占比升序」返回有待评分图片素材的人物队列。
+
+        供「人物优先评分」页使用（类似首页随机评分，但按人物排队逐张评）：
+
+        - 只统计**图片**（``media_type=image``）且未删除的素材；
+        - 纳入所有**还有未评分图片**的人物（不设素材数门槛）；
+        - 已评 = ``rating > 0``；未评 = ``rating`` 为空或 0；
+        - 排序（升序）：已评占比 → 已评数 → 图片素材数 → id，让「最缺评分」的排在前面；
+        - ``total`` 是符合条件的人物总数（不受 ``limit`` 影响），供前端显示队列规模。
+
+        Returns:
+            ``{"items": [{blogger_id, name, platform, avatar_path, image_count,
+            rated_count, unrated_count, rating_average, coverage}], "total"}``。
+        """
+        assert self.model is not None and self.link_model is not None
+        model, link_model = self.model, self.link_model
+        link_id = self._link_id_col()
+
+        rated_expr = func.sum(case((Inspiration.rating > 0, 1), else_=0))
+        unrated_expr = func.sum(
+            case(
+                (or_(Inspiration.rating.is_(None), Inspiration.rating == 0), 1),
+                else_=0,
+            )
+        )
+        rating_sum_expr = func.sum(
+            case((Inspiration.rating > 0, Inspiration.rating), else_=0)
+        )
+        image_count_expr = func.count(Inspiration.id)
+        coverage_expr = rated_expr * 1.0 / func.nullif(image_count_expr, 0)
+
+        grouped = (
+            select(
+                model.id.label("blogger_id"),
+                model.name.label("name"),
+                model.platform.label("platform"),
+                model.avatar_path.label("avatar_path"),
+                image_count_expr.label("image_count"),
+                rated_expr.label("rated_count"),
+                unrated_expr.label("unrated_count"),
+                rating_sum_expr.label("rating_sum"),
+            )
+            .join(link_model, link_id == model.id)
+            .join(Inspiration, Inspiration.id == link_model.inspiration_id)
+            .where(
+                Inspiration.deleted_at.is_(None),
+                Inspiration.media_type == "image",
+            )
+            .group_by(
+                model.id,
+                model.name,
+                model.platform,
+                model.avatar_path,
+            )
+            .having(unrated_expr > 0)
+        )
+
+        total = (
+            await db.execute(select(func.count()).select_from(grouped.subquery()))
+        ).scalar() or 0
+
+        rows = (
+            await db.execute(
+                grouped.order_by(
+                    coverage_expr.asc(),
+                    rated_expr.asc(),
+                    image_count_expr.asc(),
+                    model.id.asc(),
+                ).limit(limit)
+            )
+        ).all()
+
+        items: list[dict] = []
+        for row in rows:
+            image_count = int(row.image_count or 0)
+            rated_count = int(row.rated_count or 0)
+            items.append(
+                {
+                    "blogger_id": row.blogger_id,
+                    "name": row.name,
+                    "platform": row.platform,
+                    "avatar_path": row.avatar_path,
+                    "image_count": image_count,
+                    "rated_count": rated_count,
+                    "unrated_count": int(row.unrated_count or 0),
+                    "rating_average": (
+                        round(float(row.rating_sum) / rated_count, 2)
+                        if rated_count
+                        else None
+                    ),
+                    "coverage": (
+                        round(rated_count / image_count, 4) if image_count else 0.0
+                    ),
+                }
+            )
+        return {"items": items, "total": int(total)}
 
     async def ip_location_stats(self, db: AsyncSession, limit: int = 30) -> dict:
         """按 IP 属地分组统计主体数量（空属地归入「未知」）。

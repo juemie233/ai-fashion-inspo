@@ -123,6 +123,13 @@ const router = createRouter({
       meta: { title: '随机评分' },
     },
     {
+      // 人物优先评分：按「最缺评分」的博主排队逐张评图（入口在人物管理·博主 tab）
+      path: '/person-rating',
+      name: 'person-rating',
+      component: () => import('@/views/PersonRatingView.vue'),
+      meta: { title: '人物优先评分' },
+    },
+    {
       // 404 兜底：未知路径重定向首页，避免白屏
       path: '/:pathMatch(.*)*',
       redirect: '/',

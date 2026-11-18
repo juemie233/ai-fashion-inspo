@@ -5,6 +5,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getFileUrl, type TrashReason } from '@/api/inspirations'
 import AsyncState from '@/components/common/AsyncState.vue'
+import RatingControls from '@/components/rating/RatingControls.vue'
+import RatingImageStage from '@/components/rating/RatingImageStage.vue'
 import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import { useRandomRating } from '@/composables/useRandomRating'
 import { formatDate } from '@/utils/format'
@@ -40,6 +42,9 @@ const metaText = computed(() => {
   else if (row.quality_status === 'rejected') parts.push('已被拒绝')
   return parts.join(' · ')
 })
+
+/** 舞台下方展示的标签名（最多 8 个，公共组件只接收字符串） */
+const tagNames = computed(() => item.value?.tags?.slice(0, 8).map((t) => t.tag.name) ?? [])
 
 /** 评分后自动换下一张的计时器（换图/离开页面时清掉，避免重复请求） */
 let nextTimer: ReturnType<typeof setTimeout> | null = null
@@ -155,47 +160,24 @@ onUnmounted(() => {
       @retry="loadRandom"
     >
       <div v-if="item" class="rate-card">
-        <a-spin :loading="loading" class="rate-image-spin">
-          <div class="rate-stage">
-            <img :src="imageUrl" :alt="item.source_author || '待评分素材'" class="rate-image" />
-          </div>
-        </a-spin>
-
-        <div class="rate-info">
-          <div class="rate-meta">{{ metaText }}</div>
-          <div v-if="item.tags?.length" class="rate-tags">
-            <a-tag v-for="tag in item.tags.slice(0, 8)" :key="tag.tag.id" size="small">
-              {{ tag.tag.name }}
-            </a-tag>
-          </div>
-        </div>
-
-        <div class="rate-controls">
-          <div class="rate-stars">
-            <a-rate
-              :model-value="item.rating || 0"
-              allow-clear
-              :disabled="saving"
-              aria-label="给当前图片评分"
-              @change="handleRate"
-            />
-            <span class="rate-hint">点击星星评分，按 1-5 也可</span>
-          </div>
-          <div class="rate-actions">
-            <a-button
-              status="danger"
-              :disabled="saving || loading"
-              :loading="deleting"
-              @click="openDeleteConfirm"
-              >删除</a-button
-            >
-            <a-button type="primary" :loading="loading" :disabled="saving" @click="nextImage"
-              >换一张 →</a-button
-            >
-          </div>
-        </div>
-
-        <div class="rate-keyboard-hint">空格 / → 换一张 · Esc 返回素材库 · 删除需选择原因</div>
+        <!-- 图片舞台与评分控件是公共组件（人物优先评分页共用，避免两页各写一份） -->
+        <RatingImageStage
+          :src="imageUrl"
+          :alt="item.source_author || '待评分素材'"
+          :loading="loading"
+          :meta-text="metaText"
+          :tags="tagNames"
+        />
+        <RatingControls
+          :model-value="item.rating || 0"
+          :saving="saving"
+          :loading="loading"
+          :deleting="deleting"
+          keyboard-hint="空格 / → 换一张 · Esc 返回素材库 · 删除需选择原因"
+          @rate="handleRate"
+          @delete="openDeleteConfirm"
+          @next="nextImage"
+        />
       </div>
     </AsyncState>
 
@@ -205,10 +187,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 印样台：随机评分是「审片台」，一张样张 + 一条评分尺。
+ * 舞台/信息行/评分控件已抽到 components/rating 公共组件，这里只留页面级布局。 */
 .rate-page {
-  max-width: 1080px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 4px 0 32px;
+  padding: 0 0 32px;
 }
 
 .rate-page-header {
@@ -216,6 +200,9 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+  align-items: flex-end;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 .rate-title-wrap {
@@ -223,121 +210,6 @@ onUnmounted(() => {
   align-items: baseline;
   gap: 10px;
   flex: 1;
-}
-
-.rate-title-wrap h2 {
-  margin: 0;
-}
-
-.rate-subtitle,
-.rate-total {
-  color: var(--color-text-3);
-  font-size: 13px;
-}
-
-.rate-card {
-  background: var(--color-bg-2);
-  border: 1px solid var(--color-border-2);
-  border-radius: var(--radius-md);
-  padding: 16px;
-}
-
-.rate-stage {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 320px;
-  max-height: 68vh;
-  overflow: hidden;
-  background: var(--color-fill-1);
-  border-radius: var(--radius-md);
-}
-
-.rate-image {
-  display: block;
-  max-width: 100%;
-  max-height: 68vh;
-  object-fit: contain;
-}
-
-.rate-image-spin {
-  display: block;
-}
-
-.rate-info {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-}
-
-.rate-meta {
-  color: var(--color-text-2);
-  font-size: 13px;
-}
-
-.rate-tags {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.rate-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--color-border-1);
-}
-
-.rate-stars {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-size: 22px;
-}
-
-.rate-stars :deep(.arco-rate) {
-  font-size: 30px;
-}
-
-.rate-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.rate-hint,
-.rate-keyboard-hint {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.rate-keyboard-hint {
-  margin-top: 8px;
-  text-align: right;
-}
-
-.rate-error {
-  margin-bottom: 12px;
-}
-
-/* ── 印样台：随机评分是「审片台」，一张样张 + 一条评分尺 ── */
-.rate-page {
-  max-width: 1180px;
-  padding: 0 0 32px;
-}
-
-.rate-page-header {
-  align-items: flex-end;
-  padding-bottom: 14px;
-  margin-bottom: 18px;
-  border-bottom: 1px solid var(--line);
 }
 
 .rate-title-wrap h2.page-title {
@@ -362,39 +234,16 @@ onUnmounted(() => {
   background: var(--sheet);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
+  padding: 16px;
 }
 
-.rate-stage {
-  background: var(--sheet-2);
-  border: 1px solid var(--line);
+.rate-error {
+  margin-bottom: 12px;
 }
 
-.rate-image {
-  border-radius: 0;
-}
-
-.rate-info {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.rate-meta {
-  color: var(--ink-2);
-}
-
-.rate-hint,
-.rate-keyboard-hint {
-  color: var(--ink-3);
-}
-
-/* 评分操作行在 375 下换行 */
-.rate-controls,
-.rate-actions {
-  flex-wrap: wrap;
-  row-gap: 8px;
-}
-
-.rate-actions {
-  justify-content: flex-end;
+@media (max-width: 767px) {
+  .rate-page-header {
+    flex-wrap: wrap;
+  }
 }
 </style>
