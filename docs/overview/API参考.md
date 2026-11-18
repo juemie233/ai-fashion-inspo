@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-18，共 23 个模块 / 333 个端点）。
+> **状态**：自动生成（2026-11-16，共 23 个模块 / 332 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -17,7 +17,7 @@
 | [ai_quality](#ai_quality) | `/api/ai` | 12 |
 | [ai_reset](#ai_reset) | `/api/ai` | 1 |
 | [ai_settings](#ai_settings) | `/api/ai` | 15 |
-| [bloggers](#bloggers) | `/api/bloggers` | 43 |
+| [bloggers](#bloggers) | `/api/bloggers` | 42 |
 | [collections](#collections) | `/api/collections` | 10 |
 | [face_scan](#face_scan) | `/api/face-match、/api/face-scan` | 15 |
 | [files](#files) | `/api/files` | 2 |
@@ -186,7 +186,6 @@
 | `POST` | `/api/bloggers/import-csv` | `import_bloggers_csv` | 上传 CSV 批量导入博主（按 xhs_id upsert，昵称/小红书号必填）。 |
 | `POST` | `/api/bloggers/enrich-missing-profile` | `enrich_missing_profile` | 创建「博主资料补全」异步任务（人物管理页一键补全）。 |
 | `POST` | `/api/bloggers/avatars/fill-missing` | `fill_missing_avatars` | 创建「博主头像批量补全」异步任务（人物管理页一键补头像）。 |
-| `POST` | `/api/bloggers/rating-backfill` | `backfill_blogger_ratings` | 给博主名下「未评分」素材批量补统一星级（人物页「补全评分」）。 |
 | `GET` | `/api/bloggers/missing-profile` | `missing_profile_bloggers` | 资料有缺口的博主列表（人物管理页补全功能用）。 |
 | `POST` | `/api/bloggers/enrich-skip` | `enrich_skip` | 手动跳过补全（确定性无法获取信息的博主，从缺失列表移除）。 |
 | `POST` | `/api/bloggers/enrich-unskip` | `enrich_unskip` | 解除跳过（博主重新纳入补全范围）。 |

@@ -98,7 +98,6 @@ describe('三份白名单的内容（与后端常量逐条对齐）', () => {
     expect([...CANCELABLE_TASK_TYPES].sort()).toEqual(
       [
         'batch_analyze',
-        'blogger_rating_backfill',
         'face_match',
         'face_scan',
         'f2_import',

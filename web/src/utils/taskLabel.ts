@@ -38,7 +38,6 @@ const TASK_TYPE_META: Record<string, { label: string; icon: Component; color: st
   face_cluster: { label: '人脸聚合聚类', icon: IconUserGroup, color: 'purple' },
   enrich_blogger_profile: { label: '博主主页补全', icon: IconUser, color: 'gold' },
   blogger_avatar_fill: { label: '人物头像补全', icon: IconCamera, color: 'skyblue' },
-  blogger_rating_backfill: { label: '博主素材评分补全', icon: IconUser, color: 'gold' },
   tag_health_scan: { label: '标签健康扫描', icon: IconCheckCircle, color: 'pinkpurple' },
   tag_cluster_scan: { label: '标签聚类扫描', icon: IconMindMapping, color: 'cyan' },
   image_gen: { label: '本地出图', icon: IconFileImage, color: 'skyblue' },

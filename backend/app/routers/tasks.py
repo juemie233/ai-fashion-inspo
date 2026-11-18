@@ -84,7 +84,6 @@ _CANCELABLE_RUNNING_TYPES = (
     "quality_check",
     "vector_backfill",
     "image_gen",
-    "blogger_rating_backfill",
 )
 
 # 支持「运行中暂停」的任务类型：执行器每批检查 paused 后保存进度并返回。
@@ -255,8 +254,7 @@ async def cancel_task(
     - ``pending``（等待运行）：物理删除该任务记录（需求：取消后从历史与
       ``task_queue`` 表中直接移除，不保留）。
     - ``running`` 且类型在 :data:`_CANCELABLE_RUNNING_TYPES` 内（人脸扫描/匹配、
-      标签网络分析、f2 一键获取素材、批量/组合分析、质量审核、向量回填、
-      博主素材评分补全）：标记为
+      标签网络分析、f2 一键获取素材、批量/组合分析、质量审核、向量回填）：标记为
       cancelled（运行中取消的既有能力，记录保留；执行器每批/每文件检查后自行停止，
       已产出的分析日志、标签、审核结果与向量全部保留）。
     - ``paused`` 且类型在 :data:`_PAUSABLE_RUNNING_TYPES` 内：**直接标记 cancelled**

@@ -94,7 +94,6 @@ export const CANCELABLE_TASK_TYPES = [
   'quality_check',
   'vector_backfill',
   'image_gen',
-  'blogger_rating_backfill',
 ] as const
 
 /** 判断任务类型是否支持运行中取消（任务列表的取消按钮显示走这里） */
@@ -260,19 +259,6 @@ export function summarizeResult(
       ]
         .filter(Boolean)
         .join(' · ')
-    case 'blogger_rating_backfill': {
-      // 评分补全：结果里的计数以「素材」为单位（后端正式字段 updated_materials；
-      // updated/rated 兼容旧任务）；跳过/失败按「位博主」计，文案要点明单位。
-      // 0 不显示，避免「已补 0 个素材」这种噪音（成功但没可补素材时结果面板是空的）
-      const updated = Number(r.updated_materials ?? r.updated ?? r.rated ?? 0) || 0
-      return [
-        updated > 0 ? `已补 ${updated} 个素材` : '',
-        r.skipped ? `跳过 ${r.skipped} 位博主` : '',
-        r.failed ? `失败 ${r.failed} 位博主` : '',
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    }
     case 'f2_import': {
       // f2 一键获取素材：本次入库量 + 导入计划的分层跳过。
       // 「已在垃圾桶」单独列出——它意味着用户主动丢弃过该内容，不会重新导入，
@@ -447,12 +433,6 @@ export function describeRunningTask(
   done: number,
   total: number,
 ): string {
-  // 评分补全：进度含义是「已补素材数」，不是博主页数，单独给一句人话
-  if (type === 'blogger_rating_backfill') {
-    if (status === 'pending') return '排队中：等待 worker 认领'
-    if (total > 0) return `已补 ${done}/${total} 个素材`
-    return '补全中：给博主的未评分素材写入统一星级'
-  }
   // 暂停文案对所有可暂停类型都适用（f2 说「产物保留」，其余说「已处理的记入结果、恢复不重复」），
   // 因此放在 f2 专属分支之前——否则质量审核/批量分析暂停后会一行说明都没有
   if (status === 'paused') {

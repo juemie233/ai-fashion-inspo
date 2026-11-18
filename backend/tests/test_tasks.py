@@ -346,7 +346,6 @@ def test_whitelists_match_frontend_contract():
         "quality_check",
         "vector_backfill",
         "image_gen",
-        "blogger_rating_backfill",
     }
 
 
