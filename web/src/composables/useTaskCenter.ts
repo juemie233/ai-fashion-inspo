@@ -74,16 +74,19 @@ export function useTaskCenter() {
     return filtered.value.slice(start, start + PAGE_SIZE)
   })
 
-  // 需要轮询的只有 pending / running：paused 等用户处理，success/failed/cancelled 是终态。
-  // 出图批次的 queued / waiting_vram 属于 generation runs（另一张表），不在统一任务列表里。
-  const hasActive = computed(() =>
-    tasks.value.some((t) => t.status === 'pending' || t.status === 'running'),
-  )
+  /** 需要轮询的判据：非终态、且不是 paused（暂停等用户处理）。
+   *
+   * 不写死 pending/running：任务队列若将来新增活动状态（出图批次的 queued /
+   * waiting_vram 目前属于另一张表），轮询也不会提前自停——这正是「界面停住」
+   * 最隐蔽的来源。
+   */
+  const isActiveStatus = (status: string): boolean =>
+    status !== 'paused' && !isTaskTerminalStatus(status)
+
+  const hasActive = computed(() => tasks.value.some((t) => isActiveStatus(t.status)))
   /** 采集任务只有活动态：它们不走 WS 推送（task_event 只覆盖队列任务），必须靠轮询 */
   const hasActiveScraper = computed(() =>
-    tasks.value.some(
-      (t) => t.source === 'scraper' && (t.status === 'pending' || t.status === 'running'),
-    ),
+    tasks.value.some((t) => t.source === 'scraper' && isActiveStatus(t.status)),
   )
   const hasFailedScraper = computed(() =>
     tasks.value.some((t) => t.source === 'scraper' && t.status === 'failed'),

@@ -291,3 +291,42 @@ describe('useTaskCenter.loadTasks 排序（已暂停优先）', () => {
     expect(tc.pageItems.value[0].status).toBe('paused')
   })
 })
+
+describe('useTaskCenter.hasActive 活动态判定', () => {
+  /** 任务队列原始行（状态原样传入，用于验证活动态判据） */
+  function rawQueue(id: number, status: string) {
+    return {
+      id,
+      type: 'image_gen',
+      status,
+      progress: 0,
+      total: 10,
+      done: 0,
+      result: null,
+      error: null,
+      created_at: '2026-11-19T10:00:00Z',
+      updated_at: '2026-11-19T10:00:00Z',
+    }
+  }
+
+  function mockQueue(items: unknown[]) {
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/tasks') return Promise.resolve({ data: { items } })
+      return Promise.resolve({ data: { items: [] } })
+    })
+  }
+
+  it('非终态且非 paused 都算活动（queued / waiting_vram 这类新状态不会让轮询提前自停）', async () => {
+    mockQueue([rawQueue(1, 'waiting_vram')])
+    const tc = makeTaskCenter()
+    await tc.loadTasks()
+    expect(tc.hasActive.value).toBe(true)
+  })
+
+  it('paused 与终态不算活动（暂停等用户处理、终态不会再变）', async () => {
+    mockQueue([rawQueue(1, 'paused'), rawQueue(2, 'failed'), rawQueue(3, 'success')])
+    const tc = makeTaskCenter()
+    await tc.loadTasks()
+    expect(tc.hasActive.value).toBe(false)
+  })
+})
