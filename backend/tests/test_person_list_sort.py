@@ -2,6 +2,8 @@
 
 后端此前只支持「素材数倒序」；为了让素材数列可点击排序，路由加了 order 参数，
 平铺与「人物组折叠」两条路径都必须按同一口径排序（同数按 id 兜底，保证分页稳定）。
+
+2026-11-19 追加：两级排序（sort2/order2）与「评分排序隐藏样本不足」用例，见文末。
 """
 
 import asyncio
@@ -9,6 +11,8 @@ import asyncio
 from sqlalchemy import text
 
 from app.database import async_session
+from app.models.inspiration import Inspiration
+from app.models.person import InspirationBlogger, InspirationModel
 
 
 async def _attach(inspiration_ids: list[str], blogger_id: int) -> None:
@@ -79,3 +83,306 @@ def test_list_returns_last_inspiration_at(client, upload, create_blogger):
     ).json()
     assert body["items"][0]["id"] == lonely["id"]
     assert body["items"][0]["last_inspiration_at"] is None
+
+
+# ── 两级排序 + 评分排序样本过滤（2026-11-19）──
+
+
+async def _add_blogger_images(blogger_id: int, ratings: list[int]) -> None:
+    """给博主造图片素材，``ratings`` 是每张的评分（0 = 未评分）。"""
+    async with async_session() as db:
+        for index, rating in enumerate(ratings):
+            iid = f"insp-b{blogger_id}-{index}"
+            db.add(
+                Inspiration(
+                    id=iid,
+                    source_type="xiaohongshu",
+                    file_path=f"images/{iid}.jpg",
+                    media_type="image",
+                    quality_status="approved",
+                    rating=rating,
+                )
+            )
+            db.add(InspirationBlogger(inspiration_id=iid, blogger_id=blogger_id))
+        await db.commit()
+
+
+async def _add_model_images(model_id: int, ratings: list[int]) -> None:
+    """给模特造图片素材。"""
+    async with async_session() as db:
+        for index, rating in enumerate(ratings):
+            iid = f"insp-m{model_id}-{index}"
+            db.add(
+                Inspiration(
+                    id=iid,
+                    source_type="xiaohongshu",
+                    file_path=f"images/{iid}.jpg",
+                    media_type="image",
+                    quality_status="approved",
+                    rating=rating,
+                )
+            )
+            db.add(InspirationModel(inspiration_id=iid, model_id=model_id))
+        await db.commit()
+
+
+def _ids(payload: dict) -> list[int]:
+    return [item["id"] for item in payload["items"]]
+
+
+def _link_group(client, blogger_a: int, blogger_b: int) -> int:
+    """把两位博主绑成一个人物组（方案 B），返回组 id。"""
+    resp = client.post(
+        "/api/bloggers/groups/link",
+        json={"blogger_id": blogger_a, "target_blogger_id": blogger_b},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["group_id"]
+
+
+# ── 平铺路径：主 count + 次 rating ──
+
+
+async def test_primary_count_secondary_rating(client, create_blogger):
+    """主排序 count（desc/asc）+ 次排序 rating；评分排序触发样本过滤。"""
+    a = create_blogger("A")["id"]
+    await _add_blogger_images(a, [5, 5, 5, 5, 5])  # count5 / 已评5 / 均分5
+    b = create_blogger("B")["id"]
+    await _add_blogger_images(b, [3, 3, 3, 3, 3])  # count5 / 已评5 / 均分3
+    c = create_blogger("C")["id"]
+    await _add_blogger_images(c, [5, 5, 5, 5])  # 已评4 → 评分排序时隐藏
+    d = create_blogger("D")["id"]
+    await _add_blogger_images(d, [1, 1, 1, 1, 1, 1, 1])  # count7 / 均分1
+
+    desc = client.get(
+        "/api/bloggers",
+        params={
+            "sort": "count",
+            "order": "desc",
+            "sort2": "rating",
+            "grouped": "false",
+        },
+    ).json()
+    assert desc["total"] == 3  # C 样本不足被隐藏
+    # count desc：D(7) 先；A/B 同为 5 → 次排序 rating desc：A(5) 先于 B(3)
+    assert _ids(desc) == [d, a, b]
+
+    asc = client.get(
+        "/api/bloggers",
+        params={
+            "sort": "count",
+            "order": "asc",
+            "sort2": "rating",
+            "grouped": "false",
+        },
+    ).json()
+    assert _ids(asc) == [a, b, d]
+
+
+# ── 平铺路径：主 rating + 次 count ──
+
+
+async def test_primary_rating_secondary_count(client, create_blogger):
+    """主排序 rating + 次排序 count（order2 生效），且过滤样本不足。"""
+    create_blogger("A")  # 占位，确保下面 id 从 2 开始也无妨
+    e = create_blogger("E")["id"]
+    await _add_blogger_images(e, [5, 5, 5])  # 已评3 → 隐藏
+    f = create_blogger("F")["id"]
+    await _add_blogger_images(f, [5, 5, 5, 5, 5])  # count5 / 均分5
+    g = create_blogger("G")["id"]
+    # 6 张图里 5 张已评（均分与 F 相同、已评数也相同），次排序 count 才能生效
+    await _add_blogger_images(g, [5, 5, 5, 5, 5, 0])
+    h = create_blogger("H")["id"]
+    await _add_blogger_images(h, [3, 3, 3, 3, 3])  # count5 / 均分3
+
+    desc = client.get(
+        "/api/bloggers",
+        params={
+            "sort": "rating",
+            "sort2": "count",
+            "order2": "desc",
+            "grouped": "false",
+        },
+    ).json()
+    assert desc["total"] == 3
+    # 主键均分：G/F(5) 在前、H(3) 在后；同均分按次键 count desc → G(6) 先于 F(5)
+    assert _ids(desc) == [g, f, h]
+
+    asc = client.get(
+        "/api/bloggers",
+        params={
+            "sort": "rating",
+            "sort2": "count",
+            "order2": "asc",
+            "grouped": "false",
+        },
+    ).json()
+    assert _ids(asc) == [f, g, h]
+
+
+# ── 评分排序的样本过滤 / 恢复全量 ──
+
+
+async def test_rating_sort_hides_insufficient_samples(client, create_blogger):
+    """评分排序（主或次）隐藏已评 <5；清空评分排序后恢复全量。"""
+    low_sample = create_blogger("样本不足")["id"]
+    await _add_blogger_images(low_sample, [5, 5, 5, 5])  # 已评4，均分5
+    good_low = create_blogger("样本够低分")["id"]
+    await _add_blogger_images(good_low, [1] * 5)  # 已评5，均分1
+    good_high = create_blogger("样本够高分")["id"]
+    await _add_blogger_images(good_high, [4] * 6)  # 已评6，均分4
+
+    desc = client.get(
+        "/api/bloggers", params={"sort": "rating", "grouped": "false"}
+    ).json()
+    assert desc["total"] == 2
+    assert _ids(desc) == [good_high, good_low]
+
+    asc = client.get(
+        "/api/bloggers", params={"sort": "rating_asc", "grouped": "false"}
+    ).json()
+    assert _ids(asc) == [good_low, good_high]
+
+    # 次排序是 rating 时同样过滤
+    by_name = client.get(
+        "/api/bloggers",
+        params={"sort": "name", "sort2": "rating", "grouped": "false"},
+    ).json()
+    assert low_sample not in _ids(by_name)
+    assert by_name["total"] == 2
+
+    # 清空评分排序 → 恢复全量
+    all_rows = client.get(
+        "/api/bloggers", params={"sort": "newest", "grouped": "false"}
+    ).json()
+    assert all_rows["total"] == 3
+    assert low_sample in _ids(all_rows)
+
+
+# ── 折叠路径：组合并后过滤/排序 ──
+
+
+async def test_grouped_rating_filter_after_merge(client, create_blogger):
+    """人物组按组合并后的 rated_count 过滤；评级排序在折叠后生效。"""
+    # 组1：两个账号分别已评 3 张与 2 张 → 组合并后已评 5（达到门槛）
+    g1a = create_blogger("组1账号A", platform="xiaohongshu")["id"]
+    g1b = create_blogger("组1账号B", platform="douyin")["id"]
+    _link_group(client, g1a, g1b)
+    await _add_blogger_images(g1a, [5, 5, 5])
+    await _add_blogger_images(g1b, [4, 4])
+    # 组2：两个账号各已评 2 张 → 合并后 4，评分排序时隐藏
+    g2a = create_blogger("组2账号A", platform="xiaohongshu")["id"]
+    g2b = create_blogger("组2账号B", platform="douyin")["id"]
+    _link_group(client, g2a, g2b)
+    await _add_blogger_images(g2a, [5, 5])
+    await _add_blogger_images(g2b, [5, 5])
+    # 独立账号：已评 5 且均分 5
+    solo = create_blogger("独立")["id"]
+    await _add_blogger_images(solo, [5] * 5)
+
+    rated = client.get("/api/bloggers", params={"sort": "rating"}).json()
+    assert rated["total"] == 2  # 组2 被隐藏；组1 与独立账号保留
+    ids = _ids(rated)
+    assert solo in ids
+    assert g1a in ids  # 组主账号 = 素材数最多者（A 有 3 张 > B 有 2 张）
+    assert g2a not in ids
+    # 组1 的组均分 = (5*3 + 4*2)/5 = 4.6，独立账号 5.0 → 独立在前
+    assert ids == [solo, g1a]
+
+    # 不选评分排序 → 恢复全量（组1、组2、独立共 3 行）
+    plain = client.get("/api/bloggers", params={"sort": "count"}).json()
+    assert plain["total"] == 3
+
+    # 折叠路径的两级排序也生效：主 count + 次 rating
+    two_level = client.get(
+        "/api/bloggers",
+        params={"sort": "count", "order": "desc", "sort2": "rating"},
+    ).json()
+    assert _ids(two_level) == [solo, g1a]  # count desc：独立(5) 先于组1(主账号3)
+    two_level_asc = client.get(
+        "/api/bloggers",
+        params={"sort": "count", "order": "asc", "sort2": "rating"},
+    ).json()
+    assert _ids(two_level_asc) == [g1a, solo]
+
+
+# ── 单排序兼容 / 重复键去重 / 参数校验 ──
+
+
+async def test_single_sort_compatibility(client, create_blogger):
+    """不传 sort2/order2 时保持原单排序行为（不触发样本过滤）。"""
+    x = create_blogger("X")["id"]
+    await _add_blogger_images(x, [0])  # 1 张未评分
+    y = create_blogger("Y")["id"]
+    await _add_blogger_images(y, [5, 5])
+    z = create_blogger("Z")["id"]
+    await _add_blogger_images(z, [5, 5, 5])
+
+    asc = client.get(
+        "/api/bloggers", params={"sort": "count", "order": "asc", "grouped": "false"}
+    ).json()
+    assert _ids(asc) == [x, y, z]
+    desc = client.get(
+        "/api/bloggers", params={"sort": "count", "grouped": "false"}
+    ).json()
+    assert _ids(desc) == [z, y, x]
+    plain = client.get(
+        "/api/bloggers", params={"sort": "newest", "grouped": "false"}
+    ).json()
+    assert plain["total"] == 3
+
+
+async def test_duplicate_sort_key_is_deduped(client, create_blogger):
+    """主/次同键（rating 与 rating_asc）时去重：按主排序方向，不产生方向冲突。"""
+    high = create_blogger("高分")["id"]
+    await _add_blogger_images(high, [5] * 5)
+    low = create_blogger("低分")["id"]
+    await _add_blogger_images(low, [1] * 5)
+
+    data = client.get(
+        "/api/bloggers",
+        params={
+            "sort": "rating",
+            "sort2": "rating_asc",
+            "grouped": "false",
+        },
+    ).json()
+    assert _ids(data) == [high, low]  # 仍按主排序 rating 降序
+
+
+def test_sort_params_validation(client):
+    """sort2/order2 非法值 → 422。"""
+    assert (
+        client.get("/api/bloggers", params={"sort2": "bogus"}).status_code == 422
+    )
+    assert (
+        client.get("/api/bloggers", params={"order2": "up"}).status_code == 422
+    )
+    assert (
+        client.get("/api/models", params={"sort2": "bogus"}).status_code == 422
+    )
+    assert client.get("/api/models", params={"order2": "up"}).status_code == 422
+
+
+# ── 模特列表：两级排序 + 样本过滤 ──
+
+
+async def test_models_two_level_sort_and_filter(client, create_model):
+    """模特列表同样支持 sort2/order2；评分排序过滤样本不足。"""
+    m1 = create_model("M1")["id"]
+    await _add_model_images(m1, [5] * 5)  # 已评5 / 均分5
+    m2 = create_model("M2")["id"]
+    await _add_model_images(m2, [3] * 5)  # 已评5 / 均分3
+    m3 = create_model("M3")["id"]
+    await _add_model_images(m3, [5] * 4)  # 已评4 → 隐藏
+
+    data = client.get(
+        "/api/models",
+        params={"sort": "count", "order": "desc", "sort2": "rating"},
+    ).json()
+    assert data["total"] == 2
+    assert _ids(data) == [m1, m2]
+
+    # 不带评分排序 → m3 恢复显示
+    plain = client.get("/api/models", params={"sort": "count"}).json()
+    assert plain["total"] == 3

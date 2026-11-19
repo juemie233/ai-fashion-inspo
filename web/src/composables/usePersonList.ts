@@ -25,6 +25,44 @@ export const SOURCE_LABELS: Record<string, string> = {
   auto_collect: '自动登记',
 }
 
+/** 表头可排序的列 → 排序分组（与后端 sort/sort2 取值对应） */
+const SORT_COLUMN_GROUP: Record<string, 'count' | 'rating'> = {
+  inspiration_count: 'count',
+  rating_average: 'rating',
+}
+
+/** 排序字段中文名（状态条展示用） */
+const SORT_LABELS: Record<string, string> = {
+  newest: '最新创建',
+  name: '名称',
+  count: '素材数',
+  rating: '作品评分',
+  rating_asc: '作品评分',
+}
+
+/** 允许出现在次排序（sort2）里的字段 */
+const SECONDARY_SORT_KEYS = ['name', 'count', 'rating', 'rating_asc'] as const
+
+/** 排序状态文案：count 用 order 方向，rating 方向编码在 rating/rating_asc 里 */
+export function formatSortLabel(sort: string, order: 'asc' | 'desc'): string {
+  if (sort === 'rating') return '作品评分 ↓'
+  if (sort === 'rating_asc') return '作品评分 ↑'
+  if (sort === 'count') return `素材数 ${order === 'asc' ? '↑' : '↓'}`
+  return SORT_LABELS[sort] ?? sort
+}
+
+/** 是否为评分排序：后端在 sort 或 sort2 命中评分时只返回已评 ≥5 张的博主 */
+export function isRatingSort(sort: string | undefined | null): boolean {
+  return sort === 'rating' || sort === 'rating_asc'
+}
+
+/** 排序键所属分组（count / rating / 其它） */
+function sortGroup(sort: string | undefined | null): 'count' | 'rating' | null {
+  if (sort === 'count') return 'count'
+  if (isRatingSort(sort)) return 'rating'
+  return null
+}
+
 export function usePersonList(kind: PersonKind) {
   const router = useRouter()
   const route = useRoute()
@@ -57,10 +95,10 @@ export function usePersonList(kind: PersonKind) {
     },
   )
 
-  // ── 列表状态 URL 持久化：页码/搜索/平台/排序写入 query，刷新与详情往返后原样恢复 ──
+  // ── 列表状态 URL 持久化：页码/搜索/平台/两级排序写入 query，刷新与详情往返后原样恢复 ──
 
-  /** 把列表上下文（kind + 页码 + 搜索 + 平台 + 排序）同步到 URL（replace 不堆历史） */
-  function syncUrl() {
+  /** 当前列表上下文 → URL query（默认值不写，保持地址栏干净） */
+  function buildListQuery(): Record<string, string> {
     const query: Record<string, string> = { kind }
     if (store.page > 1) query.page = String(store.page)
     if (store.search.trim()) query.q = store.search.trim()
@@ -68,11 +106,18 @@ export function usePersonList(kind: PersonKind) {
     if (store.source) query.source = store.source
     if (store.sort !== 'count') query.sort = store.sort
     if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
+    if (store.sort2) query.sort2 = store.sort2
+    if (store.sort2 === 'count' && store.order2 !== 'desc') query.order2 = store.order2
     if (store.ratingMin !== '') query.rating_min = String(store.ratingMin)
-    router.replace({ path: '/persons', query })
+    return query
   }
 
-  /** 列表上下文变化时同步 URL：翻页/搜索/平台/来源/评分筛选/排序任意变更即反映到地址栏 */
+  /** 把列表上下文同步到 URL（replace 不堆历史） */
+  function syncUrl() {
+    router.replace({ path: '/persons', query: buildListQuery() })
+  }
+
+  /** 列表上下文变化时同步 URL：翻页/搜索/平台/来源/评分筛选/两级排序任意变更即反映到地址栏 */
   watch(
     () =>
       [
@@ -82,6 +127,8 @@ export function usePersonList(kind: PersonKind) {
         store.source,
         store.sort,
         store.order,
+        store.sort2,
+        store.order2,
         store.ratingMin,
       ] as const,
     () => syncUrl(),
@@ -104,6 +151,12 @@ export function usePersonList(kind: PersonKind) {
         ? q.sort
         : 'count'
     store.order = q.order === 'asc' ? 'asc' : 'desc'
+    // 次排序：非法值当作「没有次排序」，避免刷新后带着不认识的后端参数
+    store.sort2 =
+      typeof q.sort2 === 'string' && (SECONDARY_SORT_KEYS as readonly string[]).includes(q.sort2)
+        ? (q.sort2 as (typeof SECONDARY_SORT_KEYS)[number])
+        : ''
+    store.order2 = q.order2 === 'asc' ? 'asc' : 'desc'
   }
 
   /** 加载后修正页码越界（如删除后总页数减少），并同步 URL */
@@ -141,6 +194,36 @@ export function usePersonList(kind: PersonKind) {
     { label: '≥ 4 星（至少5张已评）', value: 4 },
     { label: '5 星（至少5张已评）', value: 5 },
   ]
+
+  // ── 两级排序状态（表头点击 + 状态条）──
+
+  /** 主排序文案（如「素材数 ↓」） */
+  const sortMainLabel = computed(() => formatSortLabel(store.sort, store.order))
+  /** 次排序文案（无次排序时为空串） */
+  const sortSecondaryLabel = computed(() =>
+    store.sort2 ? formatSortLabel(store.sort2, store.order2) : '',
+  )
+  /** 评分排序是否激活（主或次）：后端只返回已评 ≥5 张的博主，页面要提示 */
+  const ratingSortActive = computed(() => isRatingSort(store.sort) || isRatingSort(store.sort2))
+  const ratingSortHint = '评分排序仅显示已评 ≥5 张的博主；清除评分排序可恢复全部博主'
+  /** 是否偏离默认排序（默认素材数降序、无次排序）：控制「清除排序」是否出现 */
+  const hasActiveSort = computed(
+    () => store.sort !== 'count' || store.order !== 'desc' || Boolean(store.sort2),
+  )
+
+  /** 重置到默认排序（素材数降序、清空次排序） */
+  function resetSortState() {
+    store.sort = 'count'
+    store.order = 'desc'
+    store.sort2 = ''
+    store.order2 = 'desc'
+  }
+
+  /** 清除排序：回到默认排序并重新加载（评分排序清除后恢复全量博主） */
+  function clearSort() {
+    resetSortState()
+    void loadAndSync()
+  }
   /** 来源筛选：自动登记的博主（「我的喜欢」顺手补建）动辄几百个，必须能一键分开看 */
   const sourceOptions = [
     { label: '全部来源', value: '' },
@@ -201,17 +284,9 @@ export function usePersonList(kind: PersonKind) {
     }
   }
 
-  /** 跳转人物详情：携带列表上下文（kind/页码/搜索/平台/排序），详情页返回或刷新后可恢复 */
+  /** 跳转人物详情：携带列表上下文（kind/页码/搜索/平台/两级排序），详情页返回或刷新后可恢复 */
   function goDetail(person: Person) {
-    const query: Record<string, string> = { kind }
-    if (store.page > 1) query.page = String(store.page)
-    if (store.search.trim()) query.q = store.search.trim()
-    if (store.platform) query.platform = store.platform
-    if (store.source) query.source = store.source
-    if (store.sort !== 'count') query.sort = store.sort
-    if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
-    if (store.ratingMin !== '') query.rating_min = String(store.ratingMin)
-    router.push({ path: `/persons/${person.id}`, query })
+    router.push({ path: `/persons/${person.id}`, query: buildListQuery() })
   }
 
   // ── 人物组展开（方案 B）：同组折叠为一条主记录，展开行显示组内账号 ──
@@ -491,25 +566,96 @@ export function usePersonList(kind: PersonKind) {
   })
 
   /** 下拉切换排序方式：素材数排序一律回到「降序」（与「素材数最多」文案一致）。
-   *  否则会继承上一次表头点击留下的方向，出现「下拉写着最多、实际最少在前」的矛盾。 */
+   *  同时清空次排序——下拉是单值控件，不能留下看不见的第二级排序条件。 */
   function onSortPicked() {
     store.order = 'desc'
+    store.sort2 = ''
+    store.order2 = 'desc'
     store.reload()
   }
 
-  /** 表头点击排序：素材数 + 博主作品评分。
-   *  - 素材数：方向由后端 order 参数控制，升序用于找「素材最少」（例如发现空仓人物）；
-   *  - 作品评分：升序 = rating_asc（低分在前），降序 = rating（高分在前）。 */
-  function onSorterChange(dataIndex: string, direction: string) {
-    if (dataIndex === 'rating_average') {
-      store.sort = direction === 'ascend' ? 'rating_asc' : 'rating'
+  /** 应用主排序 */
+  function applyPrimarySort(group: 'count' | 'rating', ascending: boolean) {
+    if (group === 'count') {
+      store.sort = 'count'
+      store.order = ascending ? 'asc' : 'desc'
+    } else {
+      // 评分的升降序编码在 sort 取值里（Rating 后端契约：rating / rating_asc）
+      store.sort = ascending ? 'rating_asc' : 'rating'
+      store.order = 'desc'
+    }
+  }
+
+  /** 应用次排序 */
+  function applySecondarySort(group: 'count' | 'rating', ascending: boolean) {
+    if (group === 'count') {
+      store.sort2 = 'count'
+      store.order2 = ascending ? 'asc' : 'desc'
+    } else {
+      store.sort2 = ascending ? 'rating_asc' : 'rating'
+      store.order2 = 'desc'
+    }
+  }
+
+  /** 主排序列被表头清除时：次排序提升为主排序（保持用户当前选择不丢）；没有次排序则回默认 */
+  function promoteSecondaryToPrimary() {
+    const secondary = store.sort2
+    if (!secondary) {
+      resetSortState()
+      return
+    }
+    store.sort = secondary
+    store.order = secondary === 'count' ? store.order2 : 'desc'
+    store.sort2 = ''
+    store.order2 = 'desc'
+  }
+
+  /**
+   * 表头点击排序：两级规则（与用户确认的交互一致）。
+   *
+   * - 点主排序列：切换该列方向（direction 由 Arco 按当前箭头推出）；
+   * - 点次排序列：切次排序方向（次列不显示表头箭头，方向按本地状态翻转）；
+   * - 点新列且两列已满：替换次排序；
+   * - 还没有显式主排序（默认素材数降序）：第一次点列 = 主排序；
+   * - 已有主排序、次排序为空：第二次点其他列 = 次排序；
+   * - Arco 第三次点击（direction=null）：清除该列（主列清除时次列提升为主）。
+   */
+  function onSorterChange(dataIndex: string, direction: string | null) {
+    const group = SORT_COLUMN_GROUP[dataIndex]
+    if (!group) return
+    const primaryGroup = sortGroup(store.sort)
+    const secondaryGroup = sortGroup(store.sort2)
+    const isAscending = direction === 'ascend'
+
+    if (direction !== 'ascend' && direction !== 'descend') {
+      if (primaryGroup === group) {
+        promoteSecondaryToPrimary()
+      } else if (secondaryGroup === group) {
+        store.sort2 = ''
+        store.order2 = 'desc'
+      }
       void loadAndSync()
       return
     }
-    if (dataIndex !== 'inspiration_count') return
-    store.sort = 'count'
-    // Arco 传来的是 'ascend' | 'descend' | null（签名标成 string）；非 ascend 一律降序
-    store.order = direction === 'ascend' ? 'asc' : 'desc'
+
+    if (primaryGroup === group) {
+      applyPrimarySort(group, isAscending)
+    } else if (secondaryGroup === group) {
+      if (group === 'count') {
+        store.order2 = store.order2 === 'asc' ? 'desc' : 'asc'
+      } else {
+        store.sort2 = store.sort2 === 'rating' ? 'rating_asc' : 'rating'
+      }
+    } else if (store.sort2) {
+      // 两列已满：新列替换次排序
+      applySecondarySort(group, isAscending)
+    } else if (!hasActiveSort.value) {
+      // 仍是默认排序（用户还没点过表头）：第一次点列 = 主排序
+      applyPrimarySort(group, isAscending)
+    } else {
+      // 已有显式主排序、次排序为空：第二次点其他列 = 次排序
+      applySecondarySort(group, isAscending)
+    }
     void loadAndSync()
   }
 
@@ -542,5 +688,11 @@ export function usePersonList(kind: PersonKind) {
     setExpandedGroupIds,
     onSorterChange,
     onSortPicked,
+    sortMainLabel,
+    sortSecondaryLabel,
+    ratingSortActive,
+    ratingSortHint,
+    hasActiveSort,
+    clearSort,
   }
 }

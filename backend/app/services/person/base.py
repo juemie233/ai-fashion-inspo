@@ -38,6 +38,11 @@ STYLE_PROFILE_TOP_TAGS = 15
 MIN_RATING_SAMPLE = 5
 
 
+def _sort_kind(sort: str) -> str:
+    """排序键归类（两级排序去重用）：rating 与 rating_asc 是同一列的两个方向。"""
+    return "rating" if sort in ("rating", "rating_asc") else sort
+
+
 class PersonNotFoundError(Exception):
     """人物或关联对象不存在（路由层转为 404）。"""
 
@@ -157,6 +162,8 @@ class PersonServiceBase:
         source: str | None = None,
         sort: str = "newest",
         order: str = "desc",
+        sort2: str | None = None,
+        order2: str = "desc",
         face_registered_only: bool = False,
         grouped: bool = False,
         rating_min: int | None = None,
@@ -211,6 +218,7 @@ class PersonServiceBase:
 
         rating_sum_col = func.coalesce(count_subq.c.rating_sum, 0)
         rated_count_col = func.coalesce(count_subq.c.rated_count, 0)
+        cnt_col = func.coalesce(count_subq.c.cnt, 0)
 
         stmt = (
             select(
@@ -251,8 +259,26 @@ class PersonServiceBase:
         # 人物组折叠：仅穿搭博主且不指定平台时生效（平铺分页交给 _list_grouped）
         if grouped and self.model is Blogger and not platform:
             return await self._list_grouped(
-                db, stmt, sort, order, page, size, rating_min=rating_min
+                db,
+                stmt,
+                sort,
+                order,
+                page,
+                size,
+                rating_min=rating_min,
+                sort2=sort2,
+                order2=order2,
             )
+
+        # 评分排序（主或次）时只显示样本足够的人物：点击「作品评分」表头 = 进入评分
+        # 排序，已评不足 MIN_RATING_SAMPLE 的暂时隐藏（避免「1 张 5 分」霸榜）；
+        # 清空评分排序（主/次都不含 rating）即恢复全量。
+        rating_sort_active = sort in ("rating", "rating_asc") or sort2 in (
+            "rating",
+            "rating_asc",
+        )
+        if rating_sort_active:
+            stmt = stmt.where(rated_count_col >= MIN_RATING_SAMPLE)
 
         # 评分筛选（平铺路径）：仅返回样本足够且均分达标的博主。
         # 必须放在折叠分支之后：折叠时评分筛选要在组内合并后做，不能先过滤账号。
@@ -263,41 +289,46 @@ class PersonServiceBase:
             )
 
         # 排序：newest（创建时间倒序）| name（按名称）| count（按素材数，order 控制升/降）
-        # rating / rating_asc：样本足够者在前，按均分排序；样本不足者统一排最后。
-        if sort == "name":
+        # rating / rating_asc：按均分排序（评分排序已在上面过滤掉样本不足者）。
+        def _flat_level(level_sort: str, level_order: str) -> list:
+            """把单个排序级别翻译成 ORDER BY 表达式（两级排序共用）。"""
+            if level_sort == "name":
+                return [model.name.asc()]
+            if level_sort == "count":
+                return [cnt_col.asc() if level_order == "asc" else cnt_col.desc()]
+            if level_sort in ("rating", "rating_asc"):
+                avg_expr = rating_sum_col * 1.0 / rated_count_col
+                if level_sort == "rating":
+                    return [avg_expr.desc(), rated_count_col.desc()]
+                return [avg_expr.asc(), rated_count_col.desc()]
+            return [model.created_at.desc()]
+
+        # 两级排序：主键 → 次键 → id 稳定兜底；主/次同键时忽略次键（避免同列排两次 /
+        # 方向冲突）。不传 sort2 时完全走历史单排序分支，保持兼容。
+        if sort2 is not None and _sort_kind(sort2) != _sort_kind(sort):
+            stmt = stmt.order_by(
+                *_flat_level(sort, order),
+                *_flat_level(sort2, order2),
+                model.id.asc(),
+            )
+        elif sort == "name":
             stmt = stmt.order_by(model.name.asc(), model.id.desc())
         elif sort == "count":
             # 素材数排序：order 控制方向；同数时用 id 兜底，保证分页稳定
-            cnt_col = func.coalesce(count_subq.c.cnt, 0)
             if order == "asc":
                 stmt = stmt.order_by(cnt_col.asc(), model.id.asc())
             else:
                 stmt = stmt.order_by(cnt_col.desc(), model.id.desc())
-        elif sort in ("rating", "rating_asc"):
-            has_sample = case(
-                (rated_count_col >= MIN_RATING_SAMPLE, 0), else_=1
-            ).asc()
-            avg_expr = case(
-                (
-                    rated_count_col >= MIN_RATING_SAMPLE,
-                    rating_sum_col * 1.0 / rated_count_col,
-                ),
-                else_=0,
+        elif sort == "rating":
+            avg_expr = rating_sum_col * 1.0 / rated_count_col
+            stmt = stmt.order_by(
+                avg_expr.desc(), rated_count_col.desc(), model.id.desc()
             )
-            if sort == "rating":
-                stmt = stmt.order_by(
-                    has_sample,
-                    avg_expr.desc(),
-                    rated_count_col.desc(),
-                    model.id.desc(),
-                )
-            else:
-                stmt = stmt.order_by(
-                    has_sample,
-                    avg_expr.asc(),
-                    rated_count_col.desc(),
-                    model.id.asc(),
-                )
+        elif sort == "rating_asc":
+            avg_expr = rating_sum_col * 1.0 / rated_count_col
+            stmt = stmt.order_by(
+                avg_expr.asc(), rated_count_col.desc(), model.id.asc()
+            )
         else:
             stmt = stmt.order_by(model.created_at.desc(), model.id.desc())
 
@@ -322,6 +353,8 @@ class PersonServiceBase:
         page: int,
         size: int,
         rating_min: int | None = None,
+        sort2: str | None = None,
+        order2: str = "desc",
     ) -> tuple[list[dict], int]:
         """人物组折叠列表：同组只返回主记录，分页以主记录为准。
 
@@ -417,9 +450,52 @@ class PersonServiceBase:
                 and item["rating_average"] >= rating_min
             ]
 
+        # 评分排序（主或次）时只保留样本足够的组/账号：组合并后的 rated_count 已写进
+        # item（组内分子分母相加），必须在这里过滤——先剔账号会扭曲组均分。
+        rating_sort_active = sort in ("rating", "rating_asc") or sort2 in (
+            "rating",
+            "rating_asc",
+        )
+        if rating_sort_active:
+            folded = [
+                item
+                for item in folded
+                if (item.get("rated_count") or 0) >= MIN_RATING_SAMPLE
+            ]
+
         # 折叠后分页/排序以主记录为准
         total = len(folded)
-        if sort == "name":
+
+        def _level(item: dict, level_sort: str, level_order: str) -> tuple:
+            """单个排序级别的可比较 key（统一升序；倒序用取负实现）。"""
+            if level_sort == "name":
+                return (item.get("name") or "",)
+            if level_sort == "count":
+                cnt = item.get("inspiration_count") or 0
+                return (-cnt if level_order == "desc" else cnt,)
+            if level_sort in ("rating", "rating_asc"):
+                avg = item.get("rating_average") or 0.0
+                rated = item.get("rated_count") or 0
+                if level_sort == "rating":
+                    return (-avg, -rated)
+                return (avg, -rated)
+            created = item.get("created_at")
+            return (
+                0 if created else 1,
+                -(created.timestamp()) if created else 0.0,
+            )
+
+        # 两级排序：主键 → 次键 → id 稳定兜底；主/次同键时忽略次键。不传 sort2 时走
+        # 下面的历史单排序分支，保持兼容。
+        if sort2 is not None and _sort_kind(sort2) != _sort_kind(sort):
+            folded.sort(
+                key=lambda x: (
+                    _level(x, sort, order),
+                    _level(x, sort2, order2),
+                    x["id"],
+                )
+            )
+        elif sort == "name":
             folded.sort(key=lambda x: (x["name"], x["id"]))
         elif sort == "count":
             # 与平铺路径同一口径：order 控制方向，同数按 id 兜底

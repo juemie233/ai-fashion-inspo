@@ -54,6 +54,16 @@ async def list_models(
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
     # 素材数排序方向（sort=count 时生效；asc 便于找「素材最少」的人物）
     order: str = Query("desc", pattern="^(asc|desc)$"),
+    # 两级排序（2026-11-19）：sort/order 为主排序，sort2/order2 为次排序；
+    # 主/次同键时忽略次键；主/次任一为 rating* 时会隐藏「已评 < 5」的模特。
+    sort2: str | None = Query(
+        None,
+        pattern="^(name|count|rating|rating_asc)$",
+        description="次排序键（最多两级；与主排序同键时忽略）",
+    ),
+    order2: str = Query(
+        "desc", pattern="^(asc|desc)$", description="次排序为 count 时的方向"
+    ),
     # 人脸检测约束：仅保留已注册人脸库的模特（确保只匹配候选人脸库内的人）
     face_registered_only: bool = Query(False, description="仅返回已注册人脸库的人物"),
     db: AsyncSession = Depends(get_db),
@@ -64,6 +74,10 @@ async def list_models(
     约束说明：
     - face_registered_only=true：仅返回已注册人脸库的模特，确保人脸检测
       只匹配候选人脸库内的人；防止将库外人物误匹配
+
+    排序（2026-11-19）：支持最多两级（``sort``/``order`` 主 + ``sort2``/``order2`` 次，
+    主/次同键去重）；主/次任一为 ``rating*`` 时先过滤「已评数 < 5」的模特
+    （样本不足暂时隐藏，清空评分排序即恢复全量）。
     """
     items, total = await model_service.list_items(
         db,
@@ -73,6 +87,8 @@ async def list_models(
         platform=platform,
         sort=sort,
         order=order,
+        sort2=sort2,
+        order2=order2,
         face_registered_only=face_registered_only,
     )
     return {"items": items, "total": total, "page": page, "size": size}

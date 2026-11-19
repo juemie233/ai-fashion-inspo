@@ -38,6 +38,10 @@ export function usePersonsStore(kind: PersonKind) {
   const sort = ref<'newest' | 'name' | 'count' | 'rating' | 'rating_asc'>('count')
   /** 素材数排序方向（仅 sort=count 时生效）：表头点击可切换 */
   const order = ref<'asc' | 'desc'>('desc')
+  /** 次排序字段（'' = 无次排序）：表头最多两级排序，主排序见 sort/order */
+  const sort2 = ref<'' | 'name' | 'count' | 'rating' | 'rating_asc'>('')
+  /** 次排序方向（仅 sort2=count 时生效；rating 方向编码在 sort2 的 rating/rating_asc 里） */
+  const order2 = ref<'asc' | 'desc'>('desc')
   /** 作品均分筛选（仅博主；'' = 全部） */
   const ratingMin = ref<number | ''>('')
   /** 按人物组折叠（方案 B，仅博主）：同组只显示主账号；平台筛选时后端自动平铺 */
@@ -62,6 +66,8 @@ export function usePersonsStore(kind: PersonKind) {
         sort: sort.value,
         // 仅 sort=count 时有意义（表头点击切换升降序）
         order: order.value,
+        // 两级排序：次排序（空 = 不带参数，后端按单排序处理）
+        ...(sort2.value ? { sort2: sort2.value, order2: order2.value } : {}),
         // 仅博主生效；模特后端忽略
         rating_min: ratingMin.value === '' ? undefined : ratingMin.value,
         grouped: grouped.value,
@@ -108,6 +114,8 @@ export function usePersonsStore(kind: PersonKind) {
     source,
     sort,
     order,
+    sort2,
+    order2,
     ratingMin,
     grouped,
     load,

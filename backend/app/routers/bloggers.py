@@ -77,6 +77,16 @@ async def list_bloggers(
     ),
     # 素材数排序方向（sort=count 时生效；asc 便于找「素材最少」的人物）
     order: str = Query("desc", pattern="^(asc|desc)$"),
+    # 两级排序（2026-11-19）：sort/order 为主排序，sort2/order2 为次排序；
+    # 主/次同键时忽略次键；主/次任一为 rating* 时会隐藏「已评 < 5」的博主。
+    sort2: str | None = Query(
+        None,
+        pattern="^(name|count|rating|rating_asc)$",
+        description="次排序键（最多两级；与主排序同键时忽略）",
+    ),
+    order2: str = Query(
+        "desc", pattern="^(asc|desc)$", description="次排序为 count 时的方向"
+    ),
     # 作品评分筛选：仅博主；至少 5 张已评分才参与
     rating_min: int | None = Query(
         None, ge=1, le=5, description="作品均分下限（至少 5 张已评分才参与）"
@@ -98,6 +108,12 @@ async def list_bloggers(
     - grouped=true（默认）：同组只返回主账号（素材数最多者或手动指定），
       组内其余账号在 group_members 中，供前端展开显示与多平台徽标；
     - 平台筛选时自动平铺（同组该平台账号各自显示）。
+
+    排序（2026-11-19）：
+    - 最多两级：``sort``/``order`` 为主排序，``sort2``/``order2`` 为次排序；
+      主/次同键时去重，合并后的顺序为「主键 → 次键 → id 稳定兜底」；
+    - 主/次任一为 ``rating`` / ``rating_asc`` 时，先过滤「已评数 < 5」的博主
+      （样本不足暂时隐藏；清空评分排序即恢复全量）；分组折叠路径在组合并后过滤。
     """
     items, total = await blogger_service.list_items(
         db,
@@ -108,6 +124,8 @@ async def list_bloggers(
         source=source,
         sort=sort,
         order=order,
+        sort2=sort2,
+        order2=order2,
         face_registered_only=face_registered_only,
         grouped=grouped,
         rating_min=rating_min,

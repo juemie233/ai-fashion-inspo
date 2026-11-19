@@ -161,4 +161,31 @@ describe('persons store', () => {
     expect(store.persons[0].name).toBe('最新结果')
     expect(store.persons[0].name).not.toBe('过期结果')
   })
+
+  it('两级排序：sort2/order2 默认空，设置后随请求透传', async () => {
+    mockBloggerFetch.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
+    const store = usePersonsStore('blogger')
+    expect(store.sort2).toBe('')
+    expect(store.order2).toBe('desc')
+
+    store.sort = 'rating'
+    store.sort2 = 'count'
+    store.order2 = 'asc'
+    await store.load(true)
+
+    expect(mockBloggerFetch).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: 'rating', sort2: 'count', order2: 'asc' }),
+    )
+  })
+
+  it('没有次排序时不向 API 传 sort2/order2（保持单排序兼容）', async () => {
+    mockBloggerFetch.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
+    const store = usePersonsStore('blogger')
+    store.sort2 = ''
+    await store.load(true)
+
+    const args = mockBloggerFetch.mock.calls.at(-1)?.[0] ?? {}
+    expect(args).not.toHaveProperty('sort2')
+    expect(args).not.toHaveProperty('order2')
+  })
 })

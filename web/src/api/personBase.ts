@@ -46,6 +46,10 @@ export function createPersonApi(kind: 'bloggers' | 'models') {
         sort?: 'newest' | 'name' | 'count' | 'rating' | 'rating_asc'
         /** 素材数排序方向（sort=count 时生效） */
         order?: 'asc' | 'desc'
+        /** 次排序字段（两级排序：sort/order 仍为主排序） */
+        sort2?: 'name' | 'count' | 'rating' | 'rating_asc'
+        /** 次排序方向（sort2=count 时生效；rating 方向编码在 sort2 的 rating/rating_asc） */
+        order2?: 'asc' | 'desc'
         /** 作品均分下限（仅博主；后端要求至少 5 张已评分） */
         rating_min?: number
         /** 仅返回已注册人脸库的人物（用于人脸检测手动选择） */

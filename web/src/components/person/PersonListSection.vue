@@ -41,6 +41,12 @@ const {
   onSearchKeydown,
   onSorterChange,
   onSortPicked,
+  sortMainLabel,
+  sortSecondaryLabel,
+  ratingSortActive,
+  ratingSortHint,
+  hasActiveSort,
+  clearSort,
   columns,
   topPersons,
   missingTotal,
@@ -187,6 +193,27 @@ function handleExpandedChange(keys: Array<string | number>) {
           @change="onSortPicked"
         />
       </a-space>
+
+      <!-- 两级排序状态：主排序来自表头/下拉，次排序只可能来自表头；两者都可见、可整体清除 -->
+      <div class="sort-status" aria-live="polite">
+        <span class="sort-status-title">排序</span>
+        <span class="sort-chip sort-main">主：{{ sortMainLabel }}</span>
+        <template v-if="sortSecondaryLabel">
+          <span class="sort-sep" aria-hidden="true">→</span>
+          <span class="sort-chip sort-secondary">次：{{ sortSecondaryLabel }}</span>
+        </template>
+        <a-button
+          v-if="hasActiveSort"
+          type="text"
+          size="mini"
+          class="sort-clear"
+          @click="clearSort"
+        >
+          清除排序
+        </a-button>
+      </div>
+      <!-- 评分排序时后端只返回已评 ≥5 张的博主，明确提示，避免误以为博主变少了 -->
+      <div v-if="ratingSortActive" class="rating-sort-hint">{{ ratingSortHint }}</div>
     </a-card>
 
     <!-- 博主 IP 属地统计（ArcoChart 封装，横向柱状图展示地域分布） -->
@@ -377,6 +404,54 @@ function handleExpandedChange(keys: Array<string | number>) {
 <style scoped>
 .filter-card {
   margin-bottom: 12px;
+}
+
+/* 两级排序状态条：主/次都写出来（表头箭头只回显主排序，避免误读） */
+.sort-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.sort-status-title {
+  color: var(--ink-3);
+}
+
+.sort-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.sort-chip.sort-secondary {
+  border-color: var(--line-strong);
+  color: var(--ink-2);
+}
+
+.sort-sep {
+  color: var(--ink-3);
+}
+
+.sort-clear {
+  margin-left: 2px;
+  padding: 0 6px;
+  color: var(--ink-2);
+}
+
+.rating-sort-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--amber);
 }
 
 .table-card {
