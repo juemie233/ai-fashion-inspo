@@ -43,6 +43,7 @@ _ALL_TABLES = [
     "collections",
     "ai_extracted_tags",
     "ai_quality_review",
+    "quality_corrections",  # 质量审核误判反馈：引用 ai_analysis_log/inspirations，须先于二者删除
     "tag_corrections",  # 引用 inspirations/tags/ai_analysis_log，须先于三者删除
     "inspiration_bloggers",
     "inspiration_models",

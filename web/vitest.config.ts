@@ -3,6 +3,10 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
 export default defineConfig({
+  // 测试环境也要注入 schema 版本常量：真实 `@/utils/schemaVersion` 模块在 import
+  // 时依赖 vite 的 define 注入，vitest 不读取 vite.config.ts，缺了会在单测里
+  // 直接 ReferenceError（挂载 App / 版本横幅等用例会踩到）
+  define: { __SCHEMA_VERSION__: JSON.stringify('schema-vitest') },
   plugins: [vue()],
   resolve: {
     alias: {
