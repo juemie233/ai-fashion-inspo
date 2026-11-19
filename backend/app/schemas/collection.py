@@ -58,6 +58,25 @@ class AddInspirationsRequest(BaseModel):
     inspiration_ids: list[str] = Field(min_length=1, max_length=200)
 
 
+class CollectionTransferRequest(BaseModel):
+    """批量移动/复制合集成员请求体（2026-11-19 P1）。
+
+    - ``ids``：要操作的素材 ID（必须全部属于源合集）；
+    - ``target_ids``：目标合集 ID 列表（1~20 个，请求内去重）；
+    - ``mode``：``move`` 移动（从源合集移除）/ ``copy`` 复制（源合集不动）。
+    """
+
+    ids: list[str] = Field(min_length=1, max_length=500)
+    target_ids: list[int] = Field(min_length=1, max_length=20)
+    mode: Literal["move", "copy"]
+
+
+class CollectionMergeRequest(BaseModel):
+    """合并源合集到目标合集请求体（2026-11-19 P1）：合并后删除源合集。"""
+
+    source_ids: list[int] = Field(min_length=1, max_length=20)
+
+
 class ItemReorderRequest(BaseModel):
     """合集内成员拖拽排序的请求体（按新顺序提交全部成员 ID）。"""
 

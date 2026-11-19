@@ -14,6 +14,8 @@ from app.schemas.collection import (
     CollectionCreate,
     CollectionUpdate,
     AddInspirationsRequest,
+    CollectionMergeRequest,
+    CollectionTransferRequest,
     ItemReorderRequest,
     CollectionReorderRequest,
     CollectionOut,
@@ -168,6 +170,37 @@ async def add_inspirations(
     return await collection_service.add_inspirations(
         db, collection_id, body.inspiration_ids
     )
+
+
+@router.post("/{source_id}/inspirations/transfer", status_code=status.HTTP_200_OK)
+async def transfer_inspirations(
+    source_id: int,
+    body: CollectionTransferRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """批量移动/复制合集成员到多个目标合集（整单事务）。
+
+    请求体：``{ids, target_ids, mode=move|copy}``。``ids`` 必须全部属于源合集；
+    目标已存在则跳过，其余 append 到目标末尾；``move`` 才从源合集移除。
+    源/目标都必须是普通手动合集（非自动维护、非系统收藏根、非分类节点）。
+    """
+    return await collection_service.transfer_inspirations(
+        db, source_id, body.ids, body.target_ids, body.mode
+    )
+
+
+@router.post("/{target_id}/merge", status_code=status.HTTP_200_OK)
+async def merge_collections(
+    target_id: int,
+    body: CollectionMergeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """把多个源合集合并进目标合集，成功后删除源合集（整单事务）。
+
+    请求体：``{source_ids}``。源成员按 position/added_at 顺序 append，目标已有跳过；
+    源不能等于目标；源/目标都必须是普通手动合集。返回合并数/新增/跳过/被删源 ID。
+    """
+    return await collection_service.merge_collections(db, target_id, body.source_ids)
 
 
 @router.delete("/{collection_id}/inspirations", status_code=status.HTTP_200_OK)

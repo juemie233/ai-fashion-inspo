@@ -12,11 +12,14 @@ import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
 import CollectionOrderingStrip from '@/components/collection/CollectionOrderingStrip.vue'
 import CollectionSidebar from '@/components/collection/CollectionSidebar.vue'
+import CollectionTargetPickerModal from '@/components/collection/CollectionTargetPickerModal.vue'
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import {
   fetchCollectionInspirations,
   fetchCollections,
+  mergeCollections,
   removeFromCollection,
+  transferCollectionItems,
   type CollectionOut,
 } from '@/api/collections'
 import {
@@ -318,6 +321,71 @@ async function handleBatchRemove() {
   }
 }
 
+// ── 批量移动/复制到其它合集（仅手动合集的批量选择栏）──
+
+const transferOpen = ref(false)
+const transferMode = ref<'move' | 'copy'>('move')
+const transferSubmitting = ref(false)
+
+function openTransfer(mode: 'move' | 'copy') {
+  if (selectedIds.value.size === 0) return
+  transferMode.value = mode
+  transferOpen.value = true
+}
+
+async function confirmTransfer(targetIds: number[]) {
+  const source = current.value
+  const ids = [...selectedIds.value]
+  if (!source || ids.length === 0 || targetIds.length === 0) return
+  const action = transferMode.value === 'move' ? '移动' : '复制'
+  transferSubmitting.value = true
+  try {
+    const result = await transferCollectionItems(source.id, ids, targetIds, transferMode.value)
+    Message.success(`已${action} ${result.added} 个素材到 ${targetIds.length} 个合集`)
+    if (result.skipped > 0) Message.info(`跳过 ${result.skipped} 个（目标合集已有）`)
+    transferOpen.value = false
+    exitBatchMode()
+    // 源合集内容/计数与目标合集计数都可能变化：列表与内容一起刷新
+    await Promise.all([loadContent(), loadCollections()])
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, `${action}失败`))
+  } finally {
+    transferSubmitting.value = false
+  }
+}
+
+// ── 合并当前手动合集到目标合集（合并后删除源，用户已确认）──
+
+const mergeOpen = ref(false)
+const mergeSubmitting = ref(false)
+
+function openMerge() {
+  mergeOpen.value = true
+}
+
+async function confirmMerge(targetIds: number[]) {
+  const source = current.value
+  const target = targetIds[0]
+  if (!source || !target) return
+  mergeSubmitting.value = true
+  try {
+    const result = await mergeCollections(target, [source.id])
+    Message.success(
+      `已合并 ${result.merged_collections} 个合集：新增 ${result.added} 个素材，源合集已删除`,
+    )
+    if (result.skipped > 0) Message.info(`跳过 ${result.skipped} 个（目标已有或无法合并）`)
+    mergeOpen.value = false
+    await loadCollections()
+    // 源合集已删除：选中目标合集，让用户直接看到合并后的内容
+    currentId.value = target
+  } catch (e) {
+    // 后端失败时前端不改任何本地状态（源合集仍在，无需回滚），只提示
+    Message.error(getApiErrorMessage(e, '合并合集失败'))
+  } finally {
+    mergeSubmitting.value = false
+  }
+}
+
 // ── 拖拽排序：合集列表（实现见 composables/useCollectionListDnd.ts）──
 
 const { dragOverId, onCollectionDragStart, onCollectionDrop, onCollectionMove } =
@@ -398,6 +466,7 @@ onMounted(() => {
           @cancel-ordering="ordering = false"
           @rename="openRename"
           @delete="confirmDelete"
+          @merge="openMerge"
         />
 
         <!-- 智能合集条件摘要 -->
@@ -534,6 +603,10 @@ onMounted(() => {
             >
               <a-button size="mini" status="danger">移出合集</a-button>
             </a-popconfirm>
+            <template v-if="current.kind === 'manual'">
+              <a-button size="mini" @click="openTransfer('move')">移动到…</a-button>
+              <a-button size="mini" @click="openTransfer('copy')">复制到…</a-button>
+            </template>
             <a-button size="mini" type="text" @click="exitBatchMode()">退出批量</a-button>
           </div>
 
@@ -637,6 +710,24 @@ onMounted(() => {
         </div>
       </template>
     </a-modal>
+    <!-- 批量移动/复制目标合集 -->
+    <CollectionTargetPickerModal
+      v-model:visible="transferOpen"
+      :title="transferMode === 'move' ? '移动素材到合集' : '复制素材到合集'"
+      :exclude-ids="current ? [current.id] : []"
+      :submitting="transferSubmitting"
+      @confirm="confirmTransfer"
+    />
+
+    <!-- 合并当前合集到目标合集（成功后会删除源合集） -->
+    <CollectionTargetPickerModal
+      v-model:visible="mergeOpen"
+      title="合并到目标合集（合并后删除当前合集）"
+      :multiple="false"
+      :exclude-ids="current ? [current.id] : []"
+      :submitting="mergeSubmitting"
+      @confirm="confirmMerge"
+    />
   </div>
 </template>
 

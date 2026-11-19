@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   fetchCollections: vi.fn(),
   fetchCollectionInspirations: vi.fn(),
   removeFromCollection: vi.fn(),
+  transferCollectionItems: vi.fn(),
+  mergeCollections: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
 }))
@@ -32,6 +34,8 @@ vi.mock('@/api/collections', () => ({
   fetchCollections: mocks.fetchCollections,
   fetchCollectionInspirations: mocks.fetchCollectionInspirations,
   removeFromCollection: mocks.removeFromCollection,
+  transferCollectionItems: mocks.transferCollectionItems,
+  mergeCollections: mocks.mergeCollections,
   createCollection: vi.fn(),
   updateCollection: vi.fn(),
   deleteCollection: vi.fn(),
@@ -100,6 +104,7 @@ function mountView() {
         CollectionContentHeader: true,
         CollectionOrderingStrip: true,
         SmartQueryEditorModal: true,
+        CollectionTargetPickerModal: true,
       },
     },
   })
@@ -116,6 +121,13 @@ describe('CollectionsView 交互路径', () => {
     ])
     mocks.fetchCollectionInspirations.mockResolvedValue({ items: [], total: 0 })
     mocks.removeFromCollection.mockResolvedValue({ removed: 2 })
+    mocks.transferCollectionItems.mockResolvedValue({ added: 2, skipped: 0 })
+    mocks.mergeCollections.mockResolvedValue({
+      merged_collections: 1,
+      added: 3,
+      skipped: 0,
+      deleted_sources: 1,
+    })
   })
 
   it('首屏加载合集列表，并默认选中第一个', async () => {
@@ -223,6 +235,94 @@ describe('CollectionsView 交互路径', () => {
     })
     const header = wrapper.findComponent({ name: 'CollectionContentHeader' })
     expect(header.props('canOrder')).toBe(false)
+  })
+
+  it('批量移动/复制：进入批量并选中后，目标弹窗确认会带 mode 调 transfer', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 进入批量模式并勾选一条
+    const batchButton = wrapper.findAll('button').find((b) => b.text().includes('批量选择'))
+    expect(batchButton).toBeTruthy()
+    await batchButton!.trigger('click')
+    const grid = wrapper.findComponent({ name: 'MasonryGrid' })
+    grid.vm.$emit('toggle-select', 'insp-1')
+    await flushPromises()
+
+    // 移动到… → 目标弹窗 → 确认目标 2
+    const moveButton = wrapper.findAll('button').find((b) => b.text().includes('移动到…'))
+    expect(moveButton).toBeTruthy()
+    await moveButton!.trigger('click')
+    await flushPromises()
+
+    const picker = wrapper.findComponent({ name: 'CollectionTargetPickerModal' })
+    expect(picker.props('visible')).toBe(true)
+    expect(picker.props('multiple')).not.toBe(false) // 批量移动目标可多选
+    picker.vm.$emit('confirm', [2, 3])
+    await flushPromises()
+
+    expect(mocks.transferCollectionItems).toHaveBeenCalledWith(1, ['insp-1'], [2, 3], 'move')
+  })
+
+  it('复制到…：mode=copy', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('批量选择'))!
+      .trigger('click')
+    wrapper.findComponent({ name: 'MasonryGrid' }).vm.$emit('toggle-select', 'insp-2')
+    await flushPromises()
+
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('复制到…'))!
+      .trigger('click')
+    await flushPromises()
+
+    const pickers = wrapper.findAllComponents({ name: 'CollectionTargetPickerModal' })
+    pickers[0].vm.$emit('confirm', [2])
+    await flushPromises()
+
+    expect(mocks.transferCollectionItems).toHaveBeenCalledWith(1, ['insp-2'], [2], 'copy')
+  })
+
+  it('合集头「合并到…」：确认目标后调 merge，成功后选中目标合集', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const header = wrapper.findComponent({ name: 'CollectionContentHeader' })
+    header.vm.$emit('merge')
+    await flushPromises()
+
+    const picker = wrapper
+      .findAllComponents({ name: 'CollectionTargetPickerModal' })
+      .find((p) => String(p.props('title')).includes('合并'))
+    expect(picker).toBeTruthy()
+    expect(picker!.props('multiple')).toBe(false)
+    picker!.vm.$emit('confirm', [2])
+    await flushPromises()
+
+    expect(mocks.mergeCollections).toHaveBeenCalledWith(2, [1])
+    expect(mocks.success).toHaveBeenCalledWith(expect.stringContaining('源合集已删除'))
+  })
+
+  it('合并失败只提示错误，不改选中的源合集', async () => {
+    mocks.mergeCollections.mockRejectedValue({ response: { data: { detail: '目标不可合并' } } })
+    const wrapper = mountView()
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'CollectionContentHeader' }).vm.$emit('merge')
+    await flushPromises()
+    const picker = wrapper
+      .findAllComponents({ name: 'CollectionTargetPickerModal' })
+      .find((p) => String(p.props('title')).includes('合并'))
+    picker!.vm.$emit('confirm', [2])
+    await flushPromises()
+
+    expect(mocks.error).toHaveBeenCalledWith('目标不可合并')
+    expect(wrapper.findComponent({ name: 'CollectionSidebar' }).props('collections')).toBeTruthy()
   })
 
   it('合集内搜索防抖后带 q 加载；切合集把筛选与排序重置为默认', async () => {

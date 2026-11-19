@@ -28,6 +28,11 @@ const isSystemManualRoot = computed(
   () => props.current.parent_id == null && props.current.name === SYSTEM_MANUAL_COLLECTION_NAME,
 )
 
+/** 合并入口：仅手动合集、非抖音自动同步、非系统收藏根（用户确认合并后删除源） */
+const canMerge = computed(
+  () => props.current.kind === 'manual' && !props.current.auto_source && !isSystemManualRoot.value,
+)
+
 const emit = defineEmits<{
   (e: 'edit-smart'): void
   /** 把智能合集当前匹配到的内容固化为手动合集 */
@@ -36,6 +41,8 @@ const emit = defineEmits<{
   (e: 'save-order'): void
   (e: 'cancel-ordering'): void
   (e: 'rename'): void
+  /** 把当前手动合集合并到另一个目标合集（合并后删除源） */
+  (e: 'merge'): void
   (e: 'delete'): void
 }>()
 </script>
@@ -76,6 +83,7 @@ const emit = defineEmits<{
             重命名
           </a-button>
         </a-tooltip>
+        <a-button v-if="canMerge" size="small" @click="emit('merge')">合并到…</a-button>
       </template>
       <a-button size="small" status="danger" type="text" @click="emit('delete')">
         删除合集

@@ -131,6 +131,62 @@ export async function removeFromCollection(
   return data
 }
 
+/** 合集间批量移动/复制结果 */
+export interface CollectionTransferResult {
+  /** 成功加入目标合集的素材数 */
+  added: number
+  /** 已存在/无法加入而跳过的数量 */
+  skipped: number
+  /** move 模式从源合集移除的数量（copy 模式不返回或为 0） */
+  removed_from_source?: number
+}
+
+/**
+ * 批量把源合集里的素材移动/复制到多个目标合集（仅手动合集、仅容器节点）。
+ *
+ * - `mode='move'`：先从源合集移除再加到目标（素材本体不变；同一素材可进多个目标）；
+ * - `mode='copy'`：只加入目标，源合集保留。
+ */
+export async function transferCollectionItems(
+  sourceId: number,
+  inspirationIds: string[],
+  targetIds: number[],
+  mode: 'move' | 'copy',
+): Promise<CollectionTransferResult> {
+  const { data } = await apiClient.post<CollectionTransferResult>(
+    `/collections/${sourceId}/inspirations/transfer`,
+    { ids: inspirationIds, target_ids: targetIds, mode },
+  )
+  return data
+}
+
+/** 合集合并结果 */
+export interface CollectionMergeResult {
+  /** 被合并的源合集数量 */
+  merged_collections: number
+  /** 加入目标合集的素材数 */
+  added: number
+  /** 重复/无法加入而跳过的数量 */
+  skipped: number
+  /** 合并成功后删除的源合集数量（用户确认：合并后删除源） */
+  deleted_sources: number
+}
+
+/**
+ * 把多个源合集合并进目标合集（仅手动合集）。
+ *
+ * 后端确认口径：素材并入目标后**删除源合集**（用户已确认）；返回统计供前端提示。
+ */
+export async function mergeCollections(
+  targetId: number,
+  sourceIds: number[],
+): Promise<CollectionMergeResult> {
+  const { data } = await apiClient.post<CollectionMergeResult>(`/collections/${targetId}/merge`, {
+    source_ids: sourceIds,
+  })
+  return data
+}
+
 /** 合集内素材拖拽排序（仅手动合集） */
 export async function reorderCollectionItems(id: number, orderedIds: string[]): Promise<void> {
   await apiClient.patch(`/collections/${id}/items/order`, { ordered_ids: orderedIds })

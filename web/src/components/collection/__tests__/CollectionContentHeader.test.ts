@@ -56,4 +56,22 @@ describe('CollectionContentHeader 系统收藏根', () => {
     // 其它手动合集操作保留
     expect(wrapper.findAll('button').some((b) => b.text().includes('重命名'))).toBe(true)
   })
+
+  it('仅手动、非自动、非系统收藏根显示「合并到…」', () => {
+    // 普通手动合集：显示
+    const manual = mountHeader(collection({ kind: 'manual' }))
+    expect(manual.findAll('button').some((b) => b.text().includes('合并到…'))).toBe(true)
+
+    // 智能合集：不显示
+    const smart = mountHeader(collection({ kind: 'smart' }))
+    expect(smart.findAll('button').some((b) => b.text().includes('合并到…'))).toBe(false)
+
+    // 抖音自动同步合集：不显示
+    const auto = mountHeader(collection({ kind: 'manual', auto_source: 'douyin' }))
+    expect(auto.findAll('button').some((b) => b.text().includes('合并到…'))).toBe(false)
+
+    // 系统收藏根：整组操作都不显示
+    const system = mountHeader(collection({ kind: 'manual', name: '系统入库手动收藏' }))
+    expect(system.findAll('button').some((b) => b.text().includes('合并到…'))).toBe(false)
+  })
 })

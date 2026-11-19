@@ -90,3 +90,72 @@ export async function fetchFavoritesHistory(limit = 30): Promise<FavoriteHistory
   })
   return data
 }
+
+// ── 待整理工作台：智能视图 + cleanup 摘要 ──
+
+/** 智能视图 key：未评分 / 未整理 / 高分 / 收藏超 90 天 */
+type FavoriteViewKey = 'unrated' | 'unfiled' | 'high_rating' | 'stale'
+
+/** 智能视图卡片（GET /favorites/views） */
+export interface FavoriteViewOut {
+  key: FavoriteViewKey | string
+  label: string
+  description: string
+  count: number
+}
+
+interface FavoriteViewsOut {
+  views: FavoriteViewOut[]
+}
+
+/** 智能视图素材分页（GET /favorites/views/{key}?page&page_size） */
+interface FavoriteViewItemsOut {
+  key: string
+  items: InspirationOut[]
+  total: number
+  page: number
+  size: number
+}
+
+/** cleanup 统计 */
+interface FavoriteCleanupCounts {
+  unrated: number
+  unfiled: number
+  missing_files: number
+  duplicate_groups: number
+  duplicate_items: number
+}
+
+/** 重复组：同一内容 hash 的多份收藏 */
+export interface FavoriteDuplicateGroup {
+  content_hash: string
+  items: InspirationOut[]
+}
+
+/** 待整理摘要（GET /favorites/cleanup） */
+export interface FavoriteCleanupOut {
+  counts: FavoriteCleanupCounts
+  missing_files: InspirationOut[]
+  duplicate_groups: FavoriteDuplicateGroup[]
+}
+
+export async function fetchFavoriteViews(): Promise<FavoriteViewsOut> {
+  const { data } = await apiClient.get<FavoriteViewsOut>('/favorites/views')
+  return data
+}
+
+export async function fetchFavoriteViewItems(
+  key: string,
+  page = 1,
+  pageSize = 24,
+): Promise<FavoriteViewItemsOut> {
+  const { data } = await apiClient.get<FavoriteViewItemsOut>(`/favorites/views/${key}`, {
+    params: { page, page_size: pageSize },
+  })
+  return data
+}
+
+export async function fetchFavoritesCleanup(): Promise<FavoriteCleanupOut> {
+  const { data } = await apiClient.get<FavoriteCleanupOut>('/favorites/cleanup')
+  return data
+}

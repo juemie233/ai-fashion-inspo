@@ -12,6 +12,7 @@ import { Message } from '@arco-design/web-vue'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
 import AsyncState from '@/components/common/AsyncState.vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
+import FavoritesCleanupPanel from '@/components/inspiration/FavoritesCleanupPanel.vue'
 import { getFileUrl, toggleFavorite } from '@/api/inspirations'
 import {
   favoriteActionLabel,
@@ -27,6 +28,9 @@ import { formatDateTime } from '@/utils/format'
 import { openInspiration } from '@/utils/openInspiration'
 
 const router = useRouter()
+
+/** 收藏中心分两个 Tab：概览看统计/最近/动态，待整理是清理工作台 */
+const activeTab = ref<'overview' | 'cleanup'>('overview')
 
 // ── 概览：统计卡 + 最近收藏 ──
 const overview = ref<FavoritesOverviewOut | null>(null)
@@ -130,95 +134,103 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 概览：统计卡 + 最近收藏 -->
-    <AsyncState
-      :loading="overviewLoading"
-      :error="overviewError"
-      :empty="false"
-      loading-text="正在加载收藏概览..."
-      @retry="loadOverview"
-    >
-      <StatCardGrid :items="statItems" :span="6" class="fav-stats" />
-
-      <section class="fav-section">
-        <div class="section-head">
-          <h3>最近收藏</h3>
-          <span class="section-meta">最近 {{ recent.length }} 条 · 按收藏时间倒序</span>
-        </div>
+    <a-tabs v-model:active-key="activeTab" class="fav-tabs" lazy-load>
+      <a-tab-pane key="overview" title="概览">
+        <!-- 概览：统计卡 + 最近收藏 -->
         <AsyncState
-          :loading="false"
-          :error="null"
-          :empty="recent.length === 0"
-          empty-text="还没有收藏素材：在素材库/详情页点收藏后会出现在这里"
+          :loading="overviewLoading"
+          :error="overviewError"
+          :empty="false"
+          loading-text="正在加载收藏概览..."
+          @retry="loadOverview"
         >
-          <MasonryGrid
-            :items="recent"
-            density="standard"
-            :show-actions="false"
-            :show-favorite="true"
-            :pending-favorite-ids="pendingFavoriteIds"
-            @toggle-favorite="handleRecentFavorite"
-          />
-        </AsyncState>
-      </section>
-    </AsyncState>
+          <StatCardGrid :items="statItems" :span="6" class="fav-stats" />
 
-    <!-- 收藏动态：收藏/取消收藏流水 -->
-    <section class="fav-section">
-      <div class="section-head">
-        <h3>收藏动态</h3>
-        <span class="section-meta">最近 {{ history.length }} 条</span>
-      </div>
-      <AsyncState
-        :loading="historyLoading"
-        :error="historyError"
-        :empty="history.length === 0"
-        empty-text="还没有收藏动态：收藏/取消收藏后会在这里留痕"
-        loading-text="正在加载收藏动态..."
-        @retry="loadHistory"
-      >
-        <ul class="fav-history">
-          <li
-            v-for="entry in history"
-            :key="entry.id"
-            class="fav-history-item"
-            :class="{ 'has-item': !!entry.item }"
-            @click="openHistoryItem(entry)"
-          >
-            <div class="fav-thumb">
-              <img
-                v-if="historyThumbUrl(entry)"
-                :src="historyThumbUrl(entry)"
-                alt=""
-                loading="lazy"
+          <section class="fav-section">
+            <div class="section-head">
+              <h3>最近收藏</h3>
+              <span class="section-meta">最近 {{ recent.length }} 条 · 按收藏时间倒序</span>
+            </div>
+            <AsyncState
+              :loading="false"
+              :error="null"
+              :empty="recent.length === 0"
+              empty-text="还没有收藏素材：在素材库/详情页点收藏后会出现在这里"
+            >
+              <MasonryGrid
+                :items="recent"
+                density="standard"
+                :show-actions="false"
+                :show-favorite="true"
+                :pending-favorite-ids="pendingFavoriteIds"
+                @toggle-favorite="handleRecentFavorite"
               />
-              <span v-else class="fav-thumb-empty">无图</span>
-            </div>
-            <div class="fav-history-main">
-              <div class="fav-history-title">
-                <a-tag
-                  :color="isUnfavoriteAction(entry.action) ? 'gray' : 'green'"
-                  size="small"
-                  class="fav-action-tag"
-                  >{{ favoriteActionLabel(entry.action) }}</a-tag
-                >
-                <span class="fav-history-author">
-                  {{ entry.item?.source_author ? `@${entry.item.source_author}` : '未知作者' }}
-                </span>
-                <span class="fav-history-source">{{ favoriteSourceLabel(entry.source) }}</span>
-              </div>
-              <div class="fav-history-times">
-                <span class="fav-time">{{ formatDateTime(entry.created_at) }}</span>
-                <span v-if="entry.item?.favorited_at" class="fav-time">
-                  收藏于 {{ formatDateTime(entry.item.favorited_at) }}
-                </span>
-              </div>
-            </div>
-            <span class="fav-history-arrow" aria-hidden="true">→</span>
-          </li>
-        </ul>
-      </AsyncState>
-    </section>
+            </AsyncState>
+          </section>
+        </AsyncState>
+
+        <!-- 收藏动态：收藏/取消收藏流水 -->
+        <section class="fav-section">
+          <div class="section-head">
+            <h3>收藏动态</h3>
+            <span class="section-meta">最近 {{ history.length }} 条</span>
+          </div>
+          <AsyncState
+            :loading="historyLoading"
+            :error="historyError"
+            :empty="history.length === 0"
+            empty-text="还没有收藏动态：收藏/取消收藏后会在这里留痕"
+            loading-text="正在加载收藏动态..."
+            @retry="loadHistory"
+          >
+            <ul class="fav-history">
+              <li
+                v-for="entry in history"
+                :key="entry.id"
+                class="fav-history-item"
+                :class="{ 'has-item': !!entry.item }"
+                @click="openHistoryItem(entry)"
+              >
+                <div class="fav-thumb">
+                  <img
+                    v-if="historyThumbUrl(entry)"
+                    :src="historyThumbUrl(entry)"
+                    alt=""
+                    loading="lazy"
+                  />
+                  <span v-else class="fav-thumb-empty">无图</span>
+                </div>
+                <div class="fav-history-main">
+                  <div class="fav-history-title">
+                    <a-tag
+                      :color="isUnfavoriteAction(entry.action) ? 'gray' : 'green'"
+                      size="small"
+                      class="fav-action-tag"
+                      >{{ favoriteActionLabel(entry.action) }}</a-tag
+                    >
+                    <span class="fav-history-author">
+                      {{ entry.item?.source_author ? `@${entry.item.source_author}` : '未知作者' }}
+                    </span>
+                    <span class="fav-history-source">{{ favoriteSourceLabel(entry.source) }}</span>
+                  </div>
+                  <div class="fav-history-times">
+                    <span class="fav-time">{{ formatDateTime(entry.created_at) }}</span>
+                    <span v-if="entry.item?.favorited_at" class="fav-time">
+                      收藏于 {{ formatDateTime(entry.item.favorited_at) }}
+                    </span>
+                  </div>
+                </div>
+                <span class="fav-history-arrow" aria-hidden="true">→</span>
+              </li>
+            </ul>
+          </AsyncState>
+        </section>
+      </a-tab-pane>
+
+      <a-tab-pane key="cleanup" title="待整理">
+        <FavoritesCleanupPanel />
+      </a-tab-pane>
+    </a-tabs>
   </div>
 </template>
 
@@ -243,6 +255,10 @@ onMounted(() => {
   line-height: 1.8;
   color: var(--ink-2);
   max-width: 52em;
+}
+
+.fav-tabs {
+  margin-top: 4px;
 }
 
 .fav-section {

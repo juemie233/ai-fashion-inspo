@@ -151,6 +151,27 @@ async def _require_manual(collection: Collection) -> None:
         )
 
 
+async def _require_transferable(
+    db: AsyncSession, collection: Collection, *, role: str
+) -> None:
+    """校验「可参与移动/复制/合并的普通手动合集」。
+
+    P1 口径（2026-11-19）：只允许**用户自建手动合集**参与：
+    - 手动（``query_json IS NULL``，智能合集先固化）；
+    - 非系统收藏根（「系统入库手动收藏」是自动同步节点）；
+    - 非自动维护（``auto_source IS NULL``，抖音收藏夹由 f2 维护，不能手工搬入/搬出）；
+    - 非分类节点（没有子收藏夹，见 :func:`_require_container`）。
+    """
+    await _require_manual(collection)
+    _guard_manual_root(collection, f"作为{role}")
+    if collection.auto_source is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"「{collection.name}」是自动维护的收藏夹，不能作为{role}",
+        )
+    await _require_container(db, collection)
+
+
 async def _child_count(db: AsyncSession, collection_id: int) -> int:
     """直接子收藏夹数。"""
     return int(
@@ -768,6 +789,208 @@ async def remove_inspirations(
     )
     await db.commit()
     return {"removed": result.rowcount or 0}
+
+
+async def transfer_inspirations(
+    db: AsyncSession,
+    source_id: int,
+    inspiration_ids: list[str],
+    target_ids: list[int],
+    mode: str,
+) -> dict:
+    """把源合集的成员批量移动/复制到多个目标合集（P1，2026-11-19）。
+
+    规则：
+    - 源与目标都必须是普通手动合集（非自动维护、非系统收藏根、非分类节点）；
+    - ``ids`` 必须**全部属于源合集**（move/copy 都一样，避免误操作）；
+    - 目标已存在的成员跳过，其余按目标当前最大 position 追加到末尾；
+    - ``move`` 才从源合集移除；``copy`` 不动源合集；
+    - 整单事务：任何校验失败都不提交（源/目标保持原状）。
+
+    Returns:
+        ``{source_id, mode, target_ids, added, skipped, removed_from_source}``；
+        ``added``/``skipped`` 是**跨目标合计**（同一素材复制到多个目标会各计一次）。
+    """
+    if mode not in ("move", "copy"):
+        raise HTTPException(status_code=400, detail="mode 只能是 move 或 copy")
+
+    source = await get_collection(db, source_id)
+    await _require_transferable(db, source, role="移动/复制源")
+
+    # 请求内去重，保持首次出现顺序
+    unique_ids = list(dict.fromkeys(inspiration_ids))
+    unique_targets = list(dict.fromkeys(target_ids))
+    if source.id in unique_targets:
+        raise HTTPException(status_code=400, detail="目标合集不能包含源合集本身")
+
+    # ids 必须全部属于源合集（先校验再写，避免「部分复制」的中间态）
+    source_members = set(
+        (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == source.id,
+                    CollectionItem.inspiration_id.in_(unique_ids),
+                )
+            )
+        ).scalars().all()
+    )
+    missing = [insp_id for insp_id in unique_ids if insp_id not in source_members]
+    if missing:
+        preview = "、".join(missing[:5])
+        raise HTTPException(
+            status_code=400,
+            detail=f"以下素材不属于源合集，不能移动/复制：{preview}"
+            + ("…" if len(missing) > 5 else ""),
+        )
+
+    # 目标先全部校验通过（不写库），保证整单原子
+    targets: list[Collection] = []
+    for target_id in unique_targets:
+        target = await get_collection(db, target_id)
+        await _require_transferable(db, target, role="目标合集")
+        targets.append(target)
+
+    added = 0
+    skipped = 0
+    for target in targets:
+        existing = set(
+            (
+                await db.execute(
+                    select(CollectionItem.inspiration_id).where(
+                        CollectionItem.collection_id == target.id,
+                        CollectionItem.inspiration_id.in_(unique_ids),
+                    )
+                )
+            ).scalars().all()
+        )
+        to_add = [insp_id for insp_id in unique_ids if insp_id not in existing]
+        skipped += len(existing)
+        if to_add:
+            max_position = (
+                await db.execute(
+                    select(func.max(CollectionItem.position)).where(
+                        CollectionItem.collection_id == target.id
+                    )
+                )
+            ).scalar() or 0
+            for offset, insp_id in enumerate(to_add, start=1):
+                db.add(
+                    CollectionItem(
+                        collection_id=target.id,
+                        inspiration_id=insp_id,
+                        position=max_position + offset,
+                    )
+                )
+            added += len(to_add)
+
+    removed_from_source = 0
+    if mode == "move":
+        result = await db.execute(
+            delete(CollectionItem).where(
+                CollectionItem.collection_id == source.id,
+                CollectionItem.inspiration_id.in_(unique_ids),
+            )
+        )
+        removed_from_source = result.rowcount or 0
+
+    await db.commit()
+    return {
+        "source_id": source.id,
+        "mode": mode,
+        "target_ids": unique_targets,
+        "added": added,
+        "skipped": skipped,
+        "removed_from_source": removed_from_source,
+    }
+
+
+async def merge_collections(
+    db: AsyncSession, target_id: int, source_ids: list[int]
+) -> dict:
+    """把多个源合集合并进目标合集，成功后**删除源合集**（P1，2026-11-19）。
+
+    规则：
+    - 目标与所有源都必须是普通手动合集（非自动维护、非系统收藏根、非分类节点）；
+    - 源不能等于目标；源成员按 ``position, added_at`` 顺序 append 到目标末尾；
+    - 目标已存在的成员跳过；全部校验/写入成功后删除源合集（含成员关系），目标保留；
+    - 整单事务。
+
+    Returns:
+        ``{target_id, merged_collections, added, skipped, deleted_sources}``；
+        ``merged_collections`` = 成功合并的源合集数，``deleted_sources`` = 被删除的源合集 ID 列表。
+    """
+    target = await get_collection(db, target_id)
+    await _require_transferable(db, target, role="合并目标")
+
+    unique_sources = list(dict.fromkeys(source_ids))
+    if target.id in unique_sources:
+        raise HTTPException(status_code=400, detail="源合集不能包含目标合集本身")
+
+    sources: list[Collection] = []
+    for source_id in unique_sources:
+        source = await get_collection(db, source_id)
+        await _require_transferable(db, source, role="合并源")
+        sources.append(source)
+
+    # 目标当前成员与末尾位置（一次查出，后续在内存里累加 position，避免未 flush 查不到）
+    existing = set(
+        (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == target.id
+                )
+            )
+        ).scalars().all()
+    )
+    position = (
+        await db.execute(
+            select(func.max(CollectionItem.position)).where(
+                CollectionItem.collection_id == target.id
+            )
+        )
+    ).scalar() or 0
+
+    added = 0
+    skipped = 0
+    for source in sources:
+        member_ids = (
+            await db.execute(
+                select(CollectionItem.inspiration_id)
+                .where(CollectionItem.collection_id == source.id)
+                .order_by(
+                    CollectionItem.position.asc(), CollectionItem.added_at.asc()
+                )
+            )
+        ).scalars().all()
+        to_add = [insp_id for insp_id in member_ids if insp_id not in existing]
+        skipped += len(member_ids) - len(to_add)
+        for insp_id in to_add:
+            position += 1
+            db.add(
+                CollectionItem(
+                    collection_id=target.id,
+                    inspiration_id=insp_id,
+                    position=position,
+                )
+            )
+            existing.add(insp_id)
+        added += len(to_add)
+
+    # 删除源合集（显式删成员行，避免依赖 PRAGMA foreign_keys 的级联行为）
+    for source in sources:
+        await db.execute(
+            delete(CollectionItem).where(CollectionItem.collection_id == source.id)
+        )
+        await db.delete(source)
+
+    await db.commit()
+    return {
+        "target_id": target.id,
+        "merged_collections": len(sources),
+        "added": added,
+        "skipped": skipped,
+        "deleted_sources": [source.id for source in sources],
+    }
 
 
 # ── 排序 ──

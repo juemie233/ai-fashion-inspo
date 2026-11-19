@@ -9,8 +9,11 @@ vi.mock('../client', () => ({ default: { get: mocks.get } }))
 import {
   favoriteActionLabel,
   favoriteSourceLabel,
+  fetchFavoriteViewItems,
+  fetchFavoritesCleanup,
   fetchFavoritesHistory,
   fetchFavoritesOverview,
+  fetchFavoriteViews,
   isUnfavoriteAction,
 } from '../favorites'
 
@@ -50,5 +53,28 @@ describe('favorites API', () => {
     expect(favoriteSourceLabel('card')).toBe('素材卡片')
     expect(favoriteSourceLabel('new_entry')).toBe('new_entry')
     expect(favoriteSourceLabel(null)).toBe('未知来源')
+  })
+
+  it('智能视图列表：GET /favorites/views', async () => {
+    mocks.get.mockResolvedValue({ data: { views: [] } })
+    await fetchFavoriteViews()
+    expect(mocks.get).toHaveBeenCalledWith('/favorites/views')
+  })
+
+  it('智能视图素材：GET /favorites/views/{key}?page&page_size', async () => {
+    await fetchFavoriteViewItems('unrated', 2, 24)
+    expect(mocks.get).toHaveBeenCalledWith('/favorites/views/unrated', {
+      params: { page: 2, page_size: 24 },
+    })
+    // 默认第一页 24 条
+    await fetchFavoriteViewItems('high_rating')
+    expect(mocks.get).toHaveBeenLastCalledWith('/favorites/views/high_rating', {
+      params: { page: 1, page_size: 24 },
+    })
+  })
+
+  it('清理摘要：GET /favorites/cleanup', async () => {
+    await fetchFavoritesCleanup()
+    expect(mocks.get).toHaveBeenCalledWith('/favorites/cleanup')
   })
 })

@@ -70,7 +70,7 @@ function mountView() {
   return mount(FavoritesCenterView, {
     global: {
       plugins: [ArcoVue],
-      stubs: { MasonryGrid: true },
+      stubs: { MasonryGrid: true, FavoritesCleanupPanel: true },
     },
   })
 }
@@ -166,5 +166,19 @@ describe('FavoritesCenterView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('动态服务异常')
+  })
+
+  it('切换「待整理」Tab 才挂载清理工作台（懒加载）', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const tabs = wrapper.findAll('.arco-tabs-tab')
+    const cleanupTab = tabs.find((t) => t.text().includes('待整理'))
+    expect(cleanupTab).toBeTruthy()
+    expect(wrapper.findComponent({ name: 'FavoritesCleanupPanel' }).exists()).toBe(false)
+
+    await cleanupTab!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'FavoritesCleanupPanel' }).exists()).toBe(true)
   })
 })

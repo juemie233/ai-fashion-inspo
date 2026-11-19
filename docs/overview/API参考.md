@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-19，共 24 个模块 / 336 个端点）。
+> **状态**：自动生成（2026-11-19，共 24 个模块 / 341 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -18,9 +18,9 @@
 | [ai_reset](#ai_reset) | `/api/ai` | 1 |
 | [ai_settings](#ai_settings) | `/api/ai` | 15 |
 | [bloggers](#bloggers) | `/api/bloggers` | 43 |
-| [collections](#collections) | `/api/collections` | 10 |
+| [collections](#collections) | `/api/collections` | 12 |
 | [face_scan](#face_scan) | `/api/face-match、/api/face-scan` | 15 |
-| [favorites](#favorites) | `/api/favorites` | 2 |
+| [favorites](#favorites) | `/api/favorites` | 5 |
 | [files](#files) | `/api/files` | 2 |
 | [generate](#generate) | `/api/generate` | 17 |
 | [health](#health) | `/api/health` | 1 |
@@ -239,6 +239,8 @@
 | `DELETE` | `/api/collections/{collection_id}` | `delete_collection` | 删除合集（不动素材：手动合集级联删成员关系，智能合集仅删自身）。 |
 | `GET` | `/api/collections/{collection_id}/inspirations` | `list_collection_inspirations` | 分页获取合集内容（支持搜索 / 筛选 / 排序）。 |
 | `POST` | `/api/collections/{collection_id}/inspirations` | `add_inspirations` | 批量加入素材到手动合集（请求内去重，已加入/不存在的素材跳过）。 |
+| `POST` | `/api/collections/{source_id}/inspirations/transfer` | `transfer_inspirations` | 批量移动/复制合集成员到多个目标合集（整单事务）。 |
+| `POST` | `/api/collections/{target_id}/merge` | `merge_collections` | 把多个源合集合并进目标合集，成功后删除源合集（整单事务）。 |
 | `DELETE` | `/api/collections/{collection_id}/inspirations` | `remove_inspirations` | 批量移出素材（不在合集内的 ID 跳过）；智能合集返回 400。 |
 | `PATCH` | `/api/collections/{collection_id}/items/order` | `reorder_collection_items` | 提交合集内成员展示顺序（拖拽编排）：按 ordered_ids 重排 position。 |
 | `POST` | `/api/collections/{collection_id}/solidify` | `solidify_collection` | 智能合集转手动：把当前匹配素材按当前位置固化并清空 query_json。 |
@@ -271,6 +273,9 @@
 
 | 方法 | 路径 | 函数 | 说明 |
 | --- | --- | --- | --- |
+| `GET` | `/api/favorites/views` | `favorites_views` | 收藏智能视图列表（四个固定视图 + 实时计数）。 |
+| `GET` | `/api/favorites/views/{key}` | `favorites_view_items` | 分页获取某个收藏智能视图的素材（按收藏时间倒序、id 兜底）。 |
+| `GET` | `/api/favorites/cleanup` | `favorites_cleanup` | 收藏整理工作台数据（P1，2026-11-19）。 |
 | `GET` | `/api/favorites/overview` | `favorites_overview` | 收藏中心概览：总数 / 近 7 天新增 / 未评分 / 未整理 / 最近收藏。 |
 | `GET` | `/api/favorites/history` | `favorites_history` | 最近收藏/取消事件流水（按事件时间倒序，最多 ``limit`` 条）。 |
 
