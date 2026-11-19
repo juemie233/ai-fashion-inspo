@@ -8,7 +8,7 @@
  * - 后端以 400 拒绝（如任务已开始执行）时展示后端错误详情，列表不变。
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Message } from '@arco-design/web-vue'
 import { useTaskCenter } from '../useTaskCenter'
 import type { UnifiedTask } from '@/types/task'
@@ -73,6 +73,19 @@ beforeEach(() => {
   })
 })
 
+/** 组件外调用时 usePolling 不注册卸载清理，测试里必须自己停掉轮询定时器：
+ *  加载到活动任务后 watch 会自动 startPoll，残留的 interval 会跨用例持续调用 mock。 */
+const activeCenters: ReturnType<typeof useTaskCenter>[] = []
+function makeTaskCenter() {
+  const tc = useTaskCenter()
+  activeCenters.push(tc)
+  return tc
+}
+
+afterEach(() => {
+  for (const tc of activeCenters.splice(0)) tc.stopPoll()
+})
+
 describe('useTaskCenter.cancelTask 取消任务', () => {
   it('队列 pending 任务取消 = 物理删除：调用 /tasks/{id}/cancel 并本地移除该行', async () => {
     const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
@@ -96,7 +109,7 @@ describe('useTaskCenter.cancelTask 取消任务', () => {
     })
     mocks.post.mockResolvedValue({ data: { message: '任务已删除', task_id: 5, deleted: true } })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.loadTasks()
     expect(tc.tasks.value).toHaveLength(1)
 
@@ -130,7 +143,7 @@ describe('useTaskCenter.cancelTask 取消任务', () => {
     // 采集取消响应不含 deleted 字段
     mocks.post.mockResolvedValue({ data: { message: '任务已取消' } })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.loadTasks()
     expect(tc.tasks.value).toHaveLength(1)
 
@@ -149,7 +162,7 @@ describe('useTaskCenter.cancelTask 取消任务', () => {
       response: { data: { detail: '仅等待中的任务可以取消并删除（当前状态 running）' } },
     })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.cancelTask(queueTask)
 
     expect(mocks.post).toHaveBeenCalledWith('/tasks/5/cancel')
@@ -164,7 +177,7 @@ describe('useTaskCenter.deleteTask 删除任务', () => {
     const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
     mocks.delete.mockResolvedValue({ data: { message: '任务已删除', task_id: 5, deleted: true } })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.deleteTask(makeQueueTask({ status: 'cancelled' }))
 
     expect(mocks.delete).toHaveBeenCalledWith('/tasks/5')
@@ -175,7 +188,7 @@ describe('useTaskCenter.deleteTask 删除任务', () => {
     const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
     mocks.delete.mockResolvedValue({ data: { message: '已删除' } })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.deleteTask(makeScraperTask({ status: 'cancelled' }))
 
     expect(mocks.delete).toHaveBeenCalledWith('/scraper/tasks/3')
@@ -189,7 +202,7 @@ describe('useTaskCenter.deleteTask 删除任务', () => {
       response: { data: { detail: '任务状态为 running，不能删除' } },
     })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.deleteTask(queueTask)
 
     expect(mocks.delete).toHaveBeenCalledWith('/tasks/5')
@@ -202,7 +215,7 @@ describe('useTaskCenter.pauseTask / resumeTask 标签网络分析任务暂停恢
     const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
     mocks.post.mockResolvedValue({ data: { message: '任务已暂停', task_id: 7 } })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.pauseTask(makeQueueTask({ id: 7, type: 'tag_network_analyze', status: 'running' }))
 
     expect(mocks.post).toHaveBeenCalledWith('/tasks/7/pause')
@@ -213,7 +226,7 @@ describe('useTaskCenter.pauseTask / resumeTask 标签网络分析任务暂停恢
     const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
     mocks.post.mockResolvedValue({ data: { message: '任务已恢复', task_id: 7 } })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.resumeTask(makeQueueTask({ id: 7, type: 'tag_network_analyze', status: 'paused' }))
 
     expect(mocks.post).toHaveBeenCalledWith('/tasks/7/resume')
@@ -228,7 +241,7 @@ describe('useTaskCenter.pauseTask / resumeTask 标签网络分析任务暂停恢
       },
     })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.pauseTask(makeQueueTask({ id: 7, type: 'batch_analyze', status: 'running' }))
 
     expect(mocks.post).toHaveBeenCalledWith('/tasks/7/pause')
@@ -271,7 +284,7 @@ describe('useTaskCenter.loadTasks 排序（已暂停优先）', () => {
       return Promise.resolve({ data: { items: [] } })
     })
 
-    const tc = useTaskCenter()
+    const tc = makeTaskCenter()
     await tc.loadTasks()
 
     expect(tc.pageItems.value.map((t) => t.id)).toEqual([7, 9, 8])

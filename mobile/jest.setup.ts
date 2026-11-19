@@ -16,11 +16,16 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 )
 
-// expo-router 依赖原生导航栈；单测里只用到 useRouter()
+// expo-router 依赖原生导航栈；单测里只用到 useRouter() / useFocusEffect()
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }),
   useRoute: () => ({ params: {} }),
   useLocalSearchParams: () => ({}),
+  // 没有导航容器就没有真正的「获得焦点」：用 effect 顶替，等价于页面一直处于前台
+  useFocusEffect: (callback: () => void | (() => void)) => {
+    const { useEffect } = require('react')
+    useEffect(callback, [callback])
+  },
   Stack: ({ children }: { children?: unknown }) => children ?? null,
   Tabs: ({ children }: { children?: unknown }) => children ?? null,
 }))

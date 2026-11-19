@@ -74,8 +74,16 @@ export function useTaskCenter() {
     return filtered.value.slice(start, start + PAGE_SIZE)
   })
 
+  // 需要轮询的只有 pending / running：paused 等用户处理，success/failed/cancelled 是终态。
+  // 出图批次的 queued / waiting_vram 属于 generation runs（另一张表），不在统一任务列表里。
   const hasActive = computed(() =>
     tasks.value.some((t) => t.status === 'pending' || t.status === 'running'),
+  )
+  /** 采集任务只有活动态：它们不走 WS 推送（task_event 只覆盖队列任务），必须靠轮询 */
+  const hasActiveScraper = computed(() =>
+    tasks.value.some(
+      (t) => t.source === 'scraper' && (t.status === 'pending' || t.status === 'running'),
+    ),
   )
   const hasFailedScraper = computed(() =>
     tasks.value.some((t) => t.source === 'scraper' && t.status === 'failed'),
@@ -114,12 +122,18 @@ export function useTaskCenter() {
   // ===== 轮询：有活动任务时定期刷新，无活动则自动停止 =====
   // WS 已连接时改为推送驱动（30s 低频轮询兜底），断开时回退 5s 轮询。
 
+  // 轮询间隔：有活动的采集任务时不能降到 30s——采集任务没有 WS 推送，30s 一跳
+  // 会让进度条半分钟才动一次。其它情况按 WS 连接状态决定（推送驱动 / 5s 兜底）。
+  const pollIntervalMs = computed(() =>
+    hasActiveScraper.value || !isWsConnected() ? POLL_INTERVAL_MS : WS_CONNECTED_POLL_MS,
+  )
+
   const {
     start: startPoll,
     stop: stopPoll,
     running: pollRunning,
   } = usePolling({
-    intervalMs: () => (isWsConnected() ? WS_CONNECTED_POLL_MS : POLL_INTERVAL_MS),
+    intervalMs: () => pollIntervalMs.value,
     immediate: false,
     callback: () => {
       if (hasActive.value) void loadTasks()
@@ -127,8 +141,9 @@ export function useTaskCenter() {
     },
   })
 
-  // WS 连接状态切换后重启轮询，使新间隔生效（usePolling 的间隔在 start 时解析一次）
-  watch(isWsConnected, () => {
+  // 间隔变化（WS 连接状态切换 / 采集任务开始或结束）后重建定时器：
+  // usePolling 的间隔在 start 时解析一次，不重建就不会生效
+  watch(pollIntervalMs, () => {
     if (!pollRunning.value) return
     stopPoll()
     startPoll()

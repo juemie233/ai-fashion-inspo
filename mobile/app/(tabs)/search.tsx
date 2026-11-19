@@ -24,7 +24,7 @@ import {
   useWindowDimensions,
 } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import ScreenHeader from '../../components/ui/ScreenHeader'
 import SegmentedTab from '../../components/ui/SegmentedTab'
 import Chip from '../../components/ui/Chip'
@@ -197,6 +197,8 @@ export default function SearchScreen() {
         const params: Record<string, string | number> = { page: nextPage, size: PAGE_SIZE }
         const tags = [...selectedTags]
         const keyword = (overrideKeyword ?? searchText).trim()
+        // 记下这次实际提交的词：回页刷新时用它，而不是输入框里可能改过没提交的新词
+        committedKeywordRef.current = keyword
         if (tags.length > 0) params.include_tags = tags.join(',')
         if (keyword) params.keyword = keyword
 
@@ -240,6 +242,8 @@ export default function SearchScreen() {
       setResults(hits.map((h) => h.inspiration).filter(Boolean))
       setTotal(hits.length)
       setImageQueryUri(uri)
+      // 与语义检索互斥：不清掉旧值会让结果计数栏把图像检索标成「语义匹配」
+      setSemanticQuery(null)
       setPage(1)
     } catch {
       if (seq !== searchSeqRef.current) return
@@ -255,9 +259,12 @@ export default function SearchScreen() {
    *
    * 不能直接复用 doSearch(1)：它会 setImageQueryUri(null)/setSemanticQuery(null)
    * 并改跑关键词搜索，以图搜图的结果会被一次无关查询顶掉。
+   *
+   * 也**不能**自增 searchSeqRef：那会让在飞搜索的 finally 守卫失效（loading 永远
+   * 停在 true）。这里只记录当前序号，期间用户发起新搜索就丢弃本次刷新。
    */
   const refreshVectorResults = async () => {
-    const seq = ++searchSeqRef.current
+    const seq = searchSeqRef.current
     try {
       const hits = imageQueryUri
         ? await vectorSearchByImage(imageQueryUri, PAGE_SIZE)
@@ -272,17 +279,40 @@ export default function SearchScreen() {
     }
   }
 
-  /** 详情页改收藏后会递增 favoriteRevision：搜索页的 results 是本地状态，
-   * 单靠 store.items 同步不到；版本变化时按「当前结果来源」重跑同一路检索。 */
+  /** 产出当前结果时实际提交的关键词（输入框可能被改过但没提交） */
+  const committedKeywordRef = useRef<string | undefined>(undefined)
+  /** 本页是否在前台（详情页压栈时仍挂载但已失焦） */
+  const focusedRef = useRef(true)
+  /** 离开期间发生过收藏变更 → 回页补一次刷新 */
+  const staleRef = useRef(false)
   const lastFavoriteRevisionRef = useRef(0)
+
+  /** 收藏变更只打「过期」标记，不在当场重跑。
+   *
+   * 页内点心形已由 handleToggleFavorite 本地打补丁；真正需要刷新的是「去详情页
+   * 收藏后返回」。而当场重跑的代价不小：以图搜图的刷新要重新上传整张图片并重跑
+   * 一次 CLIP——逐张点心形就变成逐次重传 + 逐次推理。
+   */
   useEffect(() => {
     if (favoriteRevision === lastFavoriteRevisionRef.current) return
     lastFavoriteRevisionRef.current = favoriteRevision
-    if (!searched) return
-    if (imageQueryUri || semanticQuery) void refreshVectorResults()
-    else void doSearch(1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [favoriteRevision, searched, imageQueryUri, semanticQuery, doSearch])
+    if (searched && !focusedRef.current) staleRef.current = true
+  }, [favoriteRevision, searched])
+
+  /** 回到本页时按「当前结果来源」补一次刷新（关键词用提交过的词，向量沿用原查询）。 */
+  useFocusEffect(
+    useCallback(() => {
+      focusedRef.current = true
+      if (staleRef.current) {
+        staleRef.current = false
+        if (imageQueryUri || semanticQuery) void refreshVectorResults()
+        else void doSearch(1, committedKeywordRef.current)
+      }
+      return () => {
+        focusedRef.current = false
+      }
+    }, [imageQueryUri, semanticQuery, doSearch]),
+  )
 
   /** 以图搜图：相册选图 → 图像向量检索 */
   const doImageSearch = async () => {
@@ -328,6 +358,12 @@ export default function SearchScreen() {
     if (next === mode) return
     setMode(next)
     if (next === 'semantic') setSelectedTags([])
+    // 结果来源标记与「待刷新」标记一并重置：残留的 semanticQuery 会让之后的
+    // 以图搜图结果被标成「语义匹配」，残留的 stale 会在回页时无故重跑一次搜索
+    setImageQueryUri(null)
+    setSemanticQuery(null)
+    committedKeywordRef.current = undefined
+    staleRef.current = false
     setSearched(false)
     setResults([])
     setTotal(0)
