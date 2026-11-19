@@ -111,7 +111,10 @@ describe('inspirations store', () => {
     mockFetch.mockResolvedValueOnce(list([makeItem('a')]))
     const store = useInspirationsStore()
     await store.load()
-    mockToggle.mockResolvedValue({})
+    mockToggle.mockImplementation(async (_id: string, fav: boolean) => ({
+      is_favorite: fav,
+      favorited_at: fav ? '2026-11-19T08:00:00Z' : null,
+    }))
 
     await store.toggleFavorite('a')
 
@@ -144,7 +147,10 @@ describe('inspirations store 收藏筛选与防连点（2026-11-12）', () => {
     mockFetch.mockResolvedValueOnce(list([makeItem('a', true), makeItem('b', true)], 2))
     const store = useInspirationsStore()
     await store.load({ is_favorite: true })
-    mockToggle.mockResolvedValue({})
+    mockToggle.mockImplementation(async (_id: string, fav: boolean) => ({
+      is_favorite: fav,
+      favorited_at: fav ? '2026-11-19T08:00:00Z' : null,
+    }))
 
     await store.toggleFavorite('a')
 
@@ -169,7 +175,7 @@ describe('inspirations store 收藏筛选与防连点（2026-11-12）', () => {
     await Promise.resolve()
     expect(mockToggle).toHaveBeenCalledTimes(1)
 
-    resolveToggle({})
+    resolveToggle({ is_favorite: true, favorited_at: '2026-11-19T08:00:00Z' })
     await Promise.all([first, second])
     expect(store.items[0].is_favorite).toBe(true)
   })

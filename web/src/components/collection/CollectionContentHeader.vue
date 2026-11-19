@@ -71,7 +71,9 @@ const emit = defineEmits<{
           @click="emit('enter-ordering')"
           >编辑排序</a-button
         >
-        <template v-else>
+        <!-- 必须显式 v-else-if="ordering"：写成 v-else 会让「非手动排序（canOrder=false）」
+             也落进这一支，显示一对点了会按旧顺序重排的「保存/取消排序」 -->
+        <template v-else-if="ordering">
           <a-button size="small" type="primary" @click="emit('save-order')">保存顺序</a-button>
           <a-button size="small" @click="emit('cancel-ordering')">取消排序</a-button>
         </template>

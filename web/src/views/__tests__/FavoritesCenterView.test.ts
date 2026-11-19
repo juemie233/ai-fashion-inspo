@@ -90,7 +90,7 @@ beforeEach(() => {
         id: 1,
         inspiration_id: 'insp-1',
         action: 'favorite',
-        source: 'detail',
+        source: 'web',
         created_at: '2026-11-18T20:15:00',
         item: recentItem('insp-1'),
       },
@@ -98,13 +98,16 @@ beforeEach(() => {
         id: 2,
         inspiration_id: 'insp-2',
         action: 'unfavorite',
-        source: 'card',
+        source: 'batch',
         created_at: '2026-11-18T20:16:00',
         item: { ...recentItem('insp-2'), is_favorite: false },
       },
     ],
   })
-  mocks.toggleFavorite.mockResolvedValue({})
+  mocks.toggleFavorite.mockImplementation(async (_id: string, fav: boolean) => ({
+    is_favorite: fav,
+    favorited_at: fav ? '2026-11-19T08:00:00Z' : null,
+  }))
 })
 
 describe('FavoritesCenterView', () => {
@@ -130,8 +133,9 @@ describe('FavoritesCenterView', () => {
     // 收藏动态：动作/来源中文 + 收藏时间
     expect(text).toContain('收藏')
     expect(text).toContain('取消收藏')
-    expect(text).toContain('素材详情')
-    expect(text).toContain('素材卡片')
+    // 来源映射与后端 FavoriteEvent.source 一致：web / batch
+    expect(text).toContain('网页')
+    expect(text).toContain('批量操作')
     expect(text).toContain('@小葵')
     expect(text).toContain(`收藏于 ${formatDateTime(FAVORITED_AT)}`)
   })

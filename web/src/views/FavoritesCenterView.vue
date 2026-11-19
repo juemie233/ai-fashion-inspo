@@ -50,7 +50,8 @@ const statItems = computed(() => {
     { title: '总收藏', value: data.total_favorites, highlight: true, note: '全库收藏素材' },
     { title: '本周新增', value: data.favorites_this_week, note: '最近 7 天收藏' },
     { title: '未评分收藏', value: data.unrated_favorites, note: '收藏后还没打星' },
-    { title: '未整理收藏', value: data.unfiled_favorites, note: '还没归入任何合集' },
+    // 口径是「不在任何**手动合集**」：智能合集是动态求值，放进去不算整理过
+    { title: '未整理收藏', value: data.unfiled_favorites, note: '还没放进任何手动合集' },
   ]
 })
 
@@ -129,7 +130,7 @@ onMounted(() => {
         <h2 class="page-title">收藏中心</h2>
         <p class="page-subtitle">
           收藏行为集中看：总收藏 / 本周新增 / 未评分 / 未整理，以及最近收藏与收藏动态。
-          「未整理」指还没有归入任何合集的收藏。
+          「未整理」指还没有放进任何**手动**合集的收藏（智能合集是动态筛选，不算整理）。
         </p>
       </div>
     </div>

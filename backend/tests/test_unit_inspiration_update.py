@@ -114,8 +114,8 @@ async def test_batch_update_no_business_fields_is_noop(client, upload):
     """只带了 updated_at（没有任何业务字段）时直接返回 0，不写库。"""
     insp_id = upload().json()["id"]
     async with async_session() as db:
-        count = await inspiration_update.batch_update_inspirations(db, [insp_id])
-    assert count == 0
+        result = await inspiration_update.batch_update_inspirations(db, [insp_id])
+    assert result == {"updated": 0, "favorite_changed": 0}
 
 
 async def test_batch_update_fields_and_quality_reason_reset(client, upload):
@@ -130,7 +130,7 @@ async def test_batch_update_fields_and_quality_reason_reset(client, upload):
         await db.commit()
 
     async with async_session() as db:
-        count = await inspiration_update.batch_update_inspirations(
+        result = await inspiration_update.batch_update_inspirations(
             db,
             [insp_a, insp_b],
             source_type="xiaohongshu",
@@ -139,7 +139,8 @@ async def test_batch_update_fields_and_quality_reason_reset(client, upload):
             quality_status="approved",
             is_ai_generated=False,
         )
-    assert count == 2
+    # 混合场景：updated 是命中行数，收藏真实变化数单独返回
+    assert result == {"updated": 2, "favorite_changed": 2}
 
     async with async_session() as db:
         rows = (

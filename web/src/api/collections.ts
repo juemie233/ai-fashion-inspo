@@ -86,7 +86,8 @@ export async function deleteCollection(id: number): Promise<void> {
 /** 合集内容筛选/排序参数（与 GET /collections/{id}/inspirations 契约一致） */
 export interface CollectionInspirationParams {
   page?: number
-  size?: number
+  /** 每页条数：后端参数名是 `page_size`（上限 200），传 `size` 会被忽略、永远拿默认 50 条 */
+  page_size?: number
   /** 关键词（后端按标签名/作者/来源等模糊匹配） */
   q?: string
   media_type?: 'image' | 'video'

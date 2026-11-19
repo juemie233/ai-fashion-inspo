@@ -55,6 +55,15 @@ export const CONTENT_SORT_OPTIONS = [
   { label: '评分从低到高', value: 'rating_asc' },
 ]
 
+/** 当前合集可选的排序项：智能合集没有实体成员顺序，显式 manual 会被后端 400 拒绝 */
+export function contentSortOptionsFor(
+  kind: CollectionKind | null | undefined,
+): typeof CONTENT_SORT_OPTIONS {
+  return kind === 'smart'
+    ? CONTENT_SORT_OPTIONS.filter((option) => option.value !== 'manual')
+    : CONTENT_SORT_OPTIONS
+}
+
 /** 排序选项对应的中文名（未知值原样返回） */
 export function contentSortLabel(sort: ContentSort): string {
   return CONTENT_SORT_OPTIONS.find((o) => o.value === sort)?.label ?? sort
@@ -85,7 +94,8 @@ export function buildCollectionContentParams(
   const keyword = filters.keyword.trim()
   return {
     page,
-    size,
+    // 后端契约是 page_size（mobile 侧一直这么传），传 size 会被静默忽略
+    page_size: size,
     sort: filters.sort,
     ...(keyword ? { q: keyword } : {}),
     ...(filters.mediaType ? { media_type: filters.mediaType } : {}),

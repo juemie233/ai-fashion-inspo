@@ -322,13 +322,15 @@ export function useSearch() {
     if (!item) return
     try {
       const newState = !item.is_favorite
-      await toggleFavoriteApi(id, newState)
+      // 同步接口返回的 favorited_at：只本地翻状态会留下旧收藏时间
+      const updated = await toggleFavoriteApi(id, newState)
       // 仅收藏筛选下取消收藏：结果立即移除，避免留下不符合筛选条件的条目
       if (favoriteOnly.value && !newState) {
         results.value = results.value.filter((r) => r.id !== id)
         total.value = Math.max(0, total.value - 1)
       } else {
-        item.is_favorite = newState
+        item.is_favorite = updated.is_favorite
+        item.favorited_at = updated.favorited_at
       }
     } catch {
       Message.error('操作失败')

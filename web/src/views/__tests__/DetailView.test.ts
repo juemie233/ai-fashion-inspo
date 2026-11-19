@@ -153,7 +153,10 @@ describe('DetailView 交互路径', () => {
     vi.clearAllMocks()
     mocks.routeQuery = {}
     mocks.fetchInspiration.mockResolvedValue(structuredClone(DETAIL))
-    mocks.toggleFavorite.mockResolvedValue({})
+    mocks.toggleFavorite.mockImplementation(async (_id: string, fav: boolean) => ({
+      is_favorite: fav,
+      favorited_at: fav ? '2026-11-19T08:00:00Z' : null,
+    }))
     mocks.updateRating.mockResolvedValue({})
     mocks.moveToTrash.mockResolvedValue({})
     mocks.restoreInspiration.mockResolvedValue({ deleted_at: null, trash_reason: null })

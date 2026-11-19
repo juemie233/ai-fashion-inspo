@@ -88,7 +88,10 @@ describe('useCollectionItemOrdering（合集内成员排序）', () => {
     await vi.waitFor(() => expect(api.orderedItems.value).toHaveLength(3))
 
     expect(api.ordering.value).toBe(true)
-    expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(1, { page: 1, size: 500 })
+    expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(1, {
+      page: 1,
+      page_size: 200,
+    })
   })
 
   it('加载成员失败：提示错误且不进排序（空列表）', async () => {

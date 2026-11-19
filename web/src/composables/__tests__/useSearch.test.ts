@@ -89,7 +89,11 @@ describe('useSearch', () => {
       items: [{ inspiration: ITEM, score: 0.5 }],
       total: 1,
     })
-    mocks.toggleFavorite.mockResolvedValue({})
+    // 收藏接口返回最新素材：状态与 favorited_at 都要用它回填
+    mocks.toggleFavorite.mockImplementation(async (_id: string, fav: boolean) => ({
+      is_favorite: fav,
+      favorited_at: fav ? '2026-11-19T08:00:00Z' : null,
+    }))
     mocks.moveToTrash.mockResolvedValue({})
     mocks.updateRating.mockResolvedValue({})
   })

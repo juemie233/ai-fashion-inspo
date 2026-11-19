@@ -39,7 +39,7 @@ describe('合集内容筛选纯逻辑', () => {
   it('空条件只带分页与默认排序', () => {
     expect(buildCollectionContentParams(state(), 2, 50)).toEqual({
       page: 2,
-      size: 50,
+      page_size: 50,
       sort: 'manual',
     })
   })
@@ -59,7 +59,7 @@ describe('合集内容筛选纯逻辑', () => {
     )
     expect(params).toEqual({
       page: 1,
-      size: 50,
+      page_size: 50,
       sort: 'rating',
       q: '白裙',
       media_type: 'image',

@@ -165,8 +165,15 @@ async def batch_update_inspirations(
     rating: int | None = None,
     quality_status: str | None = None,
     is_ai_generated: bool | None = None,
-) -> int:
-    """批量编辑素材元数据，仅更新显式提供的字段，返回实际更新行数。
+) -> dict[str, int]:
+    """批量编辑素材元数据，仅更新显式提供的字段。
+
+    返回 ``{"updated": n, "favorite_changed": m}``：
+
+    - ``updated``：本次生效的素材条数——只带收藏时是**真实翻转**条数（幂等重复
+      操作返回 0）；带其它字段时是命中的未删除素材数（整批 UPDATE 生效）。
+    - ``favorite_changed``：其中收藏状态真实翻转的条数（不带 is_favorite 时为 0）。
+      两个数分开返回，避免「同时改收藏与其它字段」时把命中数当成收藏变化数。
 
     审核状态翻案为 approved/pending 时清空拒绝原因（与单条更新语义一致）。
     """
@@ -194,11 +201,11 @@ async def batch_update_inspirations(
         values["quality_reason_code"] = None
 
     if len(values) == 1 and is_favorite is None:  # 仅 updated_at，无任何业务字段
-        return 0
+        return {"updated": 0, "favorite_changed": 0}
 
     unique_ids = list(dict.fromkeys(inspiration_ids))
     if not unique_ids:
-        return 0
+        return {"updated": 0, "favorite_changed": 0}
 
     # 收藏必须逐行判断真实变化（才能维护 favorited_at 并写事件），不能无差别 UPDATE
     favorite_changed = 0
@@ -220,7 +227,7 @@ async def batch_update_inspirations(
         # 只有 is_favorite：由上面的逐行逻辑完成，无需再执行整批 UPDATE
         if favorite_changed:
             await db.commit()
-        return favorite_changed
+        return {"updated": favorite_changed, "favorite_changed": favorite_changed}
 
     result = await db.execute(
         update(Inspiration)
@@ -228,4 +235,5 @@ async def batch_update_inspirations(
         .values(**values)
     )
     await db.commit()
-    return result.rowcount
+    # 混合场景 updated 是命中行数（整批 UPDATE 生效），收藏真实变化数单独给
+    return {"updated": result.rowcount, "favorite_changed": favorite_changed}

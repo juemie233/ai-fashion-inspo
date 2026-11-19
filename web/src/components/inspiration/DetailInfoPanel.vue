@@ -5,15 +5,22 @@
  * props/emit 对接，视图仍是唯一的状态持有者（穿搭大标签/相似推荐 composable 也在视图侧）。
  */
 
+import { ref, watch } from 'vue'
 import { IconClose, IconExclamationCircle, IconPlus } from '@arco-design/web-vue/es/icon'
-import { getFileUrl, type InspirationDetailOut, type InspirationTagOut } from '@/api/inspirations'
+import {
+  fetchFavoriteHistory,
+  getFileUrl,
+  type InspirationDetailOut,
+  type InspirationTagOut,
+} from '@/api/inspirations'
+import { favoriteActionLabel, favoriteSourceLabel } from '@/api/favorites'
 import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 import FaceDetectionSection from '@/components/inspiration/FaceDetectionSection.vue'
 import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { CATEGORY_LABELS } from '@/constants/tag'
-import { formatDate } from '@/utils/format'
+import { formatDate, formatDateTime } from '@/utils/format'
 import { sourceLabel } from '@/utils/sourceLabel'
 import type { PersonBrief } from '@shared/types/person'
 
@@ -70,6 +77,35 @@ const outfitSelected = defineModel<string[]>('outfitSelected', { required: true 
 /** 标签分类中文名（A 类/…；未知分类回退原值） */
 const CAT_LABELS = CATEGORY_LABELS
 
+/** 收藏事件流水（懒加载：点开「收藏历史」才请求） */
+const favoriteHistory = ref<
+  Array<{ id: number; action: string; source: string | null; created_at: string }>
+>([])
+const favoriteHistoryLoading = ref(false)
+const favoriteHistoryLoaded = ref(false)
+
+async function loadFavoriteHistory(): Promise<void> {
+  if (favoriteHistoryLoaded.value || favoriteHistoryLoading.value) return
+  favoriteHistoryLoading.value = true
+  try {
+    favoriteHistory.value = await fetchFavoriteHistory(props.detail.id)
+    favoriteHistoryLoaded.value = true
+  } catch {
+    // 历史是辅助信息：失败保持空态，不打扰详情页主流程
+  } finally {
+    favoriteHistoryLoading.value = false
+  }
+}
+
+// 切换到另一张素材：清空上一张的历史缓存，下次点开重新拉
+watch(
+  () => props.detail.id,
+  () => {
+    favoriteHistory.value = []
+    favoriteHistoryLoaded.value = false
+  },
+)
+
 /** 按类别分组标签（穿搭大标签已在顶部单独展示，这里跳过去重） */
 function groupedTags(): Record<string, InspirationTagOut[]> {
   const groups: Record<string, InspirationTagOut[]> = {}
@@ -118,6 +154,30 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
         </a-popconfirm>
       </template>
       <a-button v-else type="secondary" status="danger" @click="emit('trash')">移入垃圾桶</a-button>
+    </div>
+
+    <!-- 收藏时间 + 收藏/取消事件流水（懒加载） -->
+    <div
+      v-if="!detail.deleted_at && detail.is_favorite && detail.favorited_at"
+      class="favorite-time"
+    >
+      <span>收藏于 {{ formatDateTime(detail.favorited_at) }}</span>
+      <a-popover position="bl" trigger="click" @popup-visible-change="loadFavoriteHistory">
+        <span class="favorite-history-link">收藏历史</span>
+        <template #content>
+          <div class="favorite-history">
+            <span v-if="favoriteHistoryLoading" class="favorite-history-empty">加载中…</span>
+            <template v-else-if="favoriteHistory.length">
+              <div v-for="event in favoriteHistory" :key="event.id" class="favorite-history-row">
+                <span>{{ favoriteActionLabel(event.action) }}</span>
+                <span class="favorite-history-source">{{ favoriteSourceLabel(event.source) }}</span>
+                <span class="favorite-history-at">{{ formatDateTime(event.created_at) }}</span>
+              </div>
+            </template>
+            <span v-else class="favorite-history-empty">暂无记录</span>
+          </div>
+        </template>
+      </a-popover>
     </div>
 
     <!-- 基本信息 -->
@@ -291,6 +351,51 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
   font-size: 12px;
   color: #b57914;
   font-weight: 600;
+}
+
+/* 收藏时间行：与操作按钮同宽，弱化展示 */
+.favorite-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -8px 0 12px;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+.favorite-history-link {
+  color: var(--color-primary-light-4);
+  cursor: pointer;
+}
+
+.favorite-history {
+  min-width: 220px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.favorite-history-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  white-space: nowrap;
+}
+
+.favorite-history-source {
+  color: var(--color-text-3);
+}
+
+/* 时间列单行（与表格口径一致） */
+.favorite-history-at {
+  margin-left: auto;
+  color: var(--color-text-3);
+  white-space: nowrap;
+}
+
+.favorite-history-empty {
+  color: var(--color-text-3);
 }
 
 .info-meta {

@@ -346,8 +346,10 @@ function openDetail() {
         </CategoryTag>
       </div>
 
-      <!-- 收藏时间：收藏中心/收藏合集里交代「什么时候收藏的」 -->
-      <div v-if="item.favorited_at" class="favorited-at">
+      <!-- 收藏时间：收藏中心/收藏合集里交代「什么时候收藏的」。
+           必须同时判断 is_favorite：取消收藏后 favorited_at 可能还停留在旧值，
+           只看时间会显示「已取消收藏但还写着收藏于 …」 -->
+      <div v-if="item.is_favorite && item.favorited_at" class="favorited-at">
         收藏于 {{ formatDateTime(item.favorited_at) }}
       </div>
     </div>

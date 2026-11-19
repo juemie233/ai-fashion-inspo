@@ -15,7 +15,7 @@
 import json
 
 from fastapi import HTTPException
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import ColumnElement, Select, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.collection import (
@@ -1078,7 +1078,7 @@ async def reorder_collections(db: AsyncSession, ordered_ids: list[int]) -> dict:
 COLLECTION_CONTENT_SORTS = ("manual", "newest", "oldest", "rating", "rating_asc")
 
 
-def _content_keyword_clause(keyword: str):
+def _content_keyword_clause(keyword: str) -> ColumnElement[bool]:
     """合集内容关键词模糊：作者名 / 正文 caption / 标签名（与素材库搜索同风格）。"""
     kw = keyword.strip()
     matching_tag_ids = (
@@ -1100,7 +1100,7 @@ def _content_filter_clauses(
     quality_status: str | None,
     rating_min: int | None,
     is_favorite: bool | None,
-) -> list:
+) -> list[ColumnElement[bool]]:
     """合集内容的附加筛选条件（手动/智能两条路径共用，口径与素材库列表一致）。"""
     clauses = []
     if q and q.strip():
@@ -1118,7 +1118,7 @@ def _content_filter_clauses(
     return clauses
 
 
-def _apply_content_sort(query, sort: str):
+def _apply_content_sort(query: Select, sort: str) -> Select:
     """应用合集内容排序（只在非 manual 时调用；manual 由 base 查询自带 position 顺序）。"""
     if sort == "newest":
         return query.order_by(Inspiration.created_at.desc(), Inspiration.id.desc())

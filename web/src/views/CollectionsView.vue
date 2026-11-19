@@ -23,12 +23,12 @@ import {
   type CollectionOut,
 } from '@/api/collections'
 import {
-  CONTENT_SORT_OPTIONS,
   MEDIA_OPTIONS,
   QUALITY_OPTIONS,
   RATING_OPTIONS,
   buildCollectionContentParams,
   contentSortLabel as formatContentSortLabel,
+  contentSortOptionsFor,
   defaultContentSort,
   isContentFilterActive,
   type ContentFilterState,
@@ -137,7 +137,8 @@ let keywordTimer: ReturnType<typeof setTimeout> | null = null
 const mediaOptions = MEDIA_OPTIONS
 const qualityOptions = QUALITY_OPTIONS
 const ratingOptions = RATING_OPTIONS
-const contentSortOptions = CONTENT_SORT_OPTIONS
+// 智能合集不提供「手动顺序」：选中会被后端 400，且会把 contentSort 卡在非法值上
+const contentSortOptions = computed(() => contentSortOptionsFor(current.value?.kind ?? null))
 
 const contentSortLabel = computed(() => formatContentSortLabel(contentSort.value))
 /** 手动合集 + 手动顺序才允许编辑排序（其它排序下拖动会与当前视图乱序） */
@@ -197,7 +198,15 @@ function onContentFilterChange(): void {
 
 /** 排序变化单独处理：非手动顺序时不允许继续编辑排序（并给出说明） */
 function onContentSortChange(value: unknown): void {
-  contentSort.value = (String(value ?? '') || defaultSortForCurrent()) as ContentSort
+  const next = String(value ?? '')
+  // 智能合集没有手动顺序：即便选项被过滤掉，旧 URL/外部调用仍可能带 manual，
+  // 这里兜底回退到默认排序，避免请求 400 后 contentSort 卡在非法值上反复报错
+  if (next === 'manual' && current.value?.kind === 'smart') {
+    contentSort.value = defaultSortForCurrent()
+    onContentFilterChange()
+    return
+  }
+  contentSort.value = (next || defaultSortForCurrent()) as ContentSort
   onContentFilterChange()
 }
 
@@ -284,7 +293,10 @@ async function handleContentFavorite(id: string) {
   favoritePendingIds.value = new Set(favoritePendingIds.value).add(id)
   item.is_favorite = next
   try {
-    await toggleFavorite(id, next)
+    // 用接口返回值回填 favorited_at：只翻本地状态会让收藏时间停在旧值
+    const updated = await toggleFavorite(id, next)
+    item.is_favorite = updated.is_favorite
+    item.favorited_at = updated.favorited_at
     // 系统入库手动收藏 = {is_favorite:true} 智能合集：取消后当前列表应收敛；
     // 其它智能合集可能仍匹配（例如仅按标签筛），不能一律移除
     const favoriteSmart =

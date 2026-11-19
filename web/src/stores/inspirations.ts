@@ -153,17 +153,23 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     if (pendingFavoriteIds.value.has(id)) return
     pendingFavoriteIds.value = new Set(pendingFavoriteIds.value).add(id)
     try {
-      await toggleFavoriteApi(id, favorite)
+      // 用接口返回值同步：只本地翻 is_favorite 会让 favorited_at 停在旧值
+      // （取消收藏后卡片仍显示「收藏于 …」，重新收藏显示的还是上一次的时间）
+      const updated = await toggleFavoriteApi(id, favorite)
       // 仅收藏筛选下取消收藏：条目必须立即消失、总数减一（2026-11-12 P1-1）
       if (_lastParams.is_favorite === true && !favorite) {
         items.value = items.value.filter((i) => i.id !== id)
         total.value = Math.max(0, total.value - 1)
       } else {
         const item = items.value.find((i) => i.id === id)
-        if (item) item.is_favorite = favorite
+        if (item) {
+          item.is_favorite = updated.is_favorite
+          item.favorited_at = updated.favorited_at
+        }
       }
       if (currentDetail.value?.id === id) {
-        currentDetail.value.is_favorite = favorite
+        currentDetail.value.is_favorite = updated.is_favorite
+        currentDetail.value.favorited_at = updated.favorited_at
       }
     } finally {
       const next = new Set(pendingFavoriteIds.value)

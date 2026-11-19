@@ -21,44 +21,48 @@ export interface FavoritesOverviewOut {
   recent: InspirationOut[]
 }
 
+/** 收藏动态里的素材快照：后端只返回这几个字段，**不是**完整 InspirationOut */
+export interface FavoriteHistoryReferencedItem {
+  id: string
+  file_path: string
+  thumbnail_path: string | null
+  media_type: string
+  source_author: string | null
+  is_favorite: boolean
+  /** 收藏时间（历史回填来源可能是近似值） */
+  favorited_at: string | null
+}
+
 /** 收藏动态条目：一条收藏/取消收藏流水 */
 export interface FavoriteHistoryItem {
   id: number
   inspiration_id: string
-  /** 动作：favorite / unfavorite（兼容 favorited/unfavorited 等历史取值） */
+  /** 动作：favorite / unfavorite */
   action: string
-  /** 操作来源（后端记录的操作入口，未知值回退原样展示） */
+  /** 操作来源（web / batch / api / legacy；未知值原样展示） */
   source?: string | null
   /** 动作发生时间 */
   created_at: string
-  /** 关联素材快照（素材被彻底删除时可能为 null） */
-  item: (InspirationOut & { favorited_at?: string | null }) | null
+  /** 关联素材快照（事件级联删除后不会出现，保留 null 兜底） */
+  item: FavoriteHistoryReferencedItem | null
 }
 
 interface FavoriteHistoryOut {
   items: FavoriteHistoryItem[]
 }
 
-/** 收藏动作中文名（未知值原样展示，避免吞掉后端新增的动作） */
+/** 收藏动作中文名（后端只写 favorite / unfavorite；未知值原样展示） */
 const FAVORITE_ACTION_LABELS: Record<string, string> = {
   favorite: '收藏',
-  favorited: '收藏',
-  add: '收藏',
   unfavorite: '取消收藏',
-  unfavorited: '取消收藏',
-  remove: '取消收藏',
 }
 
-/** 收藏来源中文名（未知值原样展示） */
+/** 收藏来源中文名：与后端 FavoriteEvent.source 的取值一一对应（未知值原样展示） */
 const FAVORITE_SOURCE_LABELS: Record<string, string> = {
-  detail: '素材详情',
-  card: '素材卡片',
+  web: '网页',
   batch: '批量操作',
-  collection: '合集操作',
-  upload: '上传',
   api: '接口',
-  manual: '手动',
-  auto: '自动',
+  legacy: '历史收藏',
 }
 
 export function favoriteActionLabel(action: string): string {

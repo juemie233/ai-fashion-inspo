@@ -138,7 +138,7 @@ describe('CollectionsView 交互路径', () => {
     // 选中第一个后立刻加载它的内容；手动合集默认「手动顺序」排序
     expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(1, {
       page: 1,
-      size: 50,
+      page_size: 50,
       sort: 'manual',
     })
   })
@@ -174,7 +174,7 @@ describe('CollectionsView 交互路径', () => {
 
     expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(2, {
       page: 1,
-      size: 50,
+      page_size: 50,
       sort: 'manual',
     })
   })
@@ -205,7 +205,7 @@ describe('CollectionsView 交互路径', () => {
       await flushPromises()
       expect(mocks.fetchCollectionInspirations).toHaveBeenLastCalledWith(2, {
         page: 1,
-        size: 50,
+        page_size: 50,
         sort: 'manual',
       })
     }
@@ -230,7 +230,7 @@ describe('CollectionsView 交互路径', () => {
 
     expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(9, {
       page: 1,
-      size: 50,
+      page_size: 50,
       sort: 'newest',
     })
     const header = wrapper.findComponent({ name: 'CollectionContentHeader' })
@@ -343,7 +343,7 @@ describe('CollectionsView 交互路径', () => {
     await flushPromises()
 
     const searched = mocks.fetchCollectionInspirations.mock.calls.at(-1)?.[1] ?? {}
-    expect(searched).toMatchObject({ page: 1, size: 50, sort: 'manual', q: '白裙' })
+    expect(searched).toMatchObject({ page: 1, page_size: 50, sort: 'manual', q: '白裙' })
 
     // 切到智能合集：筛选清空、排序切该合集默认（newest）
     const sidebar = wrapper.findComponent({ name: 'CollectionSidebar' })
@@ -352,7 +352,7 @@ describe('CollectionsView 交互路径', () => {
 
     const switched = mocks.fetchCollectionInspirations.mock.calls.at(-1) ?? []
     expect(switched[0]).toBe(3)
-    expect(switched[1]).toMatchObject({ page: 1, size: 50, sort: 'newest' })
+    expect(switched[1]).toMatchObject({ page: 1, page_size: 50, sort: 'newest' })
     expect(switched[1]).not.toHaveProperty('q')
   })
 })

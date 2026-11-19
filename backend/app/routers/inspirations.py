@@ -377,7 +377,12 @@ async def favorite_history(
 
     只返回真实状态变化的事件流水（幂等的重复收藏/取消不产生事件）；
     素材不存在或从未收藏/取消过都返回空列表（不 404），前端统一按「无历史」展示。
+    垃圾桶素材与收藏中心同口径：事件行仍在库里，但查询按未删除过滤（与
+    ``FavoriteEvent`` 模型说明一致）。
     """
+    inspiration = await db.get(Inspiration, inspiration_id)
+    if inspiration is None or inspiration.deleted_at is not None:
+        return {"items": [], "total": 0}
     rows = (
         await db.execute(
             select(FavoriteEvent)
@@ -533,8 +538,12 @@ async def batch_update(
     data: BatchUpdateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """批量编辑素材元数据（来源/收藏/审核状态/疑似 AI 标记/评分），仅更新显式字段。"""
-    updated = await inspiration_service.batch_update_inspirations(
+    """批量编辑素材元数据（来源/收藏/审核状态/疑似 AI 标记/评分），仅更新显式字段。
+
+    返回 ``{"updated": n, "favorite_changed": m}``：只带收藏时 updated 是真实翻转
+    条数；带其它字段时 updated 是命中行数，收藏变化数看 favorite_changed。
+    """
+    return await inspiration_service.batch_update_inspirations(
         db,
         data.ids,
         source_type=data.source_type,
@@ -543,7 +552,6 @@ async def batch_update(
         quality_status=data.quality_status,
         is_ai_generated=data.is_ai_generated,
     )
-    return {"updated": updated}
 
 
 @router.post("/{inspiration_id}/tags", status_code=status.HTTP_200_OK)

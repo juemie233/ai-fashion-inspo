@@ -343,6 +343,21 @@ export async function toggleFavorite(id: string, isFavorite: boolean) {
   return data
 }
 
+/** 单条素材的收藏/取消收藏事件流水（按时间倒序；垃圾桶素材返回空列表） */
+export async function fetchFavoriteHistory(id: string, limit = 20) {
+  const { data } = await apiClient.get<{
+    items: Array<{
+      id: number
+      inspiration_id: string
+      action: string
+      source: string | null
+      created_at: string
+    }>
+    total: number
+  }>(`/inspirations/${id}/favorite-history`, { params: { limit } })
+  return data.items
+}
+
 /** 设置素材评分（0~5，0 表示清除评分） */
 export async function updateRating(id: string, rating: number) {
   const { data } = await apiClient.patch<InspirationOut>(`/inspirations/${id}`, {

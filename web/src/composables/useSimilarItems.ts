@@ -90,8 +90,10 @@ export function useSimilarItems(
     if (!item) return
     try {
       const newState = !item.is_favorite
-      await toggleFavorite(id, newState)
-      item.is_favorite = newState
+      // 用接口返回值同步状态与收藏时间（只本地翻状态会让 favorited_at 停在旧值）
+      const updated = await toggleFavorite(id, newState)
+      item.is_favorite = updated.is_favorite
+      item.favorited_at = updated.favorited_at
     } catch {
       Message.error('操作失败')
     }

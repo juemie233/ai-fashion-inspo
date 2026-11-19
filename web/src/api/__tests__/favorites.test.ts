@@ -49,8 +49,11 @@ describe('favorites API', () => {
     expect(isUnfavoriteAction('unfavorite')).toBe(true)
     expect(isUnfavoriteAction('favorite')).toBe(false)
 
-    expect(favoriteSourceLabel('detail')).toBe('素材详情')
-    expect(favoriteSourceLabel('card')).toBe('素材卡片')
+    // 后端 FavoriteEvent.source 的全部取值（web/batch/api/legacy）
+    expect(favoriteSourceLabel('web')).toBe('网页')
+    expect(favoriteSourceLabel('batch')).toBe('批量操作')
+    expect(favoriteSourceLabel('api')).toBe('接口')
+    expect(favoriteSourceLabel('legacy')).toBe('历史收藏')
     expect(favoriteSourceLabel('new_entry')).toBe('new_entry')
     expect(favoriteSourceLabel(null)).toBe('未知来源')
   })

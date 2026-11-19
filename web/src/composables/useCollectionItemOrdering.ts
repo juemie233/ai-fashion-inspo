@@ -19,11 +19,11 @@ import {
 import type { InspirationOut } from '@/api/inspirations'
 import { getApiErrorMessage } from '@/utils/apiError'
 
-/** 排序模式一次拉取的成员上限（超过这个量在界面上编排没有意义） */
-const ORDERING_ITEM_LIMIT = 500
-
 /** 成员数超过这个值时拒绝进入排序模式（分页瀑布流下编排容易误操作） */
 const ORDERING_MAX_ITEMS = 200
+
+/** 排序模式一次拉取的成员上限：后端 page_size 上限就是 200，且守卫已把总数限在 200 内 */
+const ORDERING_ITEM_LIMIT = ORDERING_MAX_ITEMS
 
 interface CollectionItemOrderingDeps {
   /** 当前选中的合集（null = 未选） */
@@ -62,7 +62,7 @@ export function useCollectionItemOrdering(opts: CollectionItemOrderingDeps) {
     try {
       const data = await fetchCollectionInspirations(c.id, {
         page: 1,
-        size: ORDERING_ITEM_LIMIT,
+        page_size: ORDERING_ITEM_LIMIT,
       })
       orderedItems.value = data.items
     } catch (e) {
