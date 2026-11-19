@@ -28,9 +28,14 @@ const isSystemManualRoot = computed(
   () => props.current.parent_id == null && props.current.name === SYSTEM_MANUAL_COLLECTION_NAME,
 )
 
-/** 合并入口：仅手动合集、非抖音自动同步、非系统收藏根（用户确认合并后删除源） */
+/** 合并入口：仅手动合集、非抖音自动同步、非系统收藏根、非分类节点
+ *  （有子收藏夹的一律被后端 _require_container 拦成 400，别给必失败的按钮） */
 const canMerge = computed(
-  () => props.current.kind === 'manual' && !props.current.auto_source && !isSystemManualRoot.value,
+  () =>
+    props.current.kind === 'manual' &&
+    !props.current.auto_source &&
+    !isSystemManualRoot.value &&
+    !props.current.child_count,
 )
 
 const emit = defineEmits<{

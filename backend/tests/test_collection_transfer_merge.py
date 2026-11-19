@@ -16,6 +16,7 @@ from app.models.collection import (
     CollectionItem,
 )
 from app.models.inspiration import Inspiration
+from app.utils.time import utcnow
 
 
 def _create_collection(client, name: str, query_json: dict | None = None) -> int:
@@ -270,6 +271,38 @@ async def test_merge_appends_dedups_and_deletes_sources(client):
             )
         ).scalars().all()
     assert rows == []
+
+
+async def test_merge_skips_trashed_members(client):
+    """源合集里已移入垃圾桶的素材不搬进目标：否则会多出指向已删除素材的幽灵成员。"""
+    target = _create_collection(client, "合并目标2")
+    source = _create_collection(client, "含垃圾桶素材的源")
+    for insp_id in ("live", "trashed"):
+        await _add_material(insp_id)
+    await _add_members(source, ["live", "trashed"])
+
+    async with async_session() as db:
+        row = await db.get(Inspiration, "trashed")
+        assert row is not None
+        row.deleted_at = utcnow()
+        row.trash_reason = "重复"
+        row.trash_source = "manual"
+        await db.commit()
+
+    # 复制：垃圾桶成员视为不属于源（在处理掉源合集之前先验证）
+    target2 = _create_collection(client, "复制目标2")
+    resp = _transfer(
+        client,
+        source,
+        {"mode": "copy", "target_ids": [target2], "ids": ["trashed"]},
+    )
+    assert resp.status_code == 400
+    assert "不属于源合集" in resp.json()["detail"]
+
+    resp = _merge(client, target, {"source_ids": [source]})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["added"] == 1
+    assert _member_ids(client, target) == ["live"]
 
 
 async def test_merge_invalid_source_keeps_everything(client):

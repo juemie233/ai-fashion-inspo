@@ -43,14 +43,14 @@ const collections = ref<CollectionOut[]>([])
 const loading = ref(false)
 const selectedIds = ref<number[]>([])
 
-/** 可选目标：手动合集 + 容器节点（规则与 CollectionPickerModal.manualCollections 一致） */
+/** 可选目标：手动合集 + 容器节点（规则与 CollectionPickerModal.manualCollections 一致）。
+ *
+ * 必须排除**任何** auto_source（含抖音二级收藏夹）：后端 _require_transferable 对
+ * auto_source 非空一律 400，只排除一级会让弹窗给出必然失败的目标。 */
 const candidates = computed(() =>
   collections.value.filter(
     (c) =>
-      c.kind === 'manual' &&
-      !(c.parent_id === null && c.auto_source) &&
-      !c.child_count &&
-      !props.excludeIds.includes(c.id),
+      c.kind === 'manual' && !c.auto_source && !c.child_count && !props.excludeIds.includes(c.id),
   ),
 )
 

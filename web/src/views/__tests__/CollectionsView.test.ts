@@ -126,7 +126,7 @@ describe('CollectionsView 交互路径', () => {
       merged_collections: 1,
       added: 3,
       skipped: 0,
-      deleted_sources: 1,
+      deleted_sources: [1],
     })
   })
 

@@ -387,9 +387,10 @@ async function confirmMerge(targetIds: number[]) {
     )
     if (result.skipped > 0) Message.info(`跳过 ${result.skipped} 个（目标已有或无法合并）`)
     mergeOpen.value = false
-    await loadCollections()
-    // 源合集已删除：选中目标合集，让用户直接看到合并后的内容
+    // 先选中目标再刷新列表：反过来的话 loadCollections 会发现当前源合集已被删、
+    // 临时切到列表第一个合集并触发一次内容加载，与紧接着的 target 加载抢结果
     currentId.value = target
+    await loadCollections()
   } catch (e) {
     // 后端失败时前端不改任何本地状态（源合集仍在，无需回滚），只提示
     Message.error(getApiErrorMessage(e, '合并合集失败'))
@@ -615,7 +616,8 @@ onMounted(() => {
             >
               <a-button size="mini" status="danger">移出合集</a-button>
             </a-popconfirm>
-            <template v-if="current.kind === 'manual'">
+            <!-- 抖音同步（含二级收藏夹）由 f2 维护：后端 _require_transferable 一律 400 -->
+            <template v-if="current.kind === 'manual' && !current.auto_source">
               <a-button size="mini" @click="openTransfer('move')">移动到…</a-button>
               <a-button size="mini" @click="openTransfer('copy')">复制到…</a-button>
             </template>

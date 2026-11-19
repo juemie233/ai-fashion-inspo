@@ -13,6 +13,7 @@
 - 历史事件按事件时间倒序；素材软删除后其事件不返回（物理删除由外键级联清掉）。
 """
 
+import asyncio
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -164,10 +165,12 @@ async def favorites_views(db: AsyncSession = Depends(get_db)) -> dict:
 async def favorites_view_items(
     key: str,
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """分页获取某个收藏智能视图的素材（按收藏时间倒序、id 兜底）。
+
+    分页参数沿用全局约定 ``page`` / ``size``（默认 50，上限 200）。
 
     未知 ``key`` 返回 404；排序与收藏中心「最近收藏」一致（``favorited_at DESC``，
     历史无收藏时间的排最后）。
@@ -185,8 +188,8 @@ async def favorites_view_items(
                 Inspiration.favorited_at.desc().nulls_last(),
                 Inspiration.id.desc(),
             )
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            .offset((page - 1) * size)
+            .limit(size)
         )
     ).unique().scalars().all()
     return {
@@ -194,7 +197,7 @@ async def favorites_view_items(
         "items": [inspiration_to_out(item) for item in rows],
         "total": total,
         "page": page,
-        "size": page_size,
+        "size": size,
     }
 
 
@@ -226,11 +229,15 @@ async def favorites_cleanup(db: AsyncSession = Depends(get_db)) -> dict:
             )
         )
     ).all()
-    missing_ids = [
-        insp_id
-        for insp_id, file_path in favorite_rows
-        if not _storage_file_exists(file_path)
-    ]
+    # 逐条 resolve + stat 是阻塞 I/O（storage 在网络盘时更慢）：丢到线程池，
+    # 避免收藏上万条时把事件循环堵住、其它接口一起排队
+    missing_ids = await asyncio.to_thread(
+        lambda: [
+            insp_id
+            for insp_id, file_path in favorite_rows
+            if not _storage_file_exists(file_path)
+        ]
+    )
 
     # 2) 重复组：按 content_hash 聚合（组内 >1），先拿总数与展示组
     duplicate_count_rows = (

@@ -3,7 +3,7 @@
  *
  * 数据来源（后端并行契约）：
  * - GET /favorites/views：4 个智能视图（未评分/未整理/高分/收藏超 90 天）及各自数量；
- * - GET /favorites/views/{key}：视图素材分页（page/page_size）；
+ * - GET /favorites/views/{key}：视图素材分页（page/size）；
  * - GET /favorites/cleanup：缺失文件清单 + 重复内容组；
  * 动作：批量取消收藏、加入合集（复用 CollectionPickerModal）、重复组「保留第一张」。
  */
@@ -38,6 +38,8 @@ const viewTotal = ref(0)
 const viewPage = ref(1)
 const viewLoading = ref(false)
 const viewError = ref<string | null>(null)
+/** 视图素材请求序号：快速切换视图时丢弃过期响应，避免旧视图覆盖新视图 */
+let viewRequestSeq = 0
 
 const activeView = computed(() => views.value.find((v) => v.key === activeViewKey.value) ?? null)
 const activeViewLabel = computed(() => activeView.value?.label ?? '选择一个视图')
@@ -184,18 +186,22 @@ async function loadCleanup(): Promise<void> {
 
 /** 加载某个智能视图（append=true 为「加载更多」追加） */
 async function loadView(key: string, page = 1, append = false): Promise<void> {
+  const seq = ++viewRequestSeq
   viewLoading.value = true
   viewError.value = null
   try {
     const data = await fetchFavoriteViewItems(key, page, VIEW_PAGE_SIZE)
+    // 过期响应直接丢弃：否则先点的视图慢响应回来会覆盖后点的视图素材
+    if (seq !== viewRequestSeq) return
     viewItems.value = append ? [...viewItems.value, ...data.items] : data.items
     viewTotal.value = data.total
     viewPage.value = data.page ?? page
   } catch (e) {
+    if (seq !== viewRequestSeq) return
     viewError.value = getApiErrorMessage(e, '加载视图素材失败')
     if (!append) viewItems.value = []
   } finally {
-    viewLoading.value = false
+    if (seq === viewRequestSeq) viewLoading.value = false
   }
 }
 
@@ -216,9 +222,10 @@ function reloadActiveView(): void {
 }
 
 function retryAll(): void {
-  void loadViews()
+  // 必须等视图卡加载完再拉素材：首屏失败时 activeViewKey 还是空，立即调用会落空，
+  // 之后卡片出现但下方一直显示「没有待整理内容」的空态
+  void loadViews().then(reloadActiveView)
   void loadCleanup()
-  reloadActiveView()
 }
 
 function toggleSection(section: 'missing' | 'duplicates'): void {

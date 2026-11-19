@@ -112,7 +112,7 @@ interface FavoriteViewsOut {
   views: FavoriteViewOut[]
 }
 
-/** 智能视图素材分页（GET /favorites/views/{key}?page&page_size） */
+/** 智能视图素材分页（GET /favorites/views/{key}?page&size，与全局分页约定一致） */
 interface FavoriteViewItemsOut {
   key: string
   items: InspirationOut[]
@@ -154,7 +154,7 @@ export async function fetchFavoriteViewItems(
   pageSize = 24,
 ): Promise<FavoriteViewItemsOut> {
   const { data } = await apiClient.get<FavoriteViewItemsOut>(`/favorites/views/${key}`, {
-    params: { page, page_size: pageSize },
+    params: { page, size: pageSize },
   })
   return data
 }

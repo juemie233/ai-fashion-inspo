@@ -158,7 +158,7 @@ async def test_favorites_view_pagination_and_unknown_key(client, upload):
         _set_favorite(client, insp_id)
 
     data = client.get(
-        "/api/favorites/views/unrated", params={"page": 2, "page_size": 2}
+        "/api/favorites/views/unrated", params={"page": 2, "size": 2}
     ).json()
     assert data["key"] == "unrated"
     assert data["total"] == 3
@@ -169,7 +169,7 @@ async def test_favorites_view_pagination_and_unknown_key(client, upload):
     assert client.get("/api/favorites/views/bogus").status_code == 404
     assert (
         client.get(
-            "/api/favorites/views/unrated", params={"page_size": 500}
+            "/api/favorites/views/unrated", params={"size": 500}
         ).status_code
         == 422
     )

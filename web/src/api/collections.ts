@@ -169,8 +169,8 @@ export interface CollectionMergeResult {
   added: number
   /** 重复/无法加入而跳过的数量 */
   skipped: number
-  /** 合并成功后删除的源合集数量（用户确认：合并后删除源） */
-  deleted_sources: number
+  /** 合并成功后删除的源合集 **ID 列表**（按请求顺序；后端返回数组，不是数量） */
+  deleted_sources: number[]
 }
 
 /**

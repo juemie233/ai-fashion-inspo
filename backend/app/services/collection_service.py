@@ -823,13 +823,17 @@ async def transfer_inspirations(
     if source.id in unique_targets:
         raise HTTPException(status_code=400, detail="目标合集不能包含源合集本身")
 
-    # ids 必须全部属于源合集（先校验再写，避免「部分复制」的中间态）
+    # ids 必须全部属于源合集（先校验再写，避免「部分复制」的中间态）。
+    # 垃圾桶素材不算源成员：否则 copy 模式会把「指向已删除素材」的幽灵成员复制到目标
     source_members = set(
         (
             await db.execute(
-                select(CollectionItem.inspiration_id).where(
+                select(CollectionItem.inspiration_id)
+                .join(Inspiration, Inspiration.id == CollectionItem.inspiration_id)
+                .where(
                     CollectionItem.collection_id == source.id,
                     CollectionItem.inspiration_id.in_(unique_ids),
+                    Inspiration.deleted_at.is_(None),
                 )
             )
         ).scalars().all()
@@ -933,11 +937,15 @@ async def merge_collections(
         sources.append(source)
 
     # 目标当前成员与末尾位置（一次查出，后续在内存里累加 position，避免未 flush 查不到）
+    # 只算未删除素材：垃圾桶素材的成员行仍在，不能让它把 position/计数撑大
     existing = set(
         (
             await db.execute(
-                select(CollectionItem.inspiration_id).where(
-                    CollectionItem.collection_id == target.id
+                select(CollectionItem.inspiration_id)
+                .join(Inspiration, Inspiration.id == CollectionItem.inspiration_id)
+                .where(
+                    CollectionItem.collection_id == target.id,
+                    Inspiration.deleted_at.is_(None),
                 )
             )
         ).scalars().all()
@@ -953,10 +961,16 @@ async def merge_collections(
     added = 0
     skipped = 0
     for source in sources:
+        # 只搬未删除素材：垃圾桶素材的成员行留在源合集里随合集一起删掉，
+        # 否则目标会多出「指向已删除素材」的幽灵成员（计数虚增、恢复后凭空出现）
         member_ids = (
             await db.execute(
                 select(CollectionItem.inspiration_id)
-                .where(CollectionItem.collection_id == source.id)
+                .join(Inspiration, Inspiration.id == CollectionItem.inspiration_id)
+                .where(
+                    CollectionItem.collection_id == source.id,
+                    Inspiration.deleted_at.is_(None),
+                )
                 .order_by(
                     CollectionItem.position.asc(), CollectionItem.added_at.asc()
                 )

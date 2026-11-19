@@ -64,15 +64,15 @@ describe('favorites API', () => {
     expect(mocks.get).toHaveBeenCalledWith('/favorites/views')
   })
 
-  it('智能视图素材：GET /favorites/views/{key}?page&page_size', async () => {
+  it('智能视图素材：GET /favorites/views/{key}?page&size', async () => {
     await fetchFavoriteViewItems('unrated', 2, 24)
     expect(mocks.get).toHaveBeenCalledWith('/favorites/views/unrated', {
-      params: { page: 2, page_size: 24 },
+      params: { page: 2, size: 24 },
     })
     // 默认第一页 24 条
     await fetchFavoriteViewItems('high_rating')
     expect(mocks.get).toHaveBeenLastCalledWith('/favorites/views/high_rating', {
-      params: { page: 1, page_size: 24 },
+      params: { page: 1, size: 24 },
     })
   })
 
