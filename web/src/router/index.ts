@@ -33,6 +33,12 @@ const router = createRouter({
       meta: { title: '收藏合集' },
     },
     {
+      path: '/favorites',
+      name: 'favorites',
+      component: () => import('@/views/FavoritesCenterView.vue'),
+      meta: { title: '收藏中心' },
+    },
+    {
       path: '/model-photos',
       name: 'model-photos',
       component: () => import('@/views/ModelPhotoUploadView.vue'),

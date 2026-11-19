@@ -74,6 +74,16 @@ class Inspiration(Base):
             "created_at",
             sqlite_where=text("is_favorite = 1"),
         ),
+        # 2026-11-19 收藏增强：收藏时间排序/收藏中心。部分索引只覆盖收藏行，
+        # 查询 `is_favorite=1 AND deleted_at IS NULL ORDER BY favorited_at DESC` 直接命中。
+        Index(
+            "ix_inspirations_favorite_time",
+            "is_favorite",
+            "deleted_at",
+            "favorited_at",
+            "id",
+            sqlite_where=text("is_favorite = 1"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -113,6 +123,9 @@ class Inspiration(Base):
     )  # 笔记正文描述（详情页采集；手动上传可为空）
 
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 收藏时间（2026-11-19 收藏增强）：收藏时写入，取消收藏清空；历史收藏由迁移
+    # 回填为 updated_at（近似值，注释见迁移文件），未收藏恒为 NULL。
+    favorited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     rating: Mapped[int] = mapped_column(Integer, default=0)  # 用户评分：0~5（0 表示未评分，5 满分）
 
     quality_status: Mapped[str] = mapped_column(
@@ -349,3 +362,33 @@ class QualityCorrection(Base):
     reason_code: Mapped[str | None] = mapped_column(String(32), nullable=True)  # 错在哪类（复用原因码）
     note: Mapped[str | None] = mapped_column(Text, nullable=True)  # 自由备注
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class FavoriteEvent(Base):
+    """收藏 / 取消收藏事件流水（2026-11-19 收藏增强）。
+
+    只记录**真实状态变化**：重复收藏已收藏素材、重复取消未收藏素材都不写事件
+    （接口层幂等）；素材软删除（垃圾桶）时事件保留但查询接口按未删除过滤，
+    物理删除时随外键级联删除。
+
+    用途：
+    - 单条素材的收藏历史（``GET /api/inspirations/{id}/favorite-history``）；
+    - 收藏中心的最近动态（``GET /api/favorites/history``）；
+    - 迁移回填时把「当前已收藏」补成一条 ``source='legacy'`` 的 favorite 事件，
+      保证上线前的老收藏也有历史可追溯（时间取 updated_at，为近似值）。
+    """
+
+    __tablename__ = "favorite_events"
+    __table_args__ = (
+        Index("ix_favorite_events_inspiration_time", "inspiration_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    inspiration_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("inspirations.id", ondelete="CASCADE"),
+    )
+    action: Mapped[str] = mapped_column(String(10))  # favorite / unfavorite
+    # 事件来源：web（单条接口）/ batch（批量接口）/ api（其它程序入口）/ legacy（迁移回填）
+    source: Mapped[str] = mapped_column(String(10), default="web")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -83,9 +83,24 @@ export async function deleteCollection(id: number): Promise<void> {
   await apiClient.delete(`/collections/${id}`)
 }
 
+/** 合集内容筛选/排序参数（与 GET /collections/{id}/inspirations 契约一致） */
+export interface CollectionInspirationParams {
+  page?: number
+  size?: number
+  /** 关键词（后端按标签名/作者/来源等模糊匹配） */
+  q?: string
+  media_type?: 'image' | 'video'
+  quality_status?: 'pending' | 'approved' | 'rejected'
+  rating_min?: number
+  /** 仅看已收藏 */
+  is_favorite?: boolean
+  /** 排序：手动顺序 / 最新 / 最早 / 评分高 / 评分低 */
+  sort?: 'manual' | 'newest' | 'oldest' | 'rating' | 'rating_asc'
+}
+
 export async function fetchCollectionInspirations(
   id: number,
-  params: { page?: number; size?: number } = {},
+  params: CollectionInspirationParams = {},
 ): Promise<CollectionInspirationsOut> {
   const { data } = await apiClient.get<CollectionInspirationsOut>(
     `/collections/${id}/inspirations`,

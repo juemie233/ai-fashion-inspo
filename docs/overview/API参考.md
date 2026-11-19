@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-18，共 23 个模块 / 333 个端点）。
+> **状态**：自动生成（2026-11-19，共 24 个模块 / 336 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -20,10 +20,11 @@
 | [bloggers](#bloggers) | `/api/bloggers` | 43 |
 | [collections](#collections) | `/api/collections` | 10 |
 | [face_scan](#face_scan) | `/api/face-match、/api/face-scan` | 15 |
+| [favorites](#favorites) | `/api/favorites` | 2 |
 | [files](#files) | `/api/files` | 2 |
 | [generate](#generate) | `/api/generate` | 17 |
 | [health](#health) | `/api/health` | 1 |
-| [inspirations](#inspirations) | `/api/inspirations` | 30 |
+| [inspirations](#inspirations) | `/api/inspirations` | 31 |
 | [models](#models) | `/api/models` | 19 |
 | [pose_gallery](#pose_gallery) | `/api/pose-gallery` | 5 |
 | [quality_learner](#quality_learner) | `/api/ai/quality-learner` | 3 |
@@ -236,7 +237,7 @@
 | `PATCH` | `/api/collections/order` | `reorder_collections` | 提交合集列表顺序（拖拽排序）：按 ordered_ids 顺序重排 position。 |
 | `PATCH` | `/api/collections/{collection_id}` | `update_collection` | 更新合集基础信息（部分更新）。 |
 | `DELETE` | `/api/collections/{collection_id}` | `delete_collection` | 删除合集（不动素材：手动合集级联删成员关系，智能合集仅删自身）。 |
-| `GET` | `/api/collections/{collection_id}/inspirations` | `list_collection_inspirations` | 分页获取合集内容。 |
+| `GET` | `/api/collections/{collection_id}/inspirations` | `list_collection_inspirations` | 分页获取合集内容（支持搜索 / 筛选 / 排序）。 |
 | `POST` | `/api/collections/{collection_id}/inspirations` | `add_inspirations` | 批量加入素材到手动合集（请求内去重，已加入/不存在的素材跳过）。 |
 | `DELETE` | `/api/collections/{collection_id}/inspirations` | `remove_inspirations` | 批量移出素材（不在合集内的 ID 跳过）；智能合集返回 400。 |
 | `PATCH` | `/api/collections/{collection_id}/items/order` | `reorder_collection_items` | 提交合集内成员展示顺序（拖拽编排）：按 ordered_ids 重排 position。 |
@@ -263,6 +264,15 @@
 | `POST` | `/api/face-scan/cluster/groups/{group_id}/ignore` | `cluster_group_ignore` | 整组忽略：把组内未匹配人脸标记为「不匹配」，永久退出后续匹配。 |
 | `POST` | `/api/face-scan/cluster/groups/{group_id}/create-person` | `cluster_group_create_person` | 按聚类分组新建博主，并用组内最高质量的人脸注册（随后整组确认关联）。 |
 | `GET` | `/api/face-scan/cluster/groups/{group_id}/detections` | `cluster_group_detections` | 某聚合组的人脸明细分页（含素材路径/缩略图，供展开网格展示与勾选指派）。 |
+
+## favorites
+
+前缀：`/api/favorites`
+
+| 方法 | 路径 | 函数 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/favorites/overview` | `favorites_overview` | 收藏中心概览：总数 / 近 7 天新增 / 未评分 / 未整理 / 最近收藏。 |
+| `GET` | `/api/favorites/history` | `favorites_history` | 最近收藏/取消事件流水（按事件时间倒序，最多 ``limit`` 条）。 |
 
 ## files
 
@@ -325,6 +335,7 @@
 | `DELETE` | `/api/inspirations/trash` | `empty_trash` | 彻底清空垃圾桶（物理删除文件与数据库记录）。 |
 | `POST` | `/api/inspirations/{inspiration_id}/trash` | `move_to_trash` | 将素材移入垃圾桶（软删除），文件移入 storage/trash/，可恢复。 |
 | `POST` | `/api/inspirations/{inspiration_id}/restore` | `restore_inspiration` | 从垃圾桶恢复素材（移回媒体目录，清除软删除标记）。 |
+| `GET` | `/api/inspirations/{inspiration_id}/favorite-history` | `favorite_history` | 获取素材的收藏/取消收藏历史（按时间倒序，最多 limit 条）。 |
 | `GET` | `/api/inspirations/{inspiration_id}` | `get_inspiration` | 获取单个灵感详情（包含完整标签和分析日志）。 |
 | `PATCH` | `/api/inspirations/{inspiration_id}` | `update_inspiration` | 更新灵感（收藏状态、作者等部分字段）。 |
 | `POST` | `/api/inspirations/{inspiration_id}/crop` | `crop_inspiration` | 手动裁剪素材图片（保留中间区域，裁掉上下部分），就地替换原图。 |

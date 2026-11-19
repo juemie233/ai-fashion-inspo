@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import Inspiration
+from app.models.inspiration import FavoriteEvent, Inspiration
 from app.schemas.inspiration import (
     BatchAddTagsRequest,
     BatchFavoriteRequest,
@@ -33,6 +33,7 @@ from app.schemas.person import (
 )
 from app.services import inspiration_service
 from app.services import tag_correction_service
+from app.utils.time import format_utc
 from app.services.person_service import blogger_service, model_service
 from app.services.blogger_face import (
     delete_detection,
@@ -366,6 +367,40 @@ async def restore_inspiration(inspiration_id: str, db: AsyncSession = Depends(ge
     return inspiration_to_out(inspiration)
 
 
+@router.get("/{inspiration_id}/favorite-history")
+async def favorite_history(
+    inspiration_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """获取素材的收藏/取消收藏历史（按时间倒序，最多 limit 条）。
+
+    只返回真实状态变化的事件流水（幂等的重复收藏/取消不产生事件）；
+    素材不存在或从未收藏/取消过都返回空列表（不 404），前端统一按「无历史」展示。
+    """
+    rows = (
+        await db.execute(
+            select(FavoriteEvent)
+            .where(FavoriteEvent.inspiration_id == inspiration_id)
+            .order_by(FavoriteEvent.created_at.desc(), FavoriteEvent.id.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": event.id,
+                "inspiration_id": event.inspiration_id,
+                "action": event.action,
+                "source": event.source,
+                "created_at": format_utc(event.created_at),
+            }
+            for event in rows
+        ],
+        "total": len(rows),
+    }
+
+
 @router.get("/{inspiration_id}", response_model=InspirationDetailOut)
 async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)) -> InspirationDetailOut:
     """获取单个灵感详情（包含完整标签和分析日志）。"""
@@ -393,6 +428,7 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
         trash_source=inspiration.trash_source,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
+        favorited_at=inspiration.favorited_at,
         tags=[
             InspirationTagOut(tag=TagOut.model_validate(t.tag), confidence=t.confidence)
             for t in inspiration.tags

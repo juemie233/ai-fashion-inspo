@@ -115,15 +115,39 @@ async def list_collection_inspirations(
     collection_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    q: str | None = Query(None, max_length=100, description="关键词（作者/正文/标签名模糊）"),
+    media_type: str | None = Query(None, pattern="^(image|video)$"),
+    quality_status: str | None = Query(
+        None, pattern="^(pending|approved|rejected)$", description="质量状态"
+    ),
+    rating_min: int | None = Query(None, ge=1, le=5, description="评分下限（评分 ≥ 该值）"),
+    is_favorite: bool | None = Query(None, description="仅收藏 / 仅未收藏"),
+    sort: str | None = Query(
+        None,
+        pattern="^(manual|newest|oldest|rating|rating_asc)$",
+        description="排序：手动合集默认 manual；智能合集默认 newest（显式 manual 返回 400）",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """分页获取合集内容。
+    """分页获取合集内容（支持搜索 / 筛选 / 排序）。
 
-    手动合集按 position 升序；智能合集按 query_json 动态求值（与素材库
-    同一套筛选口径，默认上传时间倒序）。均排除垃圾桶素材。
+    - 手动合集：默认按 position 升序（成员拖拽顺序），筛选后再分页；
+    - 智能合集：按 query_json 动态求值（与素材库同一套筛选口径），默认上传时间倒序；
+    - 排序：manual（仅手动合集）/ newest / oldest / rating / rating_asc；
+    - 筛选：关键词（作者名/正文/标签名模糊）、media_type、quality_status、
+      rating_min、is_favorite；均排除垃圾桶素材。
     """
     inspirations, total = await collection_service.list_collection_inspirations(
-        db, collection_id, page=page, size=page_size
+        db,
+        collection_id,
+        page=page,
+        size=page_size,
+        q=q,
+        media_type=media_type,
+        quality_status=quality_status,
+        rating_min=rating_min,
+        is_favorite=is_favorite,
+        sort=sort,
     )
     return {
         "items": [inspiration_to_out(i) for i in inspirations],

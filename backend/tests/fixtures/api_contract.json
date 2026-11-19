@@ -71,6 +71,7 @@
     "created_at",
     "deleted_at",
     "dominant_colors",
+    "favorited_at",
     "file_path",
     "id",
     "is_ai_generated",

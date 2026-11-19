@@ -71,6 +71,8 @@ _ALL_TABLES = [
     "blogger_face_embeddings",  # 博主人脸特征（与 model_face_embeddings 对称，清表防跨用例 face_registered 串扰）
     "blogger_enrichment_skips",
     "person_groups",
+    # 收藏事件流水（2026-11-19 收藏增强）：引用 inspirations，须先于它清空
+    "favorite_events",
     "inspirations",
     "bloggers",
     "models",

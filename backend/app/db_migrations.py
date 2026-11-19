@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # API/Pydantic 契约版本：修改请求/响应模型、路由字段等「不落库」的契约时手动 +1。
 # 与数据库结构哈希拼接成前后端握手用的 schema_version（见 compute_schema_version）。
-API_CONTRACT_VERSION = 6  # 人物模块拆分：/api/persons → /api/bloggers + /api/models
+API_CONTRACT_VERSION = 7  # 收藏增强：InspirationOut 增加 favorited_at + 收藏中心/收藏历史接口
 
 # 字段清单：表名 -> [(列名, 列定义), ...]
 _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {

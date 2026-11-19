@@ -66,17 +66,22 @@ vi.mock('@arco-design/web-vue', async () => {
 
 import CollectionsView from '../CollectionsView.vue'
 
-function collection(id: number, name: string, parentId: number | null = null) {
+function collection(
+  id: number,
+  name: string,
+  parentId: number | null = null,
+  kind: 'manual' | 'smart' = 'manual',
+) {
   return {
     id,
     name,
     description: null,
-    kind: 'manual',
+    kind,
     position: id,
     parent_id: parentId,
     child_count: 0,
     item_count: 0,
-    query_json: null,
+    query_json: kind === 'smart' ? { is_favorite: true } : null,
     cover_inspiration_id: null,
     cover_thumbnail_path: null,
     auto_source: null,
@@ -118,8 +123,12 @@ describe('CollectionsView 交互路径', () => {
     await flushPromises()
 
     expect(mocks.fetchCollections).toHaveBeenCalled()
-    // 选中第一个后立刻加载它的内容
-    expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(1, { page: 1, size: 50 })
+    // 选中第一个后立刻加载它的内容；手动合集默认「手动顺序」排序
+    expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(1, {
+      page: 1,
+      size: 50,
+      sort: 'manual',
+    })
   })
 
   it('列表里出现二级收藏夹时，内容区按父级分组（侧栏与内容区共用一份）', async () => {
@@ -151,7 +160,11 @@ describe('CollectionsView 交互路径', () => {
     sidebar.vm.$emit('update:currentId', 2)
     await flushPromises()
 
-    expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(2, { page: 1, size: 50 })
+    expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(2, {
+      page: 1,
+      size: 50,
+      sort: 'manual',
+    })
   })
 
   it('加载内容失败给出可读提示', async () => {
@@ -181,6 +194,7 @@ describe('CollectionsView 交互路径', () => {
       expect(mocks.fetchCollectionInspirations).toHaveBeenLastCalledWith(2, {
         page: 1,
         size: 50,
+        sort: 'manual',
       })
     }
   })
@@ -195,5 +209,50 @@ describe('CollectionsView 交互路径', () => {
       await flushPromises()
       expect(mocks.removeFromCollection).not.toHaveBeenCalled()
     }
+  })
+
+  it('智能合集默认按「最新」排序，且不允许编辑手动排序', async () => {
+    mocks.fetchCollections.mockResolvedValue([collection(9, '我的智能合集', null, 'smart')])
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mocks.fetchCollectionInspirations).toHaveBeenCalledWith(9, {
+      page: 1,
+      size: 50,
+      sort: 'newest',
+    })
+    const header = wrapper.findComponent({ name: 'CollectionContentHeader' })
+    expect(header.props('canOrder')).toBe(false)
+  })
+
+  it('合集内搜索防抖后带 q 加载；切合集把筛选与排序重置为默认', async () => {
+    mocks.fetchCollectionInspirations.mockClear()
+    mocks.fetchCollections.mockResolvedValue([
+      collection(1, '手动合集甲'),
+      collection(2, '手动合集乙'),
+      collection(3, '智能合集丙', null, 'smart'),
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 输入关键词：300ms 防抖后按 q + 手动顺序请求
+    const input = wrapper.find('.content-keyword input')
+    expect(input.exists()).toBe(true)
+    await input.setValue('白裙')
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    await flushPromises()
+
+    const searched = mocks.fetchCollectionInspirations.mock.calls.at(-1)?.[1] ?? {}
+    expect(searched).toMatchObject({ page: 1, size: 50, sort: 'manual', q: '白裙' })
+
+    // 切到智能合集：筛选清空、排序切该合集默认（newest）
+    const sidebar = wrapper.findComponent({ name: 'CollectionSidebar' })
+    sidebar.vm.$emit('update:currentId', 3)
+    await flushPromises()
+
+    const switched = mocks.fetchCollectionInspirations.mock.calls.at(-1) ?? []
+    expect(switched[0]).toBe(3)
+    expect(switched[1]).toMatchObject({ page: 1, size: 50, sort: 'newest' })
+    expect(switched[1]).not.toHaveProperty('q')
   })
 })

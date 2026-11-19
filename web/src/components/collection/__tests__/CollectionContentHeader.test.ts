@@ -27,9 +27,9 @@ function collection(over: Partial<CollectionOut> = {}): CollectionOut {
   }
 }
 
-function mountHeader(current: CollectionOut) {
+function mountHeader(current: CollectionOut, canOrder = true) {
   return mount(CollectionContentHeader, {
-    props: { current, parentName: null, total: 3, ordering: false },
+    props: { current, parentName: null, total: 3, ordering: false, canOrder },
     global: { plugins: [ArcoVue] },
   })
 }
@@ -48,5 +48,12 @@ describe('CollectionContentHeader 系统收藏根', () => {
     expect(wrapper.findAll('button').some((b) => b.text().includes('编辑条件'))).toBe(true)
     expect(wrapper.findAll('button').some((b) => b.text().includes('转手动'))).toBe(true)
     expect(wrapper.findAll('button').some((b) => b.text().includes('删除合集'))).toBe(true)
+  })
+
+  it('canOrder=false（按最新/评分等排序）时不显示「编辑排序」', () => {
+    const wrapper = mountHeader(collection({ kind: 'manual' }), false)
+    expect(wrapper.findAll('button').some((b) => b.text().includes('编辑排序'))).toBe(false)
+    // 其它手动合集操作保留
+    expect(wrapper.findAll('button').some((b) => b.text().includes('重命名'))).toBe(true)
   })
 })

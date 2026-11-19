@@ -6,7 +6,7 @@
  * 支持「编辑条件」「转手动（固化）」。
  */
 
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
@@ -19,6 +19,21 @@ import {
   removeFromCollection,
   type CollectionOut,
 } from '@/api/collections'
+import {
+  CONTENT_SORT_OPTIONS,
+  MEDIA_OPTIONS,
+  QUALITY_OPTIONS,
+  RATING_OPTIONS,
+  buildCollectionContentParams,
+  contentSortLabel as formatContentSortLabel,
+  defaultContentSort,
+  isContentFilterActive,
+  type ContentFilterState,
+  type ContentMedia,
+  type ContentQuality,
+  type ContentRatingMin,
+  type ContentSort,
+} from '@/components/collection/contentFilters'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 import { getFileUrl, toggleFavorite } from '@/api/inspirations'
@@ -98,6 +113,98 @@ const page = ref(1)
 const pageSize = ref(50)
 const contentLoading = ref(false)
 
+// ── 合集内容筛选/排序（工具条）──
+
+/** 合集内排序类型与默认排序/参数拼装见 components/collection/contentFilters.ts */
+type ContentSortValue = ContentSort
+type ContentMediaValue = ContentMedia
+type ContentQualityValue = ContentQuality
+type ContentRatingMinValue = ContentRatingMin
+
+const contentKeyword = ref('')
+const contentMedia = ref<ContentMediaValue>('')
+const contentQuality = ref<ContentQualityValue>('')
+const contentRatingMin = ref<ContentRatingMinValue>('')
+const contentFavoriteOnly = ref(false)
+const contentSort = ref<ContentSortValue>('manual')
+/** 关键词防抖定时器（切合集/离开页面时清掉，避免旧请求回来覆盖新合集） */
+let keywordTimer: ReturnType<typeof setTimeout> | null = null
+
+// 下拉选项直接复用纯逻辑模块里的常量（与参数拼装同一份真源）
+const mediaOptions = MEDIA_OPTIONS
+const qualityOptions = QUALITY_OPTIONS
+const ratingOptions = RATING_OPTIONS
+const contentSortOptions = CONTENT_SORT_OPTIONS
+
+const contentSortLabel = computed(() => formatContentSortLabel(contentSort.value))
+/** 手动合集 + 手动顺序才允许编辑排序（其它排序下拖动会与当前视图乱序） */
+const canEditOrder = computed(
+  () => current.value?.kind === 'manual' && contentSort.value === 'manual',
+)
+/** 当前筛选状态（传给纯函数做参数拼装/是否激活判断） */
+function currentContentFilterState(): ContentFilterState {
+  return {
+    keyword: contentKeyword.value,
+    mediaType: contentMedia.value,
+    quality: contentQuality.value,
+    ratingMin: contentRatingMin.value,
+    favoriteOnly: contentFavoriteOnly.value,
+    sort: contentSort.value,
+  }
+}
+/** 除关键词外是否有筛选条件（决定是否展示「清除筛选」） */
+const contentFiltersActive = computed(() => isContentFilterActive(currentContentFilterState()))
+
+/** 当前合集的默认排序：手动合集按手动顺序，智能合集按最新 */
+function defaultSortForCurrent(): ContentSort {
+  return defaultContentSort(current.value?.kind)
+}
+
+/** 切合集/重置时清空筛选与排序（避免把上一个合集的筛选带到新合集） */
+function resetContentFilters(): void {
+  if (keywordTimer !== null) {
+    clearTimeout(keywordTimer)
+    keywordTimer = null
+  }
+  contentKeyword.value = ''
+  contentMedia.value = ''
+  contentQuality.value = ''
+  contentRatingMin.value = ''
+  contentFavoriteOnly.value = false
+  contentSort.value = defaultSortForCurrent()
+}
+
+/** 关键词防抖 300ms：输入过程中不请求，停手后回第一页加载 */
+function onKeywordInput(value: string): void {
+  contentKeyword.value = value
+  if (keywordTimer !== null) clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(() => {
+    keywordTimer = null
+    page.value = 1
+    loadContent()
+  }, 300)
+}
+
+/** 其它筛选/排序变化：立即回第一页加载；离开手动顺序时退出排序编辑模式 */
+function onContentFilterChange(): void {
+  page.value = 1
+  if (contentSort.value !== 'manual') ordering.value = false
+  loadContent()
+}
+
+/** 排序变化单独处理：非手动顺序时不允许继续编辑排序（并给出说明） */
+function onContentSortChange(value: unknown): void {
+  contentSort.value = (String(value ?? '') || defaultSortForCurrent()) as ContentSort
+  onContentFilterChange()
+}
+
+/** 清除筛选与排序：保留当前合集，回到该合集的默认排序 */
+function clearContentFilters(): void {
+  resetContentFilters()
+  page.value = 1
+  loadContent()
+}
+
 async function loadContent() {
   if (currentId.value === null) {
     items.value = []
@@ -106,10 +213,12 @@ async function loadContent() {
   }
   contentLoading.value = true
   try {
-    const data = await fetchCollectionInspirations(currentId.value, {
-      page: page.value,
-      size: pageSize.value,
-    })
+    const params = buildCollectionContentParams(
+      currentContentFilterState(),
+      page.value,
+      pageSize.value,
+    )
+    const data = await fetchCollectionInspirations(currentId.value, params)
     items.value = data.items
     total.value = data.total
   } catch (e) {
@@ -123,6 +232,7 @@ watch(currentId, () => {
   page.value = 1
   exitBatchMode()
   ordering.value = false
+  resetContentFilters()
   loadContent()
 })
 
@@ -240,6 +350,13 @@ const conditionSummary = computed(() => {
   )
 })
 
+onUnmounted(() => {
+  if (keywordTimer !== null) {
+    clearTimeout(keywordTimer)
+    keywordTimer = null
+  }
+})
+
 onMounted(() => {
   void loadCollections().then(() => loadContent())
   // 预热标签库：智能合集编辑器的标签下拉首次打开即可用（避免首次点开时等待标签接口）
@@ -273,6 +390,7 @@ onMounted(() => {
           :parent-name="parentName"
           :total="total"
           :ordering="ordering"
+          :can-order="canEditOrder"
           @edit-smart="openEditSmart"
           @solidify="confirmSolidify"
           @enter-ordering="enterOrdering"
@@ -286,6 +404,67 @@ onMounted(() => {
         <a-alert v-if="current.kind === 'smart'" type="info" style="margin-bottom: 12px">
           匹配条件：{{ conditionSummary }}
         </a-alert>
+
+        <!-- 合集内容工具条：搜索/媒体/质量/评分/仅收藏/排序（分类节点不显示） -->
+        <div v-if="!currentChildren.length" class="content-filter-bar">
+          <div class="content-filter-row">
+            <a-input
+              :model-value="contentKeyword"
+              placeholder="搜索合集内素材（标签/作者/关键词）"
+              allow-clear
+              class="content-keyword"
+              style="width: 240px"
+              @input="onKeywordInput"
+              @clear="onKeywordInput('')"
+            />
+            <a-select
+              v-model="contentMedia"
+              :options="mediaOptions"
+              size="small"
+              style="width: 118px"
+              @change="() => onContentFilterChange()"
+            />
+            <a-select
+              v-model="contentQuality"
+              :options="qualityOptions"
+              size="small"
+              style="width: 118px"
+              @change="() => onContentFilterChange()"
+            />
+            <a-select
+              v-model="contentRatingMin"
+              :options="ratingOptions"
+              size="small"
+              style="width: 128px"
+              @change="() => onContentFilterChange()"
+            />
+            <a-checkbox v-model="contentFavoriteOnly" @change="() => onContentFilterChange()">
+              仅收藏
+            </a-checkbox>
+            <span class="content-filter-spacer" />
+            <a-select
+              v-model="contentSort"
+              :options="contentSortOptions"
+              size="small"
+              style="width: 168px"
+              @change="onContentSortChange"
+            />
+            <a-button
+              v-if="contentFiltersActive"
+              size="mini"
+              type="text"
+              @click="clearContentFilters"
+            >
+              清除筛选
+            </a-button>
+          </div>
+          <div
+            v-if="current.kind === 'manual' && contentSort !== 'manual'"
+            class="content-sort-hint"
+          >
+            当前按「{{ contentSortLabel }}」排序；切回「手动顺序」后可编辑排序。
+          </div>
+        </div>
 
         <!-- 一级收藏夹：只当分类，列出二级收藏夹卡片（不做混合素材墙） -->
         <div v-if="currentChildren.length" class="folder-list">
@@ -560,6 +739,46 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+/* 合集内容工具条：搜索/筛选/排序（纸面条，与首页索引条同一语言） */
+.content-filter-bar {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+}
+
+.content-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.content-filter-spacer {
+  flex: 1;
+}
+
+.content-sort-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+@media (max-width: 767px) {
+  .content-filter-row {
+    gap: 6px;
+  }
+
+  .content-filter-row .content-keyword {
+    width: 100% !important;
+  }
+
+  .content-filter-spacer {
+    display: none;
+  }
 }
 .remove-bar {
   display: flex;

@@ -174,6 +174,8 @@ class InspirationOut(BaseModel):
     trash_source: str | None = None  # 移入来源：manual（手动）/ auto（质量审核自动移动）
     created_at: datetime
     updated_at: datetime | None = None
+    # 收藏时间（2026-11-19 收藏增强）：最近一次「收藏」的时刻；未收藏为 null
+    favorited_at: datetime | None = None
     tags: list[InspirationTagOut] = []
     bloggers: list[BloggerBriefOut] = []  # 关联穿搭博主
     models: list[ModelBriefOut] = []  # 关联职业模特
@@ -181,7 +183,7 @@ class InspirationOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @field_serializer('created_at', 'updated_at', 'deleted_at')
+    @field_serializer('created_at', 'updated_at', 'deleted_at', 'favorited_at')
     def serialize_datetime(self, dt: datetime | None, _info: Any) -> str | None:
         return format_utc(dt)
 
@@ -271,6 +273,7 @@ def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
         trash_source=inspiration.trash_source,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
+        favorited_at=inspiration.favorited_at,
         tags=tags_out,
         bloggers=[BloggerBriefOut.model_validate(t.blogger) for t in inspiration.bloggers],
         models=[ModelBriefOut.model_validate(t.model) for t in inspiration.models],

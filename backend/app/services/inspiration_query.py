@@ -347,6 +347,14 @@ async def list_inspirations(
             func.coalesce(tag_count_sub.c.cnt, 0).desc(),
             Inspiration.created_at.desc(),
         )
+    elif sort == "favorite_time":
+        # 收藏时间倒序（最近收藏在前；未收藏 / 历史无收藏时间的排最后）。
+        # 供收藏中心与「按收藏时间」列表使用，索引见 ix_inspirations_favorite_time。
+        query = query.order_by(
+            case((Inspiration.favorited_at.is_(None), 1), else_=0).asc(),
+            Inspiration.favorited_at.desc(),
+            Inspiration.id.desc(),
+        )
     elif sort in RATING_SORTS:
         query = query.order_by(*rating_sort_clauses(sort))
     else:

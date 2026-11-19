@@ -15,7 +15,7 @@
 import json
 
 from fastapi import HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.collection import (
@@ -27,9 +27,12 @@ from app.models.collection import (
     CollectionItem,
 )
 from app.models.inspiration import Inspiration, NOT_DELETED
+from app.models.tag import InspirationTag, Tag
 from app.services.inspiration_query import (
     build_filters_from_query_json,
     inspiration_load_options,
+    rating_sort_clauses,
+    rating_sort_filter,
 )
 import logging
 
@@ -847,25 +850,126 @@ async def reorder_collections(db: AsyncSession, ordered_ids: list[int]) -> dict:
 
 # ── 合集内容查询 ──
 
+# 合集内容支持的排序：manual（手动合集按 position；智能合集不允许）/ newest / oldest /
+# rating / rating_asc
+COLLECTION_CONTENT_SORTS = ("manual", "newest", "oldest", "rating", "rating_asc")
+
+
+def _content_keyword_clause(keyword: str):
+    """合集内容关键词模糊：作者名 / 正文 caption / 标签名（与素材库搜索同风格）。"""
+    kw = keyword.strip()
+    matching_tag_ids = (
+        select(InspirationTag.inspiration_id)
+        .join(Tag, InspirationTag.tag_id == Tag.id)
+        .where(Tag.name.contains(kw))
+    )
+    return or_(
+        Inspiration.source_author.contains(kw),
+        Inspiration.caption.contains(kw),
+        Inspiration.id.in_(matching_tag_ids),
+    )
+
+
+def _content_filter_clauses(
+    *,
+    q: str | None,
+    media_type: str | None,
+    quality_status: str | None,
+    rating_min: int | None,
+    is_favorite: bool | None,
+) -> list:
+    """合集内容的附加筛选条件（手动/智能两条路径共用，口径与素材库列表一致）。"""
+    clauses = []
+    if q and q.strip():
+        clauses.append(_content_keyword_clause(q))
+    if media_type:
+        clauses.append(Inspiration.media_type == media_type)
+    if quality_status:
+        clauses.append(
+            func.coalesce(Inspiration.quality_status, "pending") == quality_status
+        )
+    if rating_min is not None:
+        clauses.append(Inspiration.rating >= rating_min)
+    if is_favorite is not None:
+        clauses.append(Inspiration.is_favorite == is_favorite)
+    return clauses
+
+
+def _apply_content_sort(query, sort: str):
+    """应用合集内容排序（只在非 manual 时调用；manual 由 base 查询自带 position 顺序）。"""
+    if sort == "newest":
+        return query.order_by(Inspiration.created_at.desc(), Inspiration.id.desc())
+    if sort == "oldest":
+        return query.order_by(Inspiration.created_at.asc(), Inspiration.id.asc())
+    if sort in ("rating", "rating_asc"):
+        rated_filter = rating_sort_filter(sort)  # rating_asc 只排已评分（同素材库口径）
+        if rated_filter is not None:
+            query = query.where(rated_filter)
+        return query.order_by(*rating_sort_clauses(sort))
+    return query
+
 
 async def list_collection_inspirations(
-    db: AsyncSession, collection_id: int, page: int = 1, size: int = 50
+    db: AsyncSession,
+    collection_id: int,
+    page: int = 1,
+    size: int = 50,
+    *,
+    q: str | None = None,
+    media_type: str | None = None,
+    quality_status: str | None = None,
+    rating_min: int | None = None,
+    is_favorite: bool | None = None,
+    sort: str | None = None,
 ) -> tuple[list[Inspiration], int]:
-    """查询合集内容（分页）：手动按 position 升序；智能按 query_json 动态求值。
+    """查询合集内容（分页）：支持关键词/类型/质量/评分/收藏筛选与排序。
 
-    均排除垃圾桶素材；智能合集求值复用素材库筛选逻辑（口径一致）。
+    排序默认值：
+    - 手动合集：``manual``（成员按 position 升序，这是用户拖拽编排的顺序）；
+    - 智能合集：``newest``（与素材库默认一致）。
+    显式传 ``sort="manual"`` 给智能合集返回 400（它没有实体成员顺序，静默回退会让
+    前端误以为按手动顺序展示）。
+
+    筛选在分页前应用（手动先过滤成员再分页；智能先按 query_json 求值再叠加筛选），
+    均排除垃圾桶素材。
     """
     collection = await get_collection(db, collection_id)
-    if collection.query_json is None:
+    is_smart = collection.query_json is not None
+    effective_sort = sort or ("newest" if is_smart else "manual")
+    if effective_sort not in COLLECTION_CONTENT_SORTS:
+        raise HTTPException(status_code=400, detail=f"不支持的排序方式：{effective_sort}")
+    if is_smart and effective_sort == "manual":
+        raise HTTPException(
+            status_code=400,
+            detail="智能合集不支持 manual 排序，请使用 newest/oldest/rating/rating_asc",
+        )
+
+    extra = _content_filter_clauses(
+        q=q,
+        media_type=media_type,
+        quality_status=quality_status,
+        rating_min=rating_min,
+        is_favorite=is_favorite,
+    )
+
+    if is_smart:
+        query = _smart_base_query(collection)
+        if extra:
+            query = query.where(*extra)
+        query = _apply_content_sort(query, effective_sort)
+    else:
         query = _manual_content_query(collection.id)
-        total = (
-            await db.execute(
-                select(func.count()).select_from(query.subquery())
-            )
-        ).scalar() or 0
-        result = await db.execute(query.offset((page - 1) * size).limit(size))
-        return result.unique().scalars().all(), total
-    return await evaluate_smart_collection(db, collection, page=page, size=size)
+        if extra:
+            query = query.where(*extra)
+        if effective_sort != "manual":
+            query = query.order_by(None)  # 去掉 base 的 position 排序再按新排序
+            query = _apply_content_sort(query, effective_sort)
+
+    total = (
+        await db.execute(select(func.count()).select_from(query.subquery()))
+    ).scalar() or 0
+    result = await db.execute(query.offset((page - 1) * size).limit(size))
+    return result.unique().scalars().all(), total
 
 
 # ── 固化（智能 → 手动）──

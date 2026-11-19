@@ -18,6 +18,9 @@ const props = defineProps<{
   total: number
   /** 是否处于「编辑排序」模式（决定显示「编辑排序」还是「保存 / 取消」） */
   ordering: boolean
+  /** 是否允许进入「编辑排序」：仅手动合集 + 手动顺序时允许；
+   *  按最新/评分等排序时视图会传 false，避免拖拽结果与当前展示顺序不一致 */
+  canOrder?: boolean
 }>()
 
 /** 系统收藏根只读：后端也会对 update/solidify/delete 返回 400 */
@@ -55,7 +58,12 @@ const emit = defineEmits<{
         </a-popconfirm>
       </template>
       <template v-else>
-        <a-button v-if="!ordering" size="small" @click="emit('enter-ordering')">编辑排序</a-button>
+        <a-button
+          v-if="!ordering && canOrder !== false"
+          size="small"
+          @click="emit('enter-ordering')"
+          >编辑排序</a-button
+        >
         <template v-else>
           <a-button size="small" type="primary" @click="emit('save-order')">保存顺序</a-button>
           <a-button size="small" @click="emit('cancel-ordering')">取消排序</a-button>

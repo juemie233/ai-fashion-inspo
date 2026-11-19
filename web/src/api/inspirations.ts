@@ -43,6 +43,8 @@ export interface InspirationOut {
   deleted_at?: string | null
   trash_reason?: TrashReason | null
   trash_source?: TrashSource | null
+  /** 最近一次收藏时间（未收藏为 null；收藏中心与合集工具条用） */
+  favorited_at?: string | null
   created_at: string
   updated_at?: string | null
   tags: InspirationTagOut[]

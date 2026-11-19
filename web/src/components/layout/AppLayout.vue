@@ -24,6 +24,7 @@ import {
   IconSafe,
   IconBarChart,
   IconBookmark,
+  IconStar,
 } from '@arco-design/web-vue/es/icon'
 import SchemaVersionBanner from './SchemaVersionBanner.vue'
 import { useUiStore } from '@/stores/ui'
@@ -106,6 +107,7 @@ const currentSection = computed(() => (route.meta.title as string) || '工作台
           <a-menu-item key="model-photos"><IconCamera />添加模特照片</a-menu-item>
           <a-menu-item key="search"><IconSearch />高级搜索</a-menu-item>
           <a-menu-item key="collections"><IconBookmark />收藏合集</a-menu-item>
+          <a-menu-item key="favorites"><IconStar />收藏中心</a-menu-item>
         </a-menu-item-group>
         <a-menu-item-group title="管理">
           <a-menu-item key="tags"><IconTags />标签管理</a-menu-item>

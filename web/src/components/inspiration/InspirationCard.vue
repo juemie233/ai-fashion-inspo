@@ -15,6 +15,7 @@ import CategoryTag from './CategoryTag.vue'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
+import { formatDateTime } from '@/utils/format'
 import { openInspiration } from '@/utils/openInspiration'
 
 /** 悬停放大预览的触发阈值（毫秒）：鼠标停留在素材上超过该时长才弹出放大图 */
@@ -87,7 +88,9 @@ const hasCaption = computed(
   () =>
     Boolean(props.item.source_type && !props.item.is_ai_generated) ||
     Boolean(props.item.source_author) ||
-    displayTags().length > 0,
+    displayTags().length > 0 ||
+    // 收藏时间也是卡片说明的一部分（收藏中心用来交代「什么时候收藏的」）
+    Boolean(props.item.favorited_at),
 )
 
 /** 分析状态标签 */
@@ -341,6 +344,11 @@ function openDetail() {
         >
           {{ tag.name }}
         </CategoryTag>
+      </div>
+
+      <!-- 收藏时间：收藏中心/收藏合集里交代「什么时候收藏的」 -->
+      <div v-if="item.favorited_at" class="favorited-at">
+        收藏于 {{ formatDateTime(item.favorited_at) }}
       </div>
     </div>
   </div>
@@ -759,5 +767,15 @@ function openDetail() {
 
 .quality-badge.pending :deep(.status-badge) {
   background: rgba(28, 32, 30, 0.55) !important;
+}
+
+/* 收藏时间：等宽数字 + 弱墨，不抢样张 */
+.favorited-at {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--ink-3);
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums lining-nums;
+  white-space: nowrap;
 }
 </style>

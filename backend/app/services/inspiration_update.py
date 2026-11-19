@@ -4,9 +4,61 @@ from fastapi import HTTPException
 from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.inspiration import Inspiration, NOT_DELETED, utcnow
+from app.models.inspiration import (
+    FavoriteEvent,
+    Inspiration,
+    NOT_DELETED,
+    utcnow,
+)
 from app.schemas.inspiration import InspirationUpdate
 from app.services.inspiration_query import inspiration_load_options
+
+# 收藏事件来源（favorite_events.source）：
+# web = 单条 PATCH；batch = 批量收藏/批量编辑；api = 其它程序入口；legacy = 迁移回填
+FAVORITE_SOURCE_WEB = "web"
+FAVORITE_SOURCE_BATCH = "batch"
+
+
+def _record_favorite_change(
+    db: AsyncSession,
+    inspiration: Inspiration,
+    is_favorite: bool,
+    *,
+    source: str,
+) -> bool:
+    """按**真实状态变化**维护 is_favorite / favorited_at 并写一条收藏事件。
+
+    幂等：已收藏再收藏、未收藏再取消都不写事件、不动时间，返回 False。
+    只加对象、不 commit（由调用方统一提交，保证「状态 + 事件」同事务）。
+
+    Args:
+        db: 数据库会话。
+        inspiration: 素材 ORM 对象（须已有 id）。
+        is_favorite: 目标收藏状态。
+        source: 事件来源（web/batch/api）。
+
+    Returns:
+        是否发生了真实状态变化。
+    """
+    current = bool(inspiration.is_favorite)
+    if current == is_favorite:
+        return False
+    if is_favorite:
+        inspiration.is_favorite = True
+        inspiration.favorited_at = utcnow()
+        action = "favorite"
+    else:
+        inspiration.is_favorite = False
+        inspiration.favorited_at = None
+        action = "unfavorite"
+    db.add(
+        FavoriteEvent(
+            inspiration_id=inspiration.id,
+            action=action,
+            source=source,
+        )
+    )
+    return True
 
 
 async def update_inspiration(
@@ -34,7 +86,10 @@ async def update_inspiration(
         )
 
     if data.is_favorite is not None:
-        inspiration.is_favorite = data.is_favorite
+        # 收藏状态变化才写 favorited_at 与事件（单条接口来源 web）
+        _record_favorite_change(
+            db, inspiration, data.is_favorite, source=FAVORITE_SOURCE_WEB
+        )
     if data.rating is not None:
         inspiration.rating = data.rating
     if data.source_author is not None:
@@ -73,21 +128,32 @@ async def batch_favorite_inspirations(
     inspiration_ids: list[str],
     is_favorite: bool,
 ) -> int:
-    """批量设置素材收藏状态，返回实际更新的行数。
+    """批量设置素材收藏状态，返回**实际发生状态变化**的行数。
 
-    仅作用于未删除素材；已删除/不存在的 ID 被静默忽略。先按 Set/dict 保序去重，
+    仅作用于未删除素材；已删除/不存在的 ID 被静默忽略。先按 dict 保序去重，
     避免重复 ID 撑大 IN 列表（前端全选 + 手动追加时可能出现重复）。
+    只有真实变化才写 favorited_at 与 favorite_events（重复收藏/取消幂等），
+    事件 source=batch。
     """
     unique_ids = list(dict.fromkeys(inspiration_ids))
     if not unique_ids:
         return 0
-    result = await db.execute(
-        update(Inspiration)
-        .where(Inspiration.id.in_(unique_ids), NOT_DELETED)
-        .values(is_favorite=is_favorite, updated_at=utcnow())
-    )
-    await db.commit()
-    return result.rowcount
+    rows = (
+        await db.execute(
+            select(Inspiration).where(
+                Inspiration.id.in_(unique_ids), NOT_DELETED
+            )
+        )
+    ).unique().scalars().all()
+    changed = 0
+    for inspiration in rows:
+        if _record_favorite_change(
+            db, inspiration, is_favorite, source=FAVORITE_SOURCE_BATCH
+        ):
+            changed += 1
+    if changed:
+        await db.commit()
+    return changed
 
 
 async def batch_update_inspirations(
@@ -107,8 +173,6 @@ async def batch_update_inspirations(
     values: dict = {"updated_at": utcnow()}
     if source_type is not None:
         values["source_type"] = source_type
-    if is_favorite is not None:
-        values["is_favorite"] = is_favorite
     if rating is not None:
         values["rating"] = rating
     if is_ai_generated is not None:
@@ -129,12 +193,35 @@ async def batch_update_inspirations(
         values["quality_reason"] = None
         values["quality_reason_code"] = None
 
-    if len(values) == 1:  # 仅 updated_at，无任何业务字段
+    if len(values) == 1 and is_favorite is None:  # 仅 updated_at，无任何业务字段
         return 0
 
     unique_ids = list(dict.fromkeys(inspiration_ids))
     if not unique_ids:
         return 0
+
+    # 收藏必须逐行判断真实变化（才能维护 favorited_at 并写事件），不能无差别 UPDATE
+    favorite_changed = 0
+    if is_favorite is not None:
+        favorite_rows = (
+            await db.execute(
+                select(Inspiration).where(
+                    Inspiration.id.in_(unique_ids), NOT_DELETED
+                )
+            )
+        ).unique().scalars().all()
+        for inspiration in favorite_rows:
+            if _record_favorite_change(
+                db, inspiration, is_favorite, source=FAVORITE_SOURCE_BATCH
+            ):
+                favorite_changed += 1
+
+    if len(values) == 1:
+        # 只有 is_favorite：由上面的逐行逻辑完成，无需再执行整批 UPDATE
+        if favorite_changed:
+            await db.commit()
+        return favorite_changed
+
     result = await db.execute(
         update(Inspiration)
         .where(Inspiration.id.in_(unique_ids), NOT_DELETED)
