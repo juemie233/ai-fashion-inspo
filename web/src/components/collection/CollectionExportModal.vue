@@ -43,6 +43,8 @@ const format = ref<CollectionExportFormat>('pdf')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const result = ref<CollectionExportResult | null>(null)
+/** 生成请求序号：切换合集后旧请求的结果直接丢弃（否则会下载到上一个合集的导出文件） */
+let requestSeq = 0
 
 const sizeText = computed(() => (result.value ? formatSize(result.value.size_bytes) : '-'))
 const expiresText = computed(() => (result.value ? formatDateTime(result.value.expires_at) : '-'))
@@ -59,6 +61,17 @@ watch(
   },
 )
 
+// 合集被切换（弹窗未关或重新打开另一个合集）：作废在飞的请求并清掉旧结果
+watch(
+  () => props.collectionId,
+  () => {
+    requestSeq++
+    loading.value = false
+    error.value = null
+    result.value = null
+  },
+)
+
 function pickFormat(value: CollectionExportFormat): void {
   if (loading.value) return
   format.value = value
@@ -69,16 +82,21 @@ function pickFormat(value: CollectionExportFormat): void {
 
 async function generate(): Promise<void> {
   if (!props.collectionId || loading.value) return
+  const seq = ++requestSeq
   loading.value = true
   error.value = null
   result.value = null
   try {
-    result.value = await exportCollection(props.collectionId, format.value)
+    const data = await exportCollection(props.collectionId, format.value)
+    // 期间切换了合集/关闭弹窗：结果作废，避免把 A 的文件展示成 B 的
+    if (seq !== requestSeq) return
+    result.value = data
   } catch (e) {
+    if (seq !== requestSeq) return
     // 失败显式报错（常见：文件缺失过多、磁盘空间不足、素材超过 500 张）
     error.value = getApiErrorMessage(e, '生成导出文件失败')
   } finally {
-    loading.value = false
+    if (seq === requestSeq) loading.value = false
   }
 }
 

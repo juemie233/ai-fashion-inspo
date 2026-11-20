@@ -275,3 +275,34 @@ async def test_export_cleanup_old_exports_on_create(client, upload):
 
     _export_ok(client, collection_id, "csv")
     assert not old_meta.parent.exists()
+
+
+async def test_export_pdf_skips_unreadable_and_keeps_valid(client, upload):
+    """PDF 逐张渲染：不可读素材计入 skipped，不影响其余图片嵌入（不再整批解码）。"""
+    present = _upload(client, upload)
+    collection_id = _create_collection(client, "PDF 跳过")
+    _add_members(client, collection_id, [present])
+    await _seed_missing_member(collection_id, "missing-pdf")
+
+    data = _export_ok(client, collection_id, "pdf")
+    assert data["item_count"] == 1
+    assert data["skipped_count"] == 1
+    download = client.get(data["download_url"])
+    assert download.status_code == 200
+    assert download.content.startswith(b"%PDF")
+
+
+async def test_export_broken_meta_does_not_break_download_or_cleanup(client, upload):
+    """meta.json 字段类型损坏：下载 404（不是 500），之后的生成导出也不受影响。"""
+    collection_id = _create_collection(client, "坏 meta")
+    _add_members(client, collection_id, [_upload(client, upload)])
+    data = _export_ok(client, collection_id, "csv")
+
+    meta_path = settings.storage_root / "exports" / data["token"] / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["expires_at"] = 123  # 非字符串：fromisoformat 会抛 TypeError
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    assert client.get(data["download_url"]).status_code == 404
+    # 清理函数扫到坏 meta 也不能抛错，否则之后每次生成导出都 500
+    assert _export(client, collection_id, "csv").status_code == 200

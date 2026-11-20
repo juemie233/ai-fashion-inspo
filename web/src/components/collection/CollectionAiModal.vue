@@ -8,7 +8,7 @@
  * - 分组缩略图可点进素材详情；失败显式报错并可重试。
  */
 
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import {
@@ -44,6 +44,10 @@ const result = ref<CollectionAiSummaryOut | null>(null)
 /** 正在采用的候选名下标（-1 = 无） */
 const adoptingName = ref(-1)
 const applyingDescription = ref(false)
+/** 生成请求序号：切换合集后旧请求的结果直接丢弃（否则新合集弹窗里显示上一个合集的结果） */
+let requestSeq = 0
+/** 抖音同步合集的名称由同步流程维护，后端改名固定 400 → 候选名只展示不可采用 */
+const canRename = computed(() => !props.collection?.auto_source)
 
 watch(
   () => props.visible,
@@ -58,18 +62,35 @@ watch(
   },
 )
 
+// 合集被切换（弹窗没关或重新打开另一个合集）：作废在飞的请求并清掉旧结果
+watch(
+  () => props.collection?.id,
+  () => {
+    requestSeq++
+    loading.value = false
+    error.value = null
+    result.value = null
+    adoptingName.value = -1
+    applyingDescription.value = false
+  },
+)
+
 async function generate(): Promise<void> {
   const current = props.collection
   if (!current || loading.value) return
+  const seq = ++requestSeq
   loading.value = true
   error.value = null
   result.value = null
   try {
-    result.value = await aiSummarizeCollection(current.id)
+    const data = await aiSummarizeCollection(current.id)
+    if (seq !== requestSeq) return
+    result.value = data
   } catch (e) {
+    if (seq !== requestSeq) return
     error.value = getApiErrorMessage(e, 'AI 整理生成失败，请确认本地模型服务后重试')
   } finally {
-    loading.value = false
+    if (seq === requestSeq) loading.value = false
   }
 }
 
@@ -77,6 +98,10 @@ async function generate(): Promise<void> {
 async function adoptName(name: string, index: number): Promise<void> {
   const current = props.collection
   if (!current || adoptingName.value !== -1) return
+  if (!canRename.value) {
+    Message.warning('抖音同步合集的名称由同步流程维护，不能改名；可只采用描述')
+    return
+  }
   adoptingName.value = index
   try {
     await updateCollection(current.id, { name })
@@ -177,7 +202,9 @@ function openGroupItem(item: CollectionAiGroupItem): void {
       <section class="ai-section">
         <div class="ai-section-head">
           <h3>候选名称</h3>
-          <span class="ai-section-hint">点「采用」才会改名</span>
+          <span class="ai-section-hint">
+            {{ canRename ? '点「采用」才会改名' : '抖音同步合集名称不可修改，仅可参考' }}
+          </span>
         </div>
         <div class="name-list">
           <div v-for="(name, index) in result.name_suggestions" :key="name" class="name-row">
@@ -185,7 +212,7 @@ function openGroupItem(item: CollectionAiGroupItem): void {
             <a-button
               size="mini"
               :loading="adoptingName === index"
-              :disabled="adoptingName !== -1"
+              :disabled="adoptingName !== -1 || !canRename"
               @click="() => void adoptName(name, index)"
             >
               采用

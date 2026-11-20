@@ -236,3 +236,37 @@ async def test_ai_summary_no_tags_falls_back_to_color_or_rating(client, monkeypa
     ).json()
     assert len(rating_data["groups"]) == 1
     assert rating_data["groups"][0]["tag"] == "高评分"
+
+
+def test_build_prompt_keeps_json_instructions_when_truncated():
+    """超长素材行时只截素材区：末尾「只输出 JSON」的格式要求必须完整保留。
+
+    此前按总长度从尾部截断，正好把格式要求切掉，模型返回散文 → 全量退化为规则兜底。
+    """
+    from types import SimpleNamespace
+
+    collection = SimpleNamespace(name="长名字" * 40)
+    items = [
+        SimpleNamespace(
+            id=f"id-{index}",
+            caption="超长标题" * 40,
+            file_path=f"images/{index}.jpg",
+            source_author="作者" * 20,
+            tags=[],
+            dominant_colors=None,
+            rating=3,
+            source_type="manual_upload",
+        )
+        for index in range(80)
+    ]
+    groups = [
+        {"tag": f"tag{index}", "count": 10, "item_ids": [f"id-{index}"]}
+        for index in range(5)
+    ]
+
+    prompt = collection_ai_service._build_prompt(collection, items, groups)
+
+    assert len(prompt) <= collection_ai_service.MAX_PROMPT_CHARS
+    assert "只输出 JSON" in prompt
+    # 结尾必须是 JSON 模板，而不是被截断的半句话
+    assert prompt.rstrip().endswith("]}")

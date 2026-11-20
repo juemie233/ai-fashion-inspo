@@ -20,7 +20,8 @@ import re
 import secrets
 import shutil
 import zipfile
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -70,6 +71,19 @@ PDF_PAGE_W, PDF_PAGE_H = 794, 1123
 PDF_MARGIN = 36
 PDF_GAP = 16
 PDF_CAPTION_H = 64
+
+
+@dataclass(frozen=True)
+class ExportCollection:
+    """导出所需的合集快照。
+
+    为什么要快照：生成 PDF/ZIP 可能跑几分钟，期间必须结束只读事务、释放数据库连接
+    （见 ``create_export``）。会话一旦回滚，ORM 对象属性就失效，所以先把标量字段拷出来。
+    """
+
+    id: int
+    name: str
+    is_smart: bool
 _PDF_FONT_CANDIDATES = (
     "C:/Windows/Fonts/msyh.ttc",
     "C:/Windows/Fonts/msyhbd.ttc",
@@ -155,9 +169,9 @@ def _csv_bytes(rows: list[dict]) -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
-def _markdown_bytes(collection, rows: list[dict]) -> bytes:
+def _markdown_bytes(collection: ExportCollection, rows: list[dict]) -> bytes:
     """Markdown：合集元信息 + 条目列表（序号/作者/标签/原链接/本地路径）。"""
-    kind = "智能合集" if collection.query_json else "手动合集"
+    kind = "智能合集" if collection.is_smart else "手动合集"
     lines = [
         f"# {collection.name}",
         "",
@@ -248,65 +262,43 @@ def _truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _pdf_bytes(collection, rows: list[dict]) -> tuple[bytes, int, int]:
+def _pdf_bytes(collection: ExportCollection, rows: list[dict]) -> tuple[bytes, int, int]:
     """Pillow 生成 PDF：封面 + 每页 2×2 网格（图片等比裁剪并编号/作者/标签）。
 
     在调用方线程池里执行（读图/缩放/编码是阻塞 CPU/IO）。
     返回 (pdf 字节, 成功嵌入图片数, 跳过数)。
+
+    内存口径：**攒满 4 张就渲染一页并立刻关闭原图**，不在内存里堆全集合图片。
+    此前先把 500 张全解码再排版，300 张大图就能占掉数 GB（worker 会被 OOM 杀掉）。
     """
     title_font = _load_pdf_font(46)
     meta_font = _load_pdf_font(22)
     caption_font = _load_pdf_font(18)
     small_font = _load_pdf_font(16)
 
-    # 1) 先按顺序加载可嵌入的图片（视频/缺失/损坏 → skipped）
-    loaded: list[tuple[dict, Image.Image]] = []
-    skipped = 0
-    for row in rows:
-        source = _resolve_storage_file(row["相对路径"])
-        if source is None or source.suffix.lower() not in _PDF_EXTENSIONS:
-            skipped += 1
-            continue
-        try:
-            with Image.open(source) as raw:
-                loaded.append((row, raw.convert("RGB").copy()))
-        except (OSError, ValueError) as exc:
-            logger.warning("PDF 导出跳过无法解码的图片 %s：%s", source, exc)
-            skipped += 1
-
-    pages: list[Image.Image] = []
-
-    # 2) 封面：标题 + 元信息 + 数量（无可用图片也出封面，保证格式合法）
-    cover = Image.new("RGB", (PDF_PAGE_W, PDF_PAGE_H), "white")
-    draw = ImageDraw.Draw(cover)
-    _draw_text(draw, (PDF_MARGIN + 8, 220), _truncate(collection.name, 24), title_font)
-    kind = "智能合集" if collection.query_json else "手动合集"
-    _draw_text(draw, (PDF_MARGIN + 8, 300), f"{kind} · 导出时间 {format_utc(utcnow())}", meta_font)
-    _draw_text(draw, (PDF_MARGIN + 8, 340), f"共 {len(loaded)} 张图片 · {len(rows)} 条素材", meta_font)
-    _draw_text(
-        draw,
-        (PDF_MARGIN + 8, PDF_PAGE_H - 80),
-        "由 AI 穿搭素材库导出",
-        small_font,
-    )
-    pages.append(cover)
-
-    # 3) 2×2 网格页：图片等比裁剪 + 下方编号/作者/标签
     columns = 2
     cell_w = (PDF_PAGE_W - 2 * PDF_MARGIN - PDF_GAP) // columns
     cell_h = (PDF_PAGE_H - 2 * PDF_MARGIN - PDF_GAP) // 2
     image_w = cell_w
     image_h = cell_h - PDF_CAPTION_H
-    for start in range(0, len(loaded), 4):
+
+    pages: list[Image.Image] = []
+    embedded = 0
+    skipped = 0
+
+    def render_page(batch: list[tuple[dict, Image.Image]]) -> None:
+        """把一批（≤4 张）图片排版成一页，随即关闭原图释放内存。"""
+        nonlocal embedded
         page = Image.new("RGB", (PDF_PAGE_W, PDF_PAGE_H), "white")
         page_draw = ImageDraw.Draw(page)
-        for offset, (row, image) in enumerate(loaded[start : start + 4]):
+        for offset, (row, image) in enumerate(batch):
             column = offset % columns
             line = offset // columns
             x = PDF_MARGIN + column * (cell_w + PDF_GAP)
             y = PDF_MARGIN + line * (cell_h + PDF_GAP)
             fitted = ImageOps.fit(image, (image_w, image_h), centering=(0.5, 0.5))
             page.paste(fitted, (x, y))
+            fitted.close()
             _draw_text(
                 page_draw,
                 (x, y + image_h + 4),
@@ -320,7 +312,49 @@ def _pdf_bytes(collection, rows: list[dict]) -> tuple[bytes, int, int]:
                 small_font,
                 fill="#666666",
             )
+        for _, image in batch:
+            image.close()
         pages.append(page)
+        embedded += len(batch)
+
+    # 1) 逐张解码并分批排版（视频/缺失/损坏 → skipped）
+    batch: list[tuple[dict, Image.Image]] = []
+    for row in rows:
+        source = _resolve_storage_file(row["相对路径"])
+        if source is None or source.suffix.lower() not in _PDF_EXTENSIONS:
+            skipped += 1
+            continue
+        try:
+            with Image.open(source) as raw:
+                # JPEG 可直接按目标尺寸解码（内存降一个数量级）；其它格式是 no-op
+                raw.draft("RGB", (image_w * 2, image_h * 2))
+                image = raw.convert("RGB")
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
+            # DecompressionBombError 不是 OSError 子类：单张超大图不能拖垮整个导出
+            logger.warning("PDF 导出跳过无法解码的图片 %s：%s", source, exc)
+            skipped += 1
+            continue
+        batch.append((row, image))
+        if len(batch) == 4:
+            render_page(batch)
+            batch = []
+    if batch:
+        render_page(batch)
+
+    # 2) 封面：标题 + 元信息 + 数量（无可用图片也出封面，保证格式合法）
+    cover = Image.new("RGB", (PDF_PAGE_W, PDF_PAGE_H), "white")
+    draw = ImageDraw.Draw(cover)
+    _draw_text(draw, (PDF_MARGIN + 8, 220), _truncate(collection.name, 24), title_font)
+    kind = "智能合集" if collection.is_smart else "手动合集"
+    _draw_text(draw, (PDF_MARGIN + 8, 300), f"{kind} · 导出时间 {format_utc(utcnow())}", meta_font)
+    _draw_text(draw, (PDF_MARGIN + 8, 340), f"共 {embedded} 张图片 · {len(rows)} 条素材", meta_font)
+    _draw_text(
+        draw,
+        (PDF_MARGIN + 8, PDF_PAGE_H - 80),
+        "由 AI 穿搭素材库导出",
+        small_font,
+    )
+    pages.insert(0, cover)
 
     buffer = io.BytesIO()
     pages[0].save(
@@ -330,9 +364,9 @@ def _pdf_bytes(collection, rows: list[dict]) -> tuple[bytes, int, int]:
         save_all=True,
         append_images=pages[1:],
     )
-    for _, image in loaded:
-        image.close()
-    return buffer.getvalue(), len(loaded), skipped
+    for page in pages:
+        page.close()
+    return buffer.getvalue(), embedded, skipped
 
 
 def _cleanup_expired_exports() -> int:
@@ -350,14 +384,17 @@ def _cleanup_expired_exports() -> int:
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 expires_at = datetime.fromisoformat(meta["expires_at"])
-            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                # TypeError：meta 里 expires_at 不是字符串（None/数字）时 fromisoformat 会抛；
+                # 不兜住会让清理函数每次生成导出都 500
                 expires_at = None
         if expires_at is None:
-            # 没有 meta（中断的残留）按目录修改时间判断
+            # 没有 meta（中断的残留）按目录修改时间判断。
+            # mtime 用 UTC 口径取，才能和 utcnow() 比较（本地时区会差 8 小时）
             try:
-                expires_at = datetime.fromtimestamp(entry.stat().st_mtime) + timedelta(
-                    hours=EXPORT_TTL_HOURS
-                )
+                expires_at = datetime.fromtimestamp(
+                    entry.stat().st_mtime, tz=UTC
+                ).replace(tzinfo=None) + timedelta(hours=EXPORT_TTL_HOURS)
             except OSError as exc:
                 logger.debug("导出目录 mtime 读取失败，跳过清理 %s：%s", entry, exc)
                 continue
@@ -370,13 +407,13 @@ def _cleanup_expired_exports() -> int:
     return removed
 
 
-def _display_filename(collection, fmt: str) -> str:
+def _display_filename(collection: ExportCollection, fmt: str) -> str:
     """展示用文件名（保留合集名，中文可用；下载头另用英文安全名）。"""
     date = utcnow().strftime("%Y%m%d")
     return f"{_sanitize_name(collection.name, f'collection-{collection.id}')}_{date}.{FORMAT_EXT[fmt]}"
 
 
-def _download_filename(collection, fmt: str) -> str:
+def _download_filename(collection: ExportCollection, fmt: str) -> str:
     """Content-Disposition 用安全英文文件名（不含中文/空格）。"""
     date = utcnow().strftime("%Y%m%d")
     return f"collection-{collection.id}-{fmt}-{date}.{FORMAT_EXT[fmt]}"
@@ -413,13 +450,23 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
     items = items[:MAX_EXPORT_ITEMS]
     rows = _build_rows(items)
 
+    # 快照合集字段并结束只读事务、释放数据库连接：下面进入几十秒到 10 分钟的文件生成
+    # （PDF 尤其慢），一直占着连接会让并发导出/其它请求排队。回滚后 ORM 对象失效，
+    # 所以上面必须先把要用的标量字段拷进快照。
+    snapshot = ExportCollection(
+        id=collection.id,
+        name=collection.name,
+        is_smart=collection.query_json is not None,
+    )
+    await db.rollback()
+
     token = secrets.token_urlsafe(24)
     export_dir = exports_root() / token
     stored_name = f"export.{FORMAT_EXT[export_format]}"
     try:
         export_dir.mkdir(parents=True, exist_ok=False)
         manifest_csv = _csv_bytes(rows)
-        readme_md = _markdown_bytes(collection, rows)
+        readme_md = _markdown_bytes(snapshot, rows)
         if export_format == "csv":
             content = manifest_csv
             item_count, skipped = len(rows), 0
@@ -432,18 +479,18 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
             )
         else:  # pdf
             content, item_count, skipped = await asyncio.to_thread(
-                _pdf_bytes, collection, rows
+                _pdf_bytes, snapshot, rows
             )
         await asyncio.to_thread((export_dir / stored_name).write_bytes, content)
 
         expires_at = utcnow() + timedelta(hours=EXPORT_TTL_HOURS)
         meta = {
-            "collection_id": collection.id,
-            "collection_name": collection.name,
+            "collection_id": snapshot.id,
+            "collection_name": snapshot.name,
             "format": export_format,
             "stored_file": stored_name,
-            "filename": _display_filename(collection, export_format),
-            "download_filename": _download_filename(collection, export_format),
+            "filename": _display_filename(snapshot, export_format),
+            "download_filename": _download_filename(snapshot, export_format),
             "item_count": item_count,
             "skipped_count": skipped,
             "size_bytes": len(content),
@@ -486,15 +533,21 @@ def get_export_file(token: str) -> tuple[Path, dict]:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         expires_at = datetime.fromisoformat(meta["expires_at"])
         stored_name = meta["stored_file"]
-    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         raise HTTPException(
             status_code=404, detail="导出文件不存在或已过期"
         ) from None
     if utcnow() >= expires_at:
         shutil.rmtree(export_dir, ignore_errors=True)
         raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
-    # stored_name 只允许单层文件名（meta 正常由本服务写入；仍按安全字符校验）
-    if "/" in stored_name or "\\" in stored_name or stored_name.startswith("."):
+    # stored_name 只允许单层文件名（meta 正常由本服务写入；仍按安全字符校验）。
+    # 先校验类型：meta 被写坏时 stored_file 可能是数字/None，直接 in 会抛 TypeError
+    if (
+        not isinstance(stored_name, str)
+        or "/" in stored_name
+        or "\\" in stored_name
+        or stored_name.startswith(".")
+    ):
         raise HTTPException(status_code=404, detail="导出文件不存在或已过期")
     file_path = (export_dir / stored_name).resolve()
     try:

@@ -132,3 +132,29 @@ describe('CollectionExportModal', () => {
     expect(document.body.textContent).toContain('生成导出文件')
   })
 })
+
+describe('CollectionExportModal 切换合集', () => {
+  it('切换合集后旧生成请求的结果被丢弃，不会展示上一个合集的文件', async () => {
+    let resolveFirst!: (value: unknown) => void
+    mocks.exportCollection.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve
+        }),
+    )
+    const wrapper = mountModal()
+    await flushPromises()
+
+    clickBodyButton('生成导出文件')
+    await flushPromises()
+
+    // 生成进行中切到另一个合集
+    await wrapper.setProps({ collectionId: 6, collectionName: '另一个合集' })
+    resolveFirst(RESULT)
+    await flushPromises()
+
+    const text = document.body.textContent ?? ''
+    expect(text).not.toContain(RESULT.filename)
+    expect(text).not.toContain('42')
+  })
+})

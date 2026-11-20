@@ -206,3 +206,35 @@ describe('CollectionAiModal', () => {
     expect(document.body.textContent).toContain('风格总结')
   })
 })
+
+describe('CollectionAiModal 抖音同步合集', () => {
+  const AUTO_COLLECTION: CollectionOut = {
+    ...COLLECTION,
+    id: 9,
+    name: '抖音收藏夹',
+    auto_source: 'douyin',
+  }
+
+  it('同步维护的合集不能改名：候选名「采用」禁用，并给出说明', async () => {
+    mount(CollectionAiModal, {
+      props: { visible: true, collection: AUTO_COLLECTION },
+      global: { plugins: [ArcoVue] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    clickBodyButton('开始生成')
+    await flushPromises()
+
+    const adoptButtons = [...document.body.querySelectorAll('button')].filter(
+      (b) => b.textContent?.trim() === '采用',
+    )
+    expect(adoptButtons.length).toBe(3)
+    expect(adoptButtons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true)
+    expect(document.body.textContent).toContain('抖音同步合集名称不可修改')
+
+    // 描述仍可采用（后端允许）
+    clickBodyButton('采用为合集描述')
+    await flushPromises()
+    expect(mocks.updateCollection).toHaveBeenCalledWith(9, { description: SUMMARY.summary })
+  })
+})

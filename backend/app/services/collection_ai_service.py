@@ -36,6 +36,8 @@ AI_MAX_THEME_TAGS_OUTPUT = 8
 AI_MIN_THEME_TAGS_OUTPUT = 5
 # AI 调用超时（秒）：本地 8B 模型 + 80 条文本提示，给足时间；失败/超时统一 503
 AI_TIMEOUT_SECONDS = 120.0
+# 提示词总长预算（字符）：超长时只截素材行，末尾「只输出 JSON」的格式要求必须保留
+MAX_PROMPT_CHARS = 14000
 
 
 def _tags_of(item) -> list[str]:
@@ -141,21 +143,27 @@ def _item_prompt_line(index: int, item) -> str:
 
 
 def _build_prompt(collection, items: list, groups: list[dict]) -> str:
-    """构造 Ollama 提示词：要求只输出 JSON（summary/名称/理由/主题标签/分组名）。"""
+    """构造 Ollama 提示词：要求只输出 JSON（summary/名称/理由/主题标签/分组名）。
+
+    截断策略：**输出格式要求固定在末尾且必须完整保留**。此前按总长度 `prompt[:14000]`
+    从尾部截断，素材行一长就把末尾的「只输出 JSON」切掉，模型改回散文、解析失败后
+    整段退化为规则兜底。现在先预留头/分组/要求的长度，只截素材行，并按整行截断。
+    """
     item_lines = [_item_prompt_line(index, item) for index, item in enumerate(items, 1)]
     group_lines = [
         f"- {group['tag']}（{group['count']} 条；示例 id：{', '.join(group['item_ids'][:6])}）"
         for group in groups
     ]
-    prompt = (
+
+    head = (
         "你是一个穿搭收藏整理助手。请根据合集内容与规则分组，生成整理预览结果。\n\n"
         f"合集名称：{collection.name}\n"
-        f"素材数量：{len(items)} 条（最多采样 80 条，下面为全部采样）\n\n"
+        f"素材数量：{len(items)} 条（最多采样 80 条；过长时末尾部分采样会被省略）\n\n"
         "素材采样：\n"
-        + "\n".join(item_lines)
-        + "\n\n规则分组（按标签词频；允许重叠）：\n"
-        + "\n".join(group_lines)
-        + "\n\n要求：\n"
+    )
+    groups_block = "\n\n规则分组（按标签词频；允许重叠）：\n" + "\n".join(group_lines)
+    tail = (
+        "\n\n要求：\n"
         "1. summary：用 1~2 句中文概括这个合集的穿搭主题/风格；\n"
         "2. name_suggestions：给合集起 3 个中文名称（简洁、可检索）；\n"
         "3. reason：用 1 句话说明这样命名/整理的理由；\n"
@@ -165,8 +173,13 @@ def _build_prompt(collection, items: list, groups: list[dict]) -> str:
         '{"summary": "...", "name_suggestions": ["a", "b", "c"], "reason": "...", '
         '"theme_tags": ["...", "..."], "groups": [{"tag": "分组tag", "name": "中文主题名"}]}'
     )
-    # 极端长文本的保护（80 条 × 约 150 字仍在预算内；这里再兜一层）
-    return prompt[:14000]
+
+    budget = MAX_PROMPT_CHARS - len(head) - len(groups_block) - len(tail)
+    body = "\n".join(item_lines)
+    if len(body) > budget:
+        # 按整行截断，避免把某条素材切成半行；预算为负时素材区留空
+        body = body[: max(0, budget)].rsplit("\n", 1)[0]
+    return head + body + groups_block + tail
 
 
 def _parse_ai_json(raw: str) -> dict:
