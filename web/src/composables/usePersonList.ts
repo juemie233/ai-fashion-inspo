@@ -314,7 +314,9 @@ export function usePersonList(kind: PersonKind) {
     {
       title: '人物',
       dataIndex: 'name',
-      minWidth: 110,
+      // 头像 + 网名必须单行；自动登记标签放到网名下方，避免挤占同一行宽度
+      width: 180,
+      minWidth: 160,
       render: ({ record }) => {
         const row = record as Person
         return h('div', { class: 'person-cell' }, [
@@ -338,21 +340,23 @@ export function usePersonList(kind: PersonKind) {
                 ]),
             },
           ),
-          h('span', { class: 'person-name' }, row.name),
-          // 「我的喜欢」入库时自动登记的博主：算素材归属但不算已登记博主（不进下载
-          // 白名单），列表里明确标出来，用户点「纳入追踪」后才开始抓主页作品
-          row.source === 'auto_collect'
-            ? h(
-                Tag,
-                {
-                  size: 'small',
-                  color: 'orange',
-                  title:
-                    '由「我的喜欢」采集自动登记；点「纳入追踪」后才会进「一键获取素材」的下载白名单',
-                },
-                { default: () => '自动登记' },
-              )
-            : null,
+          h('div', { class: 'person-meta' }, [
+            h('span', { class: 'person-name', title: row.name }, row.name),
+            // 「我的喜欢」入库时自动登记的博主：算素材归属但不算已登记博主（不进下载
+            // 白名单），列表里明确标出来，用户点「纳入追踪」后才开始抓主页作品
+            row.source === 'auto_collect'
+              ? h(
+                  Tag,
+                  {
+                    size: 'small',
+                    color: 'orange',
+                    title:
+                      '由「我的喜欢」采集自动登记；点「纳入追踪」后才会进「一键获取素材」的下载白名单',
+                  },
+                  { default: () => '自动登记' },
+                )
+              : null,
+          ]),
         ])
       },
     },

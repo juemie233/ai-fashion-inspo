@@ -479,6 +479,8 @@ function handleExpandedChange(keys: Array<string | number>) {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex-wrap: nowrap;
 }
 
 .avatar-icon {
@@ -488,7 +490,24 @@ function handleExpandedChange(keys: Array<string | number>) {
   fill: currentColor;
 }
 
+/* 名称与「自动登记」标签纵向排列：名称必须单行，超出省略；标签不挤占名称行 */
+.person-meta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
 .person-name {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 500;
 }
 

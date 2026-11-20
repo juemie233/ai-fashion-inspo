@@ -324,6 +324,29 @@ describe('usePersonList 作品评分（博主）', () => {
     expect(store.ratingMin).toBe(3)
   })
 
+  it('人物单元格：头像与网名同格，名称单行，自动登记标签单独一行', async () => {
+    const mod = await import('../usePersonList')
+    const { columns } = mod.usePersonList('blogger')
+    const column = columns.value.find((c) => c.title === '人物')!
+    expect(column.width).toBe(180)
+    expect(column.minWidth).toBe(160)
+
+    interface VNodeLike {
+      props: Record<string, unknown>
+      children: VNodeLike[]
+    }
+    const vnode = (column.render as unknown as (data: unknown) => VNodeLike)({
+      record: { id: 1, name: '一个比较长但必须单行显示的网名', source: 'auto_collect' },
+    })
+    expect(vnode.props.class).toBe('person-cell')
+    const meta = vnode.children[1]
+    expect(meta.props.class).toBe('person-meta')
+    // 名称和「自动登记」标签是纵向排列，不能把标签塞回 name 同一行
+    expect(meta.children[0].props.class).toBe('person-name')
+    expect(meta.children[0].props.title).toBe('一个比较长但必须单行显示的网名')
+    expect(meta.children[1]).toBeTruthy()
+  })
+
   it('评分排序/筛选选项只在博主端出现', async () => {
     const mod = await import('../usePersonList')
     const blogger = mod.usePersonList('blogger')
