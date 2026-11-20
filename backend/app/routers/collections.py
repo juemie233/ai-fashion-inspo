@@ -13,6 +13,7 @@ from app.database import get_db
 from app.schemas.collection import (
     CollectionCreate,
     CollectionUpdate,
+    CollectionExportRequest,
     AddInspirationsRequest,
     CollectionMergeRequest,
     CollectionTransferRequest,
@@ -21,7 +22,11 @@ from app.schemas.collection import (
     CollectionOut,
 )
 from app.schemas.inspiration import inspiration_to_out
-from app.services import collection_service
+from app.services import (
+    collection_ai_service,
+    collection_export_service,
+    collection_service,
+)
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 
@@ -227,6 +232,40 @@ async def reorder_collection_items(
     """
     return await collection_service.reorder_collection_items(
         db, collection_id, body.ordered_ids
+    )
+
+
+@router.post("/{collection_id}/ai-summary", status_code=status.HTTP_200_OK)
+async def generate_ai_summary(
+    collection_id: int, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """合集 AI 整理预览（规则分组 + Ollama 起名，**不写库**）。
+
+    - 采样最多 80 条素材；规则按标签词频取 ≤5 个主题标签分组（允许重叠，每组 ≤12 个
+      item_ids）；无标签时按主色/评分兜底 1 组；
+    - AI 生成 summary / 3 个名称建议 / 理由 / 5~8 个主题标签 / 每组中文主题名；
+      JSON 解析失败时分组名回退 tag，其余字段规则兜底；
+    - Ollama 超时/不可用返回 503 中文提示；空合集 400；
+    - 结果只供前端预览，由前端用现有 PATCH 应用名称/描述（不自动写入）。
+    """
+    return await collection_ai_service.generate_summary(db, collection_id)
+
+
+@router.post("/{collection_id}/exports", status_code=status.HTTP_200_OK)
+async def create_collection_export(
+    collection_id: int,
+    body: CollectionExportRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """生成合集导出（CSV / Markdown / ZIP / PDF），返回下载 token。
+
+    手动/智能合集均可；只导出未删除素材（垃圾桶排除）；空合集 400；
+    超过 500 条 400（提示分批）。文件保留 24 小时，生成前会清理过期导出。
+    响应字段：``{token, filename, format, item_count, skipped_count, size_bytes,
+    download_url, expires_at}``，下载地址固定为 ``/api/exports/{token}``。
+    """
+    return await collection_export_service.create_export(
+        db, collection_id, body.format
     )
 
 

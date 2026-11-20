@@ -10,6 +10,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
+import CollectionExportModal from '@/components/collection/CollectionExportModal.vue'
+import CollectionAiModal from '@/components/collection/CollectionAiModal.vue'
 import CollectionOrderingStrip from '@/components/collection/CollectionOrderingStrip.vue'
 import CollectionSidebar from '@/components/collection/CollectionSidebar.vue'
 import CollectionTargetPickerModal from '@/components/collection/CollectionTargetPickerModal.vue'
@@ -241,10 +243,31 @@ async function loadContent() {
   }
 }
 
+// ── 导出 / AI 整理弹窗（P2）──
+
+const exportOpen = ref(false)
+const aiOpen = ref(false)
+
+function openExport(): void {
+  exportOpen.value = true
+}
+
+function openAi(): void {
+  aiOpen.value = true
+}
+
+/** AI 采用了候选名/描述：刷新合集列表（侧栏与当前标题都跟着变） */
+function handleAiApplied(): void {
+  void loadCollections()
+}
+
 watch(currentId, () => {
   page.value = 1
   exitBatchMode()
   ordering.value = false
+  // 切合集时关掉上一合集打开的导出/AI 弹窗，避免在错误的合集上操作
+  exportOpen.value = false
+  aiOpen.value = false
   resetContentFilters()
   loadContent()
 })
@@ -516,6 +539,8 @@ onMounted(() => {
           @rename="openRename"
           @delete="confirmDelete"
           @merge="openMerge"
+          @export="openExport"
+          @ai="openAi"
         />
 
         <!-- 智能合集条件摘要 -->
@@ -793,6 +818,16 @@ onMounted(() => {
       :submitting="mergeSubmitting"
       @confirm="confirmMerge"
     />
+
+    <!-- 导出合集（PDF/ZIP/CSV/Markdown，文件 24h 过期） -->
+    <CollectionExportModal
+      v-model:visible="exportOpen"
+      :collection-id="current?.id ?? null"
+      :collection-name="current?.name"
+    />
+
+    <!-- AI 整理预览（手动开始生成；采用名称/描述后才写回合集） -->
+    <CollectionAiModal v-model:visible="aiOpen" :collection="current" @applied="handleAiApplied" />
   </div>
 </template>
 

@@ -162,6 +162,8 @@ def clean_state(client):
         # 出图候选目录 generated/<run_id>/：generation_runs 清表后 run id 会从头复用，
         # 不一起清会让上一用例的候选图出现在新用例同 id 的批次里（seed 断言串味）
         settings.storage_root / "generated",
+        # 合集导出产物（2026-11-20 P2）：token 目录按用例隔离，避免跨用例残留
+        settings.storage_root / "exports",
         settings.lancedb_dir,  # 向量库（LanceDB 落盘目录，含 .text-formula-version 标记）
     ]:
         if dir_path.exists():

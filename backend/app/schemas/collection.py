@@ -77,6 +77,12 @@ class CollectionMergeRequest(BaseModel):
     source_ids: list[int] = Field(min_length=1, max_length=20)
 
 
+class CollectionExportRequest(BaseModel):
+    """合集导出请求体（2026-11-20 P2）：四格式 CSV / Markdown / ZIP / PDF。"""
+
+    format: Literal["pdf", "zip", "csv", "markdown"]
+
+
 class ItemReorderRequest(BaseModel):
     """合集内成员拖拽排序的请求体（按新顺序提交全部成员 ID）。"""
 

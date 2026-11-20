@@ -74,4 +74,19 @@ describe('CollectionContentHeader 系统收藏根', () => {
     const system = mountHeader(collection({ kind: 'manual', name: '系统入库手动收藏' }))
     expect(system.findAll('button').some((b) => b.text().includes('合并到…'))).toBe(false)
   })
+
+  it('导出对所有合集可见；AI 整理对系统收藏根隐藏', () => {
+    const manual = mountHeader(collection({ kind: 'manual' }))
+    expect(manual.findAll('button').some((b) => b.text() === '导出')).toBe(true)
+    expect(manual.findAll('button').some((b) => b.text() === 'AI 整理')).toBe(true)
+
+    const smart = mountHeader(collection({ kind: 'smart' }))
+    expect(smart.findAll('button').some((b) => b.text() === '导出')).toBe(true)
+    expect(smart.findAll('button').some((b) => b.text() === 'AI 整理')).toBe(true)
+
+    // 系统收藏根只读：可导出带走，但不做 AI 整理/改名
+    const system = mountHeader(collection({ kind: 'manual', name: '系统入库手动收藏' }))
+    expect(system.findAll('button').some((b) => b.text() === '导出')).toBe(true)
+    expect(system.findAll('button').some((b) => b.text() === 'AI 整理')).toBe(false)
+  })
 })

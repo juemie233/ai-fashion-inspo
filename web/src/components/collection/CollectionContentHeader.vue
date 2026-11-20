@@ -48,6 +48,10 @@ const emit = defineEmits<{
   (e: 'rename'): void
   /** 把当前手动合集合并到另一个目标合集（合并后删除源） */
   (e: 'merge'): void
+  /** 打开导出弹窗（所有合集，含系统收藏根） */
+  (e: 'export'): void
+  /** 打开 AI 整理预览（只读的系统收藏根不提供） */
+  (e: 'ai'): void
   (e: 'delete'): void
 }>()
 </script>
@@ -62,39 +66,44 @@ const emit = defineEmits<{
       <a-tag v-if="current.auto_source" color="gray" size="small">抖音同步</a-tag>
       <span class="content-total">共 {{ total }} 个素材</span>
     </div>
-    <div v-if="!isSystemManualRoot" class="content-actions">
-      <template v-if="current.kind === 'smart'">
-        <a-button size="small" @click="emit('edit-smart')">编辑条件</a-button>
-        <a-popconfirm content="将当前匹配内容固化为手动合集？" @ok="emit('solidify')">
-          <a-button size="small">转手动</a-button>
-        </a-popconfirm>
-      </template>
-      <template v-else>
-        <a-button
-          v-if="!ordering && canOrder !== false"
-          size="small"
-          @click="emit('enter-ordering')"
-          >编辑排序</a-button
-        >
-        <!-- 必须显式 v-else-if="ordering"：写成 v-else 会让「非手动排序（canOrder=false）」
-             也落进这一支，显示一对点了会按旧顺序重排的「保存/取消排序」 -->
-        <template v-else-if="ordering">
-          <a-button size="small" type="primary" @click="emit('save-order')">保存顺序</a-button>
-          <a-button size="small" @click="emit('cancel-ordering')">取消排序</a-button>
+    <div class="content-actions">
+      <!-- 导出对系统收藏根也开放（只读不等于不能带走），AI 整理对只读合集隐藏 -->
+      <a-button size="small" @click="emit('export')">导出</a-button>
+      <template v-if="!isSystemManualRoot">
+        <a-button size="small" @click="emit('ai')">AI 整理</a-button>
+        <template v-if="current.kind === 'smart'">
+          <a-button size="small" @click="emit('edit-smart')">编辑条件</a-button>
+          <a-popconfirm content="将当前匹配内容固化为手动合集？" @ok="emit('solidify')">
+            <a-button size="small">转手动</a-button>
+          </a-popconfirm>
         </template>
-        <a-tooltip
-          :disabled="!current.auto_source"
-          content="由抖音同步自动维护，名称以抖音侧的收藏夹名为准"
-        >
-          <a-button size="small" :disabled="!!current.auto_source" @click="emit('rename')">
-            重命名
-          </a-button>
-        </a-tooltip>
-        <a-button v-if="canMerge" size="small" @click="emit('merge')">合并到…</a-button>
+        <template v-else>
+          <a-button
+            v-if="!ordering && canOrder !== false"
+            size="small"
+            @click="emit('enter-ordering')"
+            >编辑排序</a-button
+          >
+          <!-- 必须显式 v-else-if="ordering"：写成 v-else 会让「非手动排序（canOrder=false）」
+               也落进这一支，显示一对点了会按旧顺序重排的「保存/取消排序」 -->
+          <template v-else-if="ordering">
+            <a-button size="small" type="primary" @click="emit('save-order')">保存顺序</a-button>
+            <a-button size="small" @click="emit('cancel-ordering')">取消排序</a-button>
+          </template>
+          <a-tooltip
+            :disabled="!current.auto_source"
+            content="由抖音同步自动维护，名称以抖音侧的收藏夹名为准"
+          >
+            <a-button size="small" :disabled="!!current.auto_source" @click="emit('rename')">
+              重命名
+            </a-button>
+          </a-tooltip>
+          <a-button v-if="canMerge" size="small" @click="emit('merge')">合并到…</a-button>
+        </template>
+        <a-button size="small" status="danger" type="text" @click="emit('delete')">
+          删除合集
+        </a-button>
       </template>
-      <a-button size="small" status="danger" type="text" @click="emit('delete')">
-        删除合集
-      </a-button>
     </div>
   </div>
 </template>

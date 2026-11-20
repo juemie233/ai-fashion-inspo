@@ -107,6 +107,8 @@ function mountView() {
         CollectionOrderingStrip: true,
         SmartQueryEditorModal: true,
         CollectionTargetPickerModal: true,
+        CollectionExportModal: true,
+        CollectionAiModal: true,
       },
     },
   })
@@ -351,6 +353,26 @@ describe('CollectionsView 交互路径', () => {
 
     expect(mocks.error).toHaveBeenCalledWith('目标不可合并')
     expect(wrapper.findComponent({ name: 'CollectionSidebar' }).props('collections')).toBeTruthy()
+  })
+
+  it('Header 的导出/AI 整理入口打开对应弹窗；切合集时关闭', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const header = wrapper.findComponent({ name: 'CollectionContentHeader' })
+
+    header.vm.$emit('export')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'CollectionExportModal' }).props('visible')).toBe(true)
+
+    header.vm.$emit('ai')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'CollectionAiModal' }).props('visible')).toBe(true)
+
+    // 切到另一个合集：两个弹窗都应关闭，避免在错误合集上导出/生成
+    wrapper.findComponent({ name: 'CollectionSidebar' }).vm.$emit('update:currentId', 2)
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'CollectionExportModal' }).props('visible')).toBe(false)
+    expect(wrapper.findComponent({ name: 'CollectionAiModal' }).props('visible')).toBe(false)
   })
 
   it('合集内搜索防抖后带 q 加载；切合集把筛选与排序重置为默认', async () => {

@@ -193,6 +193,94 @@ export async function reorderCollectionItems(id: number, orderedIds: string[]): 
   await apiClient.patch(`/collections/${id}/items/order`, { ordered_ids: orderedIds })
 }
 
+// ── P2：合集导出 / 合集级 AI 整理预览 ──
+
+/** 导出格式：PDF 画册 / ZIP 原图 / CSV 清单 / Markdown 清单 */
+export type CollectionExportFormat = 'pdf' | 'zip' | 'csv' | 'markdown'
+
+/** 导出任务结果（文件 24h 过期，download_url 直接 GET 下载） */
+export interface CollectionExportResult {
+  token: string
+  filename: string
+  format: CollectionExportFormat | string
+  /** 实际导出的素材数 */
+  item_count: number
+  /** 被跳过的素材数（文件缺失/不支持的媒体等） */
+  skipped_count: number
+  size_bytes: number
+  download_url: string
+  /** 过期时间（ISO，通常为生成后 24h） */
+  expires_at: string
+}
+
+/**
+ * 生成合集导出文件。
+ *
+ * 后端限制最多 500 张、文件 24h 过期；返回下载地址，前端用 <a download> 触发下载。
+ */
+export async function exportCollection(
+  id: number,
+  format: CollectionExportFormat,
+): Promise<CollectionExportResult> {
+  // PDF/ZIP 可能打包数百张素材，远超默认 30s；单独放宽到 10 分钟
+  const { data } = await apiClient.post<CollectionExportResult>(
+    `/collections/${id}/exports`,
+    { format },
+    { timeout: 600_000 },
+  )
+  return data
+}
+
+/** AI 整理分组里的单张素材（只带缩略图与作者，够渲染预览） */
+export interface CollectionAiGroupItem {
+  id: string
+  thumbnail_path?: string | null
+  source_author?: string | null
+}
+
+/** AI 风格分组：规则分组 + AI 命名 */
+export interface CollectionAiGroup {
+  /** 规则分组的标签（如 outfit/source/tag） */
+  tag: string
+  /** AI 生成的组名 */
+  name: string
+  count: number
+  item_ids: string[]
+  items: CollectionAiGroupItem[]
+}
+
+/** 合集级 AI 整理预览结果（生成后由用户手动采用，不自动保存） */
+export interface CollectionAiSummaryOut {
+  summary: string
+  /** 3 个候选合集名 */
+  name_suggestions: string[]
+  /** 收藏理由 */
+  reason: string
+  /** 主题标签 */
+  theme_tags: string[]
+  /** 风格分组（组名/标签/数量/缩略图） */
+  groups: CollectionAiGroup[]
+  /** 生成使用的本地模型名 */
+  model: string
+  generated_at: string
+}
+
+/**
+ * 生成合集 AI 整理预览（风格总结/候选名/理由/主题标签/分组）。
+ *
+ * 注意：这是显式点击「开始生成」后才调用的重接口（本地模型，耗时且吃显存），
+ * 不要在弹窗打开时自动调用。
+ */
+export async function aiSummarizeCollection(id: number): Promise<CollectionAiSummaryOut> {
+  // 本地 Ollama 生成通常十几秒，慢时接近后端 120s 上限；不能沿用默认 30s
+  const { data } = await apiClient.post<CollectionAiSummaryOut>(
+    `/collections/${id}/ai-summary`,
+    undefined,
+    { timeout: 180_000 },
+  )
+  return data
+}
+
 /** 合集列表拖拽排序 */
 export async function reorderCollections(orderedIds: number[]): Promise<void> {
   await apiClient.patch('/collections/order', { ordered_ids: orderedIds })
