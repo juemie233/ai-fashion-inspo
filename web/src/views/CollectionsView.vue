@@ -362,21 +362,32 @@ async function handleBatchRemove() {
 /** 删除原因弹窗开关（复用公共 TrashReasonModal） */
 const trashModalOpen = ref(false)
 const trashSubmitting = ref(false)
+/** 本次要移入垃圾桶的素材：批量删除或单张卡片删除共用同一个公共确认框 */
+const trashTargetIds = ref<string[]>([])
+const trashCount = computed(() => trashTargetIds.value.length)
 
 function openBatchTrash() {
   if (selectedIds.value.size === 0) return
+  trashTargetIds.value = [...selectedIds.value]
+  trashModalOpen.value = true
+}
+
+/** 卡片右上角小删除按钮：只打开公共原因框，不在卡片内做轻量确认 */
+function openCardTrash(id: string) {
+  trashTargetIds.value = [id]
   trashModalOpen.value = true
 }
 
 /** 确认移入垃圾桶：软删除后 f2 同步会按垃圾桶判重跳过，不会重新导入 */
 async function confirmBatchTrash(reason: TrashReason) {
   if (trashSubmitting.value) return
-  const ids = [...selectedIds.value]
+  const ids = [...trashTargetIds.value]
   if (ids.length === 0) return
   trashSubmitting.value = true
   try {
     const { trashed, skipped } = await batchTrash(ids, reason)
     trashModalOpen.value = false
+    trashTargetIds.value = []
     Message.success(
       skipped > 0
         ? `已移入垃圾桶 ${trashed} 个（跳过 ${skipped} 个）`
@@ -703,7 +714,10 @@ onMounted(() => {
               :show-view-button="batchMode"
               :show-actions="false"
               :show-favorite="true"
+              :show-delete="!batchMode"
+              :delete-confirm="false"
               :pending-favorite-ids="favoritePendingIds"
+              @delete="openCardTrash"
               @toggle-favorite="handleContentFavorite"
               @toggle-select="toggleSelect"
             />
@@ -728,7 +742,7 @@ onMounted(() => {
     <!-- 批量移入垃圾桶：原因必选（复用公共组件）；软删除后 f2 同步按垃圾桶判重跳过 -->
     <TrashReasonModal
       v-model:visible="trashModalOpen"
-      :count="selectedCount"
+      :count="trashCount"
       @confirm="confirmBatchTrash"
     />
 

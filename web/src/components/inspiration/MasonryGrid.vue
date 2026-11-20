@@ -29,6 +29,8 @@ const props = withDefaults(
     showFavorite?: boolean
     /** 是否显示删除按钮（与 showActions 独立，人物详情可按张移入垃圾桶） */
     showDelete?: boolean
+    /** 删除前是否用卡片内 popconfirm；false 时由调用方弹公共删除原因框 */
+    deleteConfirm?: boolean
     /** 收藏请求中的素材 id：禁用按钮防连点 */
     pendingFavoriteIds?: ReadonlySet<string>
     /** 是否显示卡片五星评分（人物详情「全部」视图只开评分） */
@@ -50,6 +52,7 @@ const props = withDefaults(
     showActions: false,
     showFavorite: false,
     showDelete: false,
+    deleteConfirm: true,
     pendingFavoriteIds: undefined,
     showRating: true,
     hoverZoom: false,
@@ -132,6 +135,7 @@ watch(
             :show-actions="showActions !== false"
             :show-favorite="showFavorite"
             :show-delete="showDelete"
+            :delete-confirm="deleteConfirm"
             :favorite-pending="pendingFavoriteIds?.has(item.id) ?? false"
             :show-rating="showRating"
             :hover-zoom="hoverZoom"

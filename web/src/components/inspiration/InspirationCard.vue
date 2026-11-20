@@ -32,6 +32,8 @@ const props = withDefaults(
     showFavorite?: boolean
     /** 是否显示删除按钮：与 showActions 独立，人物详情可按张移入垃圾桶 */
     showDelete?: boolean
+    /** 删除前是否在卡片内用轻量 popconfirm 确认；false 时只 emit，由调用方弹公共原因框 */
+    deleteConfirm?: boolean
     /** 收藏请求进行中：禁用按钮防快速连点 */
     favoritePending?: boolean
     /** 是否显示五星评分；与 showActions 独立，人物详情「全部」视图只开评分 */
@@ -50,6 +52,7 @@ const props = withDefaults(
     showActions: false,
     showFavorite: false,
     showDelete: false,
+    deleteConfirm: true,
     favoritePending: false,
     showRating: true,
     selectable: false,
@@ -239,7 +242,7 @@ function openDetail() {
             </template>
           </a-button>
           <a-popconfirm
-            v-if="!item.deleted_at"
+            v-if="deleteConfirm && !item.deleted_at"
             content="移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复"
             :ok-button-props="{ status: 'danger' }"
             @ok="emit('delete')"
@@ -259,6 +262,21 @@ function openDetail() {
               </template>
             </a-button>
           </a-popconfirm>
+          <a-button
+            v-else-if="!item.deleted_at"
+            class="card-delete"
+            size="mini"
+            shape="circle"
+            type="text"
+            status="danger"
+            title="移入垃圾桶"
+            aria-label="移入垃圾桶"
+            @click.stop="emit('delete')"
+          >
+            <template #icon>
+              <IconDelete :size="14" />
+            </template>
+          </a-button>
         </template>
         <a-button
           v-if="(showActions !== false || showFavorite) && !item.deleted_at"

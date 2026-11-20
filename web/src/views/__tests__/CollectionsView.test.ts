@@ -209,6 +209,23 @@ describe('CollectionsView 交互路径', () => {
     expect(mocks.success).toHaveBeenCalledWith('已移入垃圾桶 1 个')
   })
 
+  it('卡片小删除：打开公共删除原因框，确认后只删这一张', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'MasonryGrid' }).vm.$emit('delete', 'insp-single')
+    await flushPromises()
+
+    const modal = wrapper.findComponent({ name: 'TrashReasonModal' })
+    expect(modal.exists()).toBe(true)
+    expect(modal.props('count')).toBe(1)
+    modal.vm.$emit('confirm', '不喜欢')
+    await flushPromises()
+
+    expect(mocks.batchTrash).toHaveBeenCalledWith(['insp-single'], '不喜欢')
+    expect(mocks.success).toHaveBeenCalledWith('已移入垃圾桶 1 个')
+  })
+
   it('加载内容失败给出可读提示', async () => {
     const wrapper = mountView()
     await flushPromises() // 首屏成功
