@@ -18,11 +18,29 @@ TEST_KEY = "pytest-secret-key"
 _REMOTE_CLIENT = ("203.0.113.7", 40000)
 
 
+class _RemoteClientASGI:
+    """在 ASGI scope 层把 client 地址改成非回环，兼容新旧 Starlette。
+
+    为什么不用 ``TestClient(..., client=...)``：该参数只存在于较新的
+    Starlette；CI 按 ``requirements.txt`` 安装的 FastAPI 0.115.6 / Starlette
+    0.4x 不支持它。包一层 ASGI app 注入 scope["client"] 后，
+    TestClient 在本地与 CI 锁定版本上行为一致。
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            scope = {**scope, "client": _REMOTE_CLIENT}
+        await self.app(scope, receive, send)
+
+
 def _remote_client() -> TestClient:
     """构造来源为非回环地址的 TestClient（复用会话级 app，不进入 context manager）。"""
     from app.main import app
 
-    return TestClient(app, client=_REMOTE_CLIENT)
+    return TestClient(_RemoteClientASGI(app))
 
 
 def _request_from(host: str) -> Request:
