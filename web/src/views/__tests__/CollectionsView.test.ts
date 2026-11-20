@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   removeFromCollection: vi.fn(),
   transferCollectionItems: vi.fn(),
   mergeCollections: vi.fn(),
+  batchTrash: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
 }))
@@ -50,6 +51,7 @@ vi.mock('@/api/inspirations', () => ({
   getFileUrl: (p: string) => `/files/${p}`,
   fetchInspirations: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   fetchInspiration: vi.fn(),
+  batchTrash: mocks.batchTrash,
 }))
 
 vi.mock('@/api/tags', () => ({
@@ -121,6 +123,7 @@ describe('CollectionsView 交互路径', () => {
     ])
     mocks.fetchCollectionInspirations.mockResolvedValue({ items: [], total: 0 })
     mocks.removeFromCollection.mockResolvedValue({ removed: 2 })
+    mocks.batchTrash.mockResolvedValue({ trashed: 1, skipped: 0 })
     mocks.transferCollectionItems.mockResolvedValue({ added: 2, skipped: 0 })
     mocks.mergeCollections.mockResolvedValue({
       merged_collections: 1,
@@ -177,6 +180,31 @@ describe('CollectionsView 交互路径', () => {
       page_size: 50,
       sort: 'manual',
     })
+  })
+
+  it('批量移入垃圾桶：选择原因后软删除并刷新合集', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('批量选择'))!
+      .trigger('click')
+    wrapper.findComponent({ name: 'MasonryGrid' }).vm.$emit('toggle-select', 'insp-trash')
+    await flushPromises()
+
+    const trashButton = wrapper.findAll('button').find((b) => b.text().includes('移入垃圾桶'))
+    expect(trashButton).toBeTruthy()
+    await trashButton!.trigger('click')
+    await flushPromises()
+
+    const modal = wrapper.findComponent({ name: 'TrashReasonModal' })
+    expect(modal.exists()).toBe(true)
+    modal.vm.$emit('confirm', '不喜欢')
+    await flushPromises()
+
+    expect(mocks.batchTrash).toHaveBeenCalledWith(['insp-trash'], '不喜欢')
+    expect(mocks.success).toHaveBeenCalledWith('已移入垃圾桶 1 个')
   })
 
   it('加载内容失败给出可读提示', async () => {

@@ -14,6 +14,7 @@ import CollectionOrderingStrip from '@/components/collection/CollectionOrderingS
 import CollectionSidebar from '@/components/collection/CollectionSidebar.vue'
 import CollectionTargetPickerModal from '@/components/collection/CollectionTargetPickerModal.vue'
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
+import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import {
   fetchCollectionInspirations,
   fetchCollections,
@@ -39,7 +40,7 @@ import {
 } from '@/components/collection/contentFilters'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
-import { getFileUrl, toggleFavorite } from '@/api/inspirations'
+import { batchTrash, getFileUrl, toggleFavorite, type TrashReason } from '@/api/inspirations'
 import { describeSmartQuery } from '@/utils/collectionQuery'
 import { useTagsStore } from '@/stores/tags'
 import { useBatchSelection } from '@/composables/useBatchSelection'
@@ -333,6 +334,41 @@ async function handleBatchRemove() {
   }
 }
 
+// ── 批量移入垃圾桶（软删除，非物理删除）──
+
+/** 删除原因弹窗开关（复用公共 TrashReasonModal） */
+const trashModalOpen = ref(false)
+const trashSubmitting = ref(false)
+
+function openBatchTrash() {
+  if (selectedIds.value.size === 0) return
+  trashModalOpen.value = true
+}
+
+/** 确认移入垃圾桶：软删除后 f2 同步会按垃圾桶判重跳过，不会重新导入 */
+async function confirmBatchTrash(reason: TrashReason) {
+  if (trashSubmitting.value) return
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  trashSubmitting.value = true
+  try {
+    const { trashed, skipped } = await batchTrash(ids, reason)
+    trashModalOpen.value = false
+    Message.success(
+      skipped > 0
+        ? `已移入垃圾桶 ${trashed} 个（跳过 ${skipped} 个）`
+        : `已移入垃圾桶 ${trashed} 个`,
+    )
+    exitBatchMode()
+    // 不直接本地 filter：可能还有其它页面/合集引用，重新拉当前合集与计数最稳
+    await Promise.all([loadContent(), loadCollections()])
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
+  } finally {
+    trashSubmitting.value = false
+  }
+}
+
 // ── 批量移动/复制到其它合集（仅手动合集的批量选择栏）──
 
 const transferOpen = ref(false)
@@ -616,6 +652,14 @@ onMounted(() => {
             >
               <a-button size="mini" status="danger">移出合集</a-button>
             </a-popconfirm>
+            <a-button
+              size="mini"
+              status="danger"
+              title="软删除到垃圾桶；f2 后续同步会按垃圾桶判重，不会重新导入"
+              @click="openBatchTrash"
+            >
+              移入垃圾桶
+            </a-button>
             <!-- 抖音同步（含二级收藏夹）由 f2 维护：后端 _require_transferable 一律 400 -->
             <template v-if="current.kind === 'manual' && !current.auto_source">
               <a-button size="mini" @click="openTransfer('move')">移动到…</a-button>
@@ -655,6 +699,13 @@ onMounted(() => {
         <a-empty description="选择左侧合集，或新建一个" />
       </div>
     </section>
+
+    <!-- 批量移入垃圾桶：原因必选（复用公共组件）；软删除后 f2 同步按垃圾桶判重跳过 -->
+    <TrashReasonModal
+      v-model:visible="trashModalOpen"
+      :count="selectedCount"
+      @confirm="confirmBatchTrash"
+    />
 
     <!-- 智能合集条件编辑器 -->
     <SmartQueryEditorModal

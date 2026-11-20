@@ -47,7 +47,7 @@ export const RATING_OPTIONS = [
   { label: '5 星', value: 5 },
 ]
 
-export const CONTENT_SORT_OPTIONS = [
+const CONTENT_SORT_OPTIONS = [
   { label: '手动顺序', value: 'manual' },
   { label: '最新收藏/入库', value: 'newest' },
   { label: '最早收藏/入库', value: 'oldest' },

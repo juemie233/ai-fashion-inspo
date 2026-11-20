@@ -22,7 +22,7 @@ export interface FavoritesOverviewOut {
 }
 
 /** 收藏动态里的素材快照：后端只返回这几个字段，**不是**完整 InspirationOut */
-export interface FavoriteHistoryReferencedItem {
+interface FavoriteHistoryReferencedItem {
   id: string
   file_path: string
   thumbnail_path: string | null
