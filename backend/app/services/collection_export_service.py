@@ -7,8 +7,8 @@
   响应只暴露 token 与相对下载地址，不暴露绝对路径；下载接口只接受安全字符 token；
 - 每个导出目录带 ``meta.json``（格式/文件名/计数/过期时间），生成新导出前清理超过 24h 的旧目录；
 - CSV 用 UTF-8 BOM + ``sanitize_csv_cell``（防公式注入）；ZIP 打包原图/视频并附 manifest.csv
-  与 README.md，缺失文件跳过计入 skipped；PDF 用 Pillow 在**线程池**里生成（不阻塞事件循环），
-  中文字体按 Windows/macOS/Linux 回退，找不到字体也不崩溃（仅图片/英文回退）。
+  与 README.md，缺失文件跳过计入 skipped；PDF 用 ReportLab 在**线程池**里生成（不阻塞事件循环），
+  文字矢量可选中、原帖链接可点击；图片等比完整放入格子（不裁剪），封面含描述/封面图/本地导出时间。
 """
 
 import asyncio
@@ -25,7 +25,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageOps
+from reportlab.lib.colors import HexColor
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas as pdf_canvas
 
 from app.config import settings
 from app.services import collection_service
@@ -66,11 +73,17 @@ CSV_COLUMNS = [
     "相对路径",
 ]
 
-# PDF 页面：A4 @96dpi（约 72~100dpi 区间内），2×2 网格
-PDF_PAGE_W, PDF_PAGE_H = 794, 1123
+# PDF 页面：A4 点尺寸（矢量排版，图片保留原图分辨率，不再整页栅格化）
+PDF_PAGE_W, PDF_PAGE_H = A4
 PDF_MARGIN = 36
 PDF_GAP = 16
-PDF_CAPTION_H = 64
+PDF_CAPTION_H = 58
+PDF_FOOTER_H = 20
+PDF_COLS = 2
+PDF_ROWS = 2
+# PDF 内嵌图片的最长边：1600px 足够 2×2 画册在屏幕/普通打印下清晰，
+# 同时避免 52 张大图把 PDF 撑到 80MB+（原图保留在 ZIP 导出里）
+PDF_IMAGE_MAX_SIDE = 1600
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,9 @@ class ExportCollection:
     id: int
     name: str
     is_smart: bool
+    description: str | None = None
+    # PDF 封面用：合集手动封面；没有则取第一条图片素材
+    cover_relative_path: str | None = None
 _PDF_FONT_CANDIDATES = (
     "C:/Windows/Fonts/msyh.ttc",
     "C:/Windows/Fonts/msyhbd.ttc",
@@ -224,148 +240,297 @@ def _zip_bytes(rows: list[dict], manifest_csv: bytes, readme_md: bytes) -> tuple
     return buffer.getvalue(), added, skipped
 
 
-def _load_pdf_font(size: int):
-    """加载中文字体；全部候选不存在/失败时回退 Pillow 默认字体（不崩溃）。"""
+_PDF_FONT_NAME: str | None = None
+_PDF_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/msyh.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+)
+
+
+def _register_pdf_font() -> str:
+    """注册中文 PDF 字体：优先系统 TTF，失败回退 ReportLab 内置 CJK CID 字体。
+
+    不再用 Pillow 把整页栅格化：文字保持可选中/可搜索，图片按原图分辨率嵌入。
+    """
+    global _PDF_FONT_NAME
+    if _PDF_FONT_NAME is not None:
+        return _PDF_FONT_NAME
     for candidate in _PDF_FONT_CANDIDATES:
         try:
             if Path(candidate).is_file():
-                return ImageFont.truetype(candidate, size)
-        except OSError as exc:
+                pdfmetrics.registerFont(TTFont("CJK", candidate))
+                _PDF_FONT_NAME = "CJK"
+                return _PDF_FONT_NAME
+        except (OSError, ValueError) as exc:
             logger.debug("PDF 字体加载失败，尝试下一个 %s：%s", candidate, exc)
-            continue
     try:
-        return ImageFont.load_default(size=size)
-    except TypeError:  # 老版本 Pillow 没有 size 参数
-        logger.debug("当前 Pillow 不支持 load_default(size=)，回退无字号默认字体")
-        return ImageFont.load_default()
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        _PDF_FONT_NAME = "STSong-Light"
+    except (OSError, ValueError) as exc:
+        logger.warning("PDF 中文字体注册失败，回退 Helvetica：%s", exc)
+        _PDF_FONT_NAME = "Helvetica"
+    return _PDF_FONT_NAME
 
 
-def _draw_text(draw: ImageDraw.ImageDraw, xy: tuple, text: str, font, fill="black") -> None:
-    """画文字；字体不支持中文/编码异常时降级为 ASCII 或忽略（PDF 不能整体失败）。"""
+def _text_width(text: str, font: str, size: float) -> float:
+    return pdfmetrics.stringWidth(text, font, size)
+
+
+def _ellipsize(text: str, font: str, size: float, max_width: float) -> str:
+    """按实际像素宽度截断并补省略号，避免长标签/长作者名冲出单元格。"""
+    if not text or _text_width(text, font, size) <= max_width:
+        return text
+    ellipsis = "…"
+    body = text
+    while body and _text_width(body + ellipsis, font, size) > max_width:
+        body = body[:-1]
+    return (body or "") + ellipsis
+
+
+def _wrap_text(
+    text: str, font: str, size: float, max_width: float, max_lines: int
+) -> list[str]:
+    """按像素宽度逐字换行，最多 max_lines 行；超出部分省略。"""
     if not text:
-        return
+        return []
+    lines: list[str] = []
+    current = ""
+    for char in text:
+        candidate = current + char
+        if current and _text_width(candidate, font, size) > max_width:
+            lines.append(current)
+            current = char
+            if len(lines) == max_lines:
+                break
+        else:
+            current = candidate
+    if len(lines) < max_lines and current:
+        lines.append(current)
+    if not lines:
+        return []
+    consumed = sum(len(line) for line in lines)
+    if consumed < len(text) and lines:
+        lines[-1] = _ellipsize(lines[-1] + "…", font, size, max_width)
+    return lines
+
+
+def _draw_wrapped(
+    c: pdf_canvas.Canvas,
+    text: str,
+    x: float,
+    y: float,
+    max_width: float,
+    font: str,
+    size: float,
+    leading: float,
+    max_lines: int,
+    color: str = "#4B4A47",
+) -> float:
+    """画多行文字，返回最后一行下方基线坐标。"""
+    lines = _wrap_text(text or "", font, size, max_width, max_lines)
+    c.setFont(font, size)
+    c.setFillColor(HexColor(color))
+    for line in lines:
+        c.drawString(x, y, line)
+        y -= leading
+    return y
+
+
+def _draw_pdf_image(
+    c: pdf_canvas.Canvas,
+    relative_path: str | None,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> bool:
+    """把图片等比放入矩形（不裁剪），返回是否成功绘制。"""
+    source = _resolve_storage_file(relative_path)
+    if source is None or source.suffix.lower() not in _PDF_EXTENSIONS:
+        return False
     try:
-        draw.text(xy, text, font=font, fill=fill)
-    except (UnicodeEncodeError, OSError):
-        safe = text.encode("ascii", "ignore").decode("ascii")
-        if not safe:
-            return
-        try:
-            draw.text(xy, safe, font=font, fill=fill)
-        except (UnicodeEncodeError, OSError):
-            logger.debug("PDF 文字绘制失败，已跳过：%r", text[:30])
+        with Image.open(source) as raw:
+            image = ImageOps.exif_transpose(raw)
+            if image.mode in ("RGBA", "LA"):
+                background = Image.new("RGB", image.size, "white")
+                background.paste(image, mask=image.getchannel("A"))
+                image = background
+            else:
+                image = image.convert("RGB")
+            # 限制最长边，兼顾清晰度与 PDF 体积；ZIP 仍保留原图
+            image.thumbnail(
+                (PDF_IMAGE_MAX_SIDE, PDF_IMAGE_MAX_SIDE),
+                Image.Resampling.LANCZOS,
+            )
+            buffer = io.BytesIO()
+            # 统一转高质量 JPEG，避开 ReportLab 对 webp/透明通道的兼容问题
+            image.save(buffer, "JPEG", quality=88, optimize=True)
+            buffer.seek(0)
+            c.drawImage(
+                ImageReader(buffer),
+                x,
+                y,
+                width=width,
+                height=height,
+                preserveAspectRatio=True,
+                anchor="c",
+                mask="auto",
+            )
+        return True
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        logger.warning("PDF 导出跳过无法解码的图片 %s：%s", source, exc)
+        return False
 
 
-def _truncate(text: str, limit: int) -> str:
-    """按字符数截断（避免中文字体宽度导致越界；不追求精确像素）。"""
-    text = text or ""
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+def _valid_source_url(url: str | None) -> str | None:
+    if url and url.startswith(("http://", "https://")):
+        return url
+    return None
+
+
+def _draw_cover(
+    c: pdf_canvas.Canvas,
+    collection: ExportCollection,
+    rows: list[dict],
+    font: str,
+) -> None:
+    """封面：标题 + 描述 + 封面图 + 本地时间/数量 + 底部版权说明。"""
+    margin = 42
+    has_image = bool(collection.cover_relative_path)
+    text_width = 250 if has_image else 500
+    x = margin
+
+    c.setTitle(f"{collection.name} · 收藏画册")
+    c.setAuthor("AI 穿搭素材库")
+    c.setFillColor(HexColor("#FAF8F3"))
+    c.rect(0, 0, PDF_PAGE_W, PDF_PAGE_H, fill=1, stroke=0)
+
+    c.setFillColor(HexColor("#8A857C"))
+    c.setFont(font, 9)
+    c.drawString(x, 790, "LOOKBOOK / 收藏画册")
+    c.setFillColor(HexColor("#1F1D1A"))
+    c.setFont(font, 28)
+    c.drawString(x, 748, _ellipsize(collection.name, font, 28, text_width))
+    c.setStrokeColor(HexColor("#D8D2C6"))
+    c.setLineWidth(0.8)
+    c.line(x, 732, x + text_width, 732)
+
+    description = collection.description or "用收藏整理出的风格样本。"
+    _draw_wrapped(c, description, x, 706, text_width, font, 10.5, 16, 6)
+
+    kind = "智能合集" if collection.is_smart else "手动合集"
+    c.setFillColor(HexColor("#4B4A47"))
+    c.setFont(font, 10)
+    c.drawString(x, 380, kind)
+    c.drawString(x, 358, f"共 {len(rows)} 个素材")
+    c.drawString(x, 336, f"导出于 {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')}")
+    c.setFillColor(HexColor("#8A857C"))
+    c.setFont(font, 8.5)
+    c.drawString(x, 310, "PDF 仅收录可读取的图片/封面，视频与缺失文件不嵌入")
+
+    if has_image:
+        c.setFillColor(HexColor("#F1EEE7"))
+        c.roundRect(320, 290, 230, 360, 8, fill=1, stroke=0)
+        _draw_pdf_image(c, collection.cover_relative_path, 330, 300, 210, 340)
+
+    c.setFillColor(HexColor("#8A857C"))
+    c.setFont(font, 8)
+    c.drawString(x, 58, "由 AI 穿搭素材库导出 · 仅供个人归档，素材版权归原作者")
+
+
+def _draw_caption(
+    c: pdf_canvas.Canvas,
+    row: dict,
+    x: float,
+    cell_y: float,
+    cell_w: float,
+    font: str,
+) -> None:
+    """单元格底部：编号/作者 + 最多两行标签 + 可点击原帖。"""
+    title = f"{row['序号']}. {row['作者'] or row['文件名'] or row['素材ID']}"
+    url = _valid_source_url(row.get("原链接"))
+    title_width = cell_w - 12 - (24 if url else 0)
+    title = _ellipsize(title, font, 9.5, title_width)
+    baseline = cell_y + PDF_CAPTION_H - 13
+    c.setFont(font, 9.5)
+    c.setFillColor(HexColor("#1F1D1A"))
+    c.drawString(x + 6, baseline, title)
+
+    if url:
+        link_text = "原帖"
+        link_font_size = 7.5
+        link_w = _text_width(link_text, font, link_font_size)
+        link_x = x + cell_w - 8 - link_w
+        c.setFont(font, link_font_size)
+        c.setFillColor(HexColor("#2A6FDB"))
+        c.drawString(link_x, baseline, link_text)
+        c.linkURL(url, (link_x, baseline - 2, link_x + link_w, baseline + 9), relative=0)
+
+    tags = [part.strip() for part in (row.get("标签") or "").split("、") if part.strip()]
+    tag_text = " · ".join(tags[:5])
+    if len(tags) > 5:
+        tag_text += "…"
+    tag_lines = _wrap_text(tag_text, font, 7.5, cell_w - 12, 2)
+    c.setFont(font, 7.5)
+    c.setFillColor(HexColor("#6D6A63"))
+    tag_y = baseline - 13
+    for line in tag_lines:
+        c.drawString(x + 6, tag_y, line)
+        tag_y -= 9.5
 
 
 def _pdf_bytes(collection: ExportCollection, rows: list[dict]) -> tuple[bytes, int, int]:
-    """Pillow 生成 PDF：封面 + 每页 2×2 网格（图片等比裁剪并编号/作者/标签）。
+    """ReportLab 生成矢量 PDF：封面 + 每页 2×2 网格，图片不裁剪。
 
-    在调用方线程池里执行（读图/缩放/编码是阻塞 CPU/IO）。
-    返回 (pdf 字节, 成功嵌入图片数, 跳过数)。
-
-    内存口径：**攒满 4 张就渲染一页并立刻关闭原图**，不在内存里堆全集合图片。
-    此前先把 500 张全解码再排版，300 张大图就能占掉数 GB（worker 会被 OOM 杀掉）。
+    返回 (PDF 字节, 成功嵌入图片数, 跳过数)。图片逐张打开并立即绘制，
+    不把整集合图片同时留在内存里；文字可选中/搜索，原帖链接可点击。
     """
-    title_font = _load_pdf_font(46)
-    meta_font = _load_pdf_font(22)
-    caption_font = _load_pdf_font(18)
-    small_font = _load_pdf_font(16)
+    font = _register_pdf_font()
+    buffer = io.BytesIO()
+    c = pdf_canvas.Canvas(buffer, pagesize=A4, pageCompression=1)
+    _draw_cover(c, collection, rows, font)
 
-    columns = 2
-    cell_w = (PDF_PAGE_W - 2 * PDF_MARGIN - PDF_GAP) // columns
-    cell_h = (PDF_PAGE_H - 2 * PDF_MARGIN - PDF_GAP) // 2
-    image_w = cell_w
-    image_h = cell_h - PDF_CAPTION_H
+    content_top = PDF_PAGE_H - PDF_MARGIN
+    content_bottom = PDF_MARGIN + PDF_FOOTER_H
+    cell_w = (PDF_PAGE_W - 2 * PDF_MARGIN - PDF_GAP) / PDF_COLS
+    cell_h = (content_top - content_bottom - PDF_GAP) / PDF_ROWS
+    image_y_offset = PDF_CAPTION_H + 4
+    image_h = cell_h - PDF_CAPTION_H - 8
 
-    pages: list[Image.Image] = []
     embedded = 0
     skipped = 0
-
-    def render_page(batch: list[tuple[dict, Image.Image]]) -> None:
-        """把一批（≤4 张）图片排版成一页，随即关闭原图释放内存。"""
-        nonlocal embedded
-        page = Image.new("RGB", (PDF_PAGE_W, PDF_PAGE_H), "white")
-        page_draw = ImageDraw.Draw(page)
-        for offset, (row, image) in enumerate(batch):
-            column = offset % columns
-            line = offset // columns
+    page_no = 0
+    total_pages = 1 + (len(rows) + PDF_COLS * PDF_ROWS - 1) // (PDF_COLS * PDF_ROWS)
+    for start in range(0, len(rows), PDF_COLS * PDF_ROWS):
+        c.showPage()
+        page_no += 1
+        batch = rows[start : start + PDF_COLS * PDF_ROWS]
+        for offset, row in enumerate(batch):
+            column = offset % PDF_COLS
+            line = offset // PDF_COLS
             x = PDF_MARGIN + column * (cell_w + PDF_GAP)
-            y = PDF_MARGIN + line * (cell_h + PDF_GAP)
-            fitted = ImageOps.fit(image, (image_w, image_h), centering=(0.5, 0.5))
-            page.paste(fitted, (x, y))
-            fitted.close()
-            _draw_text(
-                page_draw,
-                (x, y + image_h + 4),
-                _truncate(f"{row['序号']}. {row['作者'] or row['文件名'] or row['素材ID']}", 26),
-                caption_font,
-            )
-            _draw_text(
-                page_draw,
-                (x, y + image_h + 30),
-                _truncate(row["标签"] or "", 30),
-                small_font,
-                fill="#666666",
-            )
-        for _, image in batch:
-            image.close()
-        pages.append(page)
-        embedded += len(batch)
+            cell_y = content_top - (line + 1) * cell_h - line * PDF_GAP
+            c.setFillColor(HexColor("#F6F4EE"))
+            c.roundRect(x, cell_y, cell_w, cell_h, 5, fill=1, stroke=0)
+            if _draw_pdf_image(
+                c,
+                row.get("相对路径"),
+                x + 4,
+                cell_y + image_y_offset,
+                cell_w - 8,
+                image_h,
+            ):
+                embedded += 1
+            else:
+                skipped += 1
+            _draw_caption(c, row, x, cell_y, cell_w, font)
+        c.setFillColor(HexColor("#8A857C"))
+        c.setFont(font, 8)
+        c.drawCentredString(PDF_PAGE_W / 2, 16, f"第 {page_no} / {total_pages} 页")
 
-    # 1) 逐张解码并分批排版（视频/缺失/损坏 → skipped）
-    batch: list[tuple[dict, Image.Image]] = []
-    for row in rows:
-        source = _resolve_storage_file(row["相对路径"])
-        if source is None or source.suffix.lower() not in _PDF_EXTENSIONS:
-            skipped += 1
-            continue
-        try:
-            with Image.open(source) as raw:
-                # JPEG 可直接按目标尺寸解码（内存降一个数量级）；其它格式是 no-op
-                raw.draft("RGB", (image_w * 2, image_h * 2))
-                image = raw.convert("RGB")
-        except (OSError, ValueError, Image.DecompressionBombError) as exc:
-            # DecompressionBombError 不是 OSError 子类：单张超大图不能拖垮整个导出
-            logger.warning("PDF 导出跳过无法解码的图片 %s：%s", source, exc)
-            skipped += 1
-            continue
-        batch.append((row, image))
-        if len(batch) == 4:
-            render_page(batch)
-            batch = []
-    if batch:
-        render_page(batch)
-
-    # 2) 封面：标题 + 元信息 + 数量（无可用图片也出封面，保证格式合法）
-    cover = Image.new("RGB", (PDF_PAGE_W, PDF_PAGE_H), "white")
-    draw = ImageDraw.Draw(cover)
-    _draw_text(draw, (PDF_MARGIN + 8, 220), _truncate(collection.name, 24), title_font)
-    kind = "智能合集" if collection.is_smart else "手动合集"
-    _draw_text(draw, (PDF_MARGIN + 8, 300), f"{kind} · 导出时间 {format_utc(utcnow())}", meta_font)
-    _draw_text(draw, (PDF_MARGIN + 8, 340), f"共 {embedded} 张图片 · {len(rows)} 条素材", meta_font)
-    _draw_text(
-        draw,
-        (PDF_MARGIN + 8, PDF_PAGE_H - 80),
-        "由 AI 穿搭素材库导出",
-        small_font,
-    )
-    pages.insert(0, cover)
-
-    buffer = io.BytesIO()
-    pages[0].save(
-        buffer,
-        "PDF",
-        resolution=96.0,
-        save_all=True,
-        append_images=pages[1:],
-    )
-    for page in pages:
-        page.close()
+    c.save()
     return buffer.getvalue(), embedded, skipped
 
 
@@ -453,10 +618,27 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
     # 快照合集字段并结束只读事务、释放数据库连接：下面进入几十秒到 10 分钟的文件生成
     # （PDF 尤其慢），一直占着连接会让并发导出/其它请求排队。回滚后 ORM 对象失效，
     # 所以上面必须先把要用的标量字段拷进快照。
+    cover_relative_path = None
+    if collection.cover_inspiration_id:
+        cover_relative_path = next(
+            (
+                item.file_path
+                for item in items
+                if item.id == collection.cover_inspiration_id and item.media_type == "image"
+            ),
+            None,
+        )
+    if cover_relative_path is None:
+        cover_relative_path = next(
+            (item.file_path for item in items if item.media_type == "image"),
+            rows[0]["相对路径"] if rows else None,
+        )
     snapshot = ExportCollection(
         id=collection.id,
         name=collection.name,
         is_smart=collection.query_json is not None,
+        description=collection.description,
+        cover_relative_path=cover_relative_path,
     )
     await db.rollback()
 
