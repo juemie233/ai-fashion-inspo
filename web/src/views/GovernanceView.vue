@@ -53,6 +53,7 @@ const largestFiles = ref<LargeFile[]>([])
 const missingFiles = ref<MissingFile[]>([])
 const orphanFiles = ref<OrphanFile[]>([])
 const orphanSize = ref(0)
+const integrityScanner = ref('')
 const duplicates = ref<DuplicateGroup[]>([])
 const dupCount = ref(0)
 const dupSize = ref(0)
@@ -133,6 +134,7 @@ async function loadIntegrity() {
     missingFiles.value = res.data.missing_files
     orphanFiles.value = res.data.orphan_files
     orphanSize.value = res.data.orphan_total_size_bytes
+    integrityScanner.value = res.data.scanner || 'python'
   } catch {
     Message.error('完整性检查失败')
   } finally {
@@ -307,6 +309,7 @@ onUnmounted(() => {
           :orphan-files="orphanFiles"
           :orphan-bytes="orphanSize"
           :checking="checking"
+          :scanner="integrityScanner"
           @recheck="loadIntegrity"
           @clean-orphans="cleanOrphans"
         />

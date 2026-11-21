@@ -291,6 +291,19 @@ ZIP 输出大小与条目名完全一致。
   - 响应新增 `scanner: "rust" | "python"`，前端旧版本可忽略；
   - 真实库实测 `scanner=rust` 时巡检约 **0.6~0.7s**（原 Python 扫描约 4.8s）；
 - 当前只读展示，不改变孤立文件清理逻辑；
-- 下一步可优先把它接入备份前检查，而不是继续做 pHash/PDF。
+- 已接入备份前预检：`scripts/ops/backup_data.sh` 在复制前调用
+  `backend/scripts/storage_audit_preflight.py`，报告写入
+  `.integrity_preflight.json` 与 `manifest.json.integrity_preflight`；
+  预检只告警、不阻断备份、不删除文件；
+- 管理页完整性卡片显示「Rust 加速 / Python 扫描」来源；
+- 下一步不再扩 pHash/PDF；如需继续 Rust，优先把 ZIP 的 100 张阈值按真实规模调优。
 
 当前仍保持“实验分支，不合并到 `master`”。
+
+## 12. 近重复分组的再评估（本轮不开发）
+
+- 现有 Python 分带倒排索引在 22,347 张已缓存素材上约 **1.7s**（历史实测）；
+- 当前库规模约 2.6 万素材，管理页近重复扫描不是用户可感知瓶颈；
+- 纯算法移植到 Rust 可以更快，但收益要等到 **10 万级素材**或高频全库扫描才明显；
+- 因此本轮不实现 Rust near-duplicate，保留 Python 版本；
+- 触发条件：素材量到 10 万、或近重复扫描进入日常高频操作，再按同一套“独立 CLI + 基准 + 不接生产”的流程评估。

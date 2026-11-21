@@ -236,6 +236,18 @@ echo "项目根:   $PROJECT_ROOT"
 echo "哈希校验: $([ "$VERIFY_HASH" -eq 1 ] && echo 全量SHA-256 || echo "抽样 ${VERIFY_SAMPLE} 个")"
 echo ""
 
+# ── 0. 备份前完整性预检（只读；不阻塞备份）──
+# 优先走 Rust storage-audit；未配置/失败自动回退 Python。预检发现问题只写告警，
+# 不因为源端本来就有缺失/孤立文件而拒绝备份。
+PREFLIGHT_JSON="$DEST/.integrity_preflight.json"
+echo ">>> [0/5] 备份前存储完整性预检（只读）..."
+if python backend/scripts/storage_audit_preflight.py --json "$PREFLIGHT_JSON"; then
+  echo "  预检报告: $PREFLIGHT_JSON"
+else
+  echo "  ⚠ 预检未生成（不影响本次备份），manifest 会记录 warning"
+fi
+echo ""
+
 BACKUP_FAILED=0
 fail() {
   echo "  !!! $1"
@@ -542,6 +554,33 @@ if storage_src_kind != "config":
         f"本次备份的是回退目录 {storage_src}"
     )
 
+# 备份前完整性预检结果：只告警，不阻断备份（源端可能本来就有历史缺失/孤立文件）。
+preflight_path = os.path.join(dest, ".integrity_preflight.json")
+integrity_preflight = None
+if os.path.exists(preflight_path):
+    try:
+        with open(preflight_path, encoding="utf-8") as f:
+            integrity_preflight = json.load(f)
+    except (OSError, ValueError):
+        integrity_preflight = None
+if integrity_preflight is None:
+    warnings.append("备份前完整性预检未生成（Rust/Python 预检失败），本次备份未记录源端完整性快照")
+else:
+    if integrity_preflight.get("missing_count", 0):
+        warnings.append(
+            f"备份前预检发现 {integrity_preflight['missing_count']} 个缺失文件"
+            "（数据库有记录但源端文件不存在）"
+        )
+    if integrity_preflight.get("orphan_count", 0):
+        warnings.append(
+            f"备份前预检发现 {integrity_preflight['orphan_count']} 个孤立文件，"
+            f"约 {integrity_preflight.get('orphan_total_size_bytes', 0)} 字节"
+        )
+    if integrity_preflight.get("trash_invariant_count", 0):
+        warnings.append(
+            f"备份前预检发现 {integrity_preflight['trash_invariant_count']} 条垃圾桶不变量违规"
+        )
+
 # 5.1 数据库完整性
 db_path = os.path.join(dest, "fashion_inspo.db")
 counts: dict[str, int | None] = {}
@@ -750,6 +789,7 @@ manifest = {
     "sql_size": os.path.getsize(sql_path) if os.path.exists(sql_path) else 0,
     "table_counts": counts,
     "face_service_db": face_info,
+    "integrity_preflight": integrity_preflight,
     "dir_stats": dir_stats,
     "verify_hash": verify_hash,
     "hash_sample": hash_sample,

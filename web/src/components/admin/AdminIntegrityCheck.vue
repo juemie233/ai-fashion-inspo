@@ -10,6 +10,8 @@ defineProps<{
   orphanFiles: OrphanFile[]
   orphanBytes: number
   checking: boolean
+  /** 扫描器来源：rust（storage-audit 加速）/ python（回退） */
+  scanner?: string
 }>()
 
 const emit = defineEmits<{
@@ -44,6 +46,9 @@ const orphanColumns: TableColumnData[] = [
   <a-card title="数据完整性检查" size="small" style="margin-bottom: 24px">
     <template #extra>
       <a-space>
+        <a-tag v-if="scanner" size="small" :color="scanner === 'rust' ? 'green' : 'gray'">
+          {{ scanner === 'rust' ? 'Rust 加速' : 'Python 扫描' }}
+        </a-tag>
         <a-button size="small" :loading="checking" @click="emit('recheck')"> 重新检查 </a-button>
         <a-popconfirm
           v-if="orphanFiles.length > 0"
