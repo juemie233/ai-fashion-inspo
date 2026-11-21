@@ -2,10 +2,10 @@
 
 Python 后端的媒体处理 sidecar 试点（Rust）。
 
-当前只提供：
+当前提供两个二进制：
 
-- `hash`：流式 SHA-256
-- `thumbnail`：等比缩略图，不放大、不拉伸，输出 JPEG
+- `media-worker`：`hash`、`thumbnail`、`archive`、`batch`
+- `storage-audit`：只读扫描 images/thumbnails/videos，报告缺失、孤立、大小/哈希不一致
 
 ## 非 C 盘工具链
 
@@ -52,6 +52,21 @@ echo '{"entries":[{"path":"G:/.../a.webp","archive":"0001_a.webp"}]}' | media-wo
 {"id":"1","ok":true,"sha256":"...","bytes":123}
 {"id":"2","ok":true,"output":"D:/.../b.jpg","width":337,"height":600,"source_width":2160,"source_height":3840}
 ```
+
+## storage-audit
+
+从数据库导出 expected JSON：
+
+```json
+{"expected":[{"path":"images/2026-09/a.webp","size":123,"sha256":"..."}]}
+```
+
+```bash
+storage-audit G:/fashion-inspo-storage manifest.json \
+  --dirs images,thumbnails,videos --output report.json --hash
+```
+
+边界：不连数据库、不删除/移动文件；只读扫描。
 
 ## 边界
 
