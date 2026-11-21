@@ -284,7 +284,13 @@ ZIP 输出大小与条目名完全一致。
 
 - 存储扫描是当前收益最明确的功能，适合接入管理端「存储完整性检查」或备份前校验；
 - 但接入生产仍需补：Python manifest 生成、API/任务入口、管理员权限、报告展示；
-- 当前只保留独立 CLI，不修改管理 API；
+- 已接入现有 `GET /api/admin/integrity-check`：
+  - 从 `MEDIA_WORKER_BIN` 同目录自动查找 `storage_audit` 二进制；
+  - Rust 返回缺失/孤立文件后，Python 负责映射素材 ID、垃圾桶不变量和响应结构；
+  - 任何启动/超时/解析异常都自动回退 Python；
+  - 响应新增 `scanner: "rust" | "python"`，前端旧版本可忽略；
+  - 真实库实测 `scanner=rust` 时巡检约 **0.6~0.7s**（原 Python 扫描约 4.8s）；
+- 当前只读展示，不改变孤立文件清理逻辑；
 - 下一步可优先把它接入备份前检查，而不是继续做 pHash/PDF。
 
 当前仍保持“实验分支，不合并到 `master`”。

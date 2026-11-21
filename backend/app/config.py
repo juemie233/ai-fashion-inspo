@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     media_worker_bin: str = ""
     media_worker_archive_threshold: int = Field(default=100, ge=1, le=1000)
     media_worker_archive_timeout_seconds: float = Field(default=300, ge=5, le=1800)
+    media_worker_audit_timeout_seconds: float = Field(default=120, ge=5, le=1800)
 
     # 上传大小限制（MB）：防止误传超大文件导致内存与磁盘暴涨
     max_image_upload_mb: int = 20  # 图片/缩略图

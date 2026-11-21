@@ -4,6 +4,7 @@ import sqlite3
 from datetime import timedelta
 
 from app.config import settings
+from app.services import storage_audit_service
 from app.utils.time import utcnow
 
 
@@ -256,3 +257,33 @@ async def test_integrity_check_includes_trash_invariants(client, upload):
     body = r.json()
     assert "trash_invariants" in body
     assert body["trash_invariants"] == []
+    assert body["scanner"] == "python"
+
+
+async def test_integrity_check_maps_rust_report(client, upload, monkeypatch):
+    """Rust 扫描可用时使用其 missing/orphans，但素材 ID 映射仍由 Python 完成。"""
+    insp_id = upload().json()["id"]
+    detail = client.get(f"/api/inspirations/{insp_id}").json()
+    file_path = detail["file_path"]
+
+    async def fake_audit(paths):
+        assert file_path in paths
+        return {
+            "missing": [file_path],
+            "orphans": [{"path": "images/orphan.jpg", "size": 123}],
+        }
+
+    monkeypatch.setattr(storage_audit_service, "run_storage_audit", fake_audit)
+    r = client.get("/api/admin/integrity-check")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scanner"] == "rust"
+    assert body["missing_count"] == 1
+    assert body["missing_files"][0]["file_path"] == file_path
+    assert body["missing_files"][0]["inspiration_ids"] == [insp_id]
+    assert body["orphan_count"] == 1
+    assert body["orphan_files"][0] == {
+        "file_path": "images/orphan.jpg",
+        "size_bytes": 123,
+    }
+    assert body["orphan_total_size_bytes"] == 123

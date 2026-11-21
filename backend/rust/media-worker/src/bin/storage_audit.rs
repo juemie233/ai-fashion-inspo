@@ -61,10 +61,16 @@ struct Report {
     expected_files: usize,
     actual_files: usize,
     missing: Vec<String>,
-    orphans: Vec<String>,
+    orphans: Vec<OrphanFile>,
     size_mismatches: Vec<SizeMismatch>,
     hash_mismatches: Vec<HashMismatch>,
     elapsed_ms: u128,
+}
+
+#[derive(Serialize)]
+struct OrphanFile {
+    path: String,
+    size: u64,
 }
 
 #[derive(Serialize)]
@@ -139,10 +145,15 @@ fn run() -> Result<()> {
         .filter(|path| !actual.contains(*path))
         .cloned()
         .collect();
-    let orphans: Vec<String> = actual
+    let orphans: Vec<OrphanFile> = actual
         .iter()
         .filter(|path| !normalized.contains_key(*path))
-        .cloned()
+        .map(|path| OrphanFile {
+            path: path.clone(),
+            size: std::fs::metadata(root.join(path))
+                .map(|meta| meta.len())
+                .unwrap_or(0),
+        })
         .collect();
 
     let existing: Vec<(String, ExpectedEntry)> = normalized

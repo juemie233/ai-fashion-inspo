@@ -65,7 +65,7 @@ fn reports_missing_orphan_and_size_mismatch() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|v| v == "images/orphan.jpg"));
+        .any(|v| v["path"] == "images/orphan.jpg"));
     assert_eq!(data["size_mismatches"].as_array().unwrap().len(), 1);
     assert_eq!(data["hash_mismatches"].as_array().unwrap().len(), 0);
 
