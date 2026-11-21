@@ -57,6 +57,16 @@
 | ZIP | 原图/视频按 `0001_<safe>.<ext>` 打包（缺失文件跳过计 skipped）+ `manifest.csv`（同 CSV 列契约）+ `README.md` |
 | PDF | ReportLab 矢量生成：A4 封面 + 每页 2×2 网格；封面含合集描述/封面图/本地导出时间/正确素材数，正文图片**等比完整放入**格子（不再 `ImageOps.fit` 裁剪），标签按实际像素宽度换行/省略，页脚 `第 X / Y 页`，作者旁的「原帖」可点击；文字可选中/搜索（不再整页栅格化）；图片最长边 1600px、JPEG 88，线程池生成不阻塞事件循环 |
 
+### 1.4 可选 Rust ZIP 加速
+
+ZIP 导出增加一个**默认关闭、失败自动回退**的 Rust sidecar 路径：
+
+- 配置 `MEDIA_WORKER_BIN` 且素材数达到 `MEDIA_WORKER_ARCHIVE_THRESHOLD`（默认 100）时，
+  优先用 Rust 流式写 ZIP（常量内存）；
+- 未配置、二进制不存在、超时或 Rust 失败：删除半成品，自动回退原 Python `_zip_bytes`；
+- Rust 不连数据库，manifest/README 由 Python 传入内嵌内容；条目名、跳过规则与 Python 保持一致；
+- 可用 `MEDIA_WORKER_ARCHIVE_TIMEOUT_SECONDS` 控制超时（默认 300 秒）。
+
 安全/健壮性：所有素材路径都做 `storage_root` 内解析（越界即跳过）；导出文件落在
 `storage_root/exports/<token>/`，不跟随软链到目录外。
 

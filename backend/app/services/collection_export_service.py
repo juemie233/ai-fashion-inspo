@@ -213,6 +213,17 @@ def _markdown_bytes(collection: ExportCollection, rows: list[dict]) -> bytes:
     return ("\n".join(lines).rstrip() + "\n").encode("utf-8")
 
 
+def _zip_archive_name(row: dict, source: Path | None) -> str:
+    """ZIP 内媒体条目的稳定名称（Python / Rust 共用同一规则）。"""
+    extension = (source.suffix.lower() if source is not None else Path(row["文件名"]).suffix.lower())
+    extension = extension or ".bin"
+    stem = _sanitize_name(
+        row["作者"] or Path(row["文件名"]).stem or row["素材ID"],
+        fallback=row["素材ID"],
+    )[:40]
+    return f"{row['序号']:04d}_{stem}{extension}"
+
+
 def _zip_bytes(rows: list[dict], manifest_csv: bytes, readme_md: bytes) -> tuple[bytes, int, int]:
     """ZIP：原图/视频按 ``0001_<safe>.<ext>`` 打包 + manifest.csv + README.md。
 
@@ -229,15 +240,79 @@ def _zip_bytes(rows: list[dict], manifest_csv: bytes, readme_md: bytes) -> tuple
             if source is None:
                 skipped += 1
                 continue
-            extension = source.suffix.lower() or ".bin"
-            stem = _sanitize_name(
-                row["作者"] or Path(row["文件名"]).stem or row["素材ID"],
-                fallback=row["素材ID"],
-            )[:40]
-            archive_name = f"{row['序号']:04d}_{stem}{extension}"
-            archive.write(source, archive_name)
+            archive.write(source, _zip_archive_name(row, source))
             added += 1
     return buffer.getvalue(), added, skipped
+
+
+async def _zip_bytes_via_media_worker(
+    rows: list[dict],
+    manifest_csv: bytes,
+    readme_md: bytes,
+    output: Path,
+) -> tuple[int, int, int] | None:
+    """优先用 Rust 流式 ZIP；未配置可执行文件时返回 None 让调用方走 Python。
+
+    Rust 只拿绝对路径和清单，不读数据库。manifest/README 作为内嵌文本条目写入，
+    避免再落一份临时 CSV/MD 文件。失败向上抛，由 create_export 回退 Python。
+    """
+    configured = (settings.media_worker_bin or "").strip()
+    if not configured:
+        return None
+    binary = Path(configured).expanduser()
+    if not binary.is_file():
+        logger.warning("MEDIA_WORKER_BIN 指向的文件不存在，ZIP 回退 Python：%s", configured)
+        return None
+
+    entries: list[dict] = [
+        {
+            "archive": "manifest.csv",
+            "content": manifest_csv.decode("utf-8"),
+        },
+        {
+            "archive": "README.md",
+            "content": readme_md.decode("utf-8"),
+        },
+    ]
+    for row in rows:
+        source = _resolve_storage_file(row["相对路径"])
+        entries.append(
+            {
+                "path": str(source) if source is not None else None,
+                "archive": _zip_archive_name(row, source),
+            }
+        )
+
+    process = await asyncio.create_subprocess_exec(
+        str(binary),
+        "archive",
+        str(output),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(
+                json.dumps({"entries": entries}, ensure_ascii=False).encode("utf-8")
+            ),
+            timeout=settings.media_worker_archive_timeout_seconds,
+        )
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise RuntimeError("Rust ZIP 导出超时") from None
+    if process.returncode != 0:
+        detail = stderr.decode("utf-8", errors="replace").strip()[:500]
+        raise RuntimeError(f"Rust ZIP 导出失败（exit {process.returncode}）：{detail}")
+    try:
+        result = json.loads(stdout.decode("utf-8"))
+        skipped = int(result["skipped"])
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Rust ZIP 导出返回结果无法解析") from exc
+    if not output.is_file():
+        raise RuntimeError("Rust ZIP 导出未生成文件")
+    return len(rows) - skipped, skipped, output.stat().st_size
 
 
 _PDF_FONT_NAME: str | None = None
@@ -645,10 +720,12 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
     token = secrets.token_urlsafe(24)
     export_dir = exports_root() / token
     stored_name = f"export.{FORMAT_EXT[export_format]}"
+    stored_path = export_dir / stored_name
     try:
         export_dir.mkdir(parents=True, exist_ok=False)
         manifest_csv = _csv_bytes(rows)
         readme_md = _markdown_bytes(snapshot, rows)
+        content: bytes | None = None
         if export_format == "csv":
             content = manifest_csv
             item_count, skipped = len(rows), 0
@@ -656,14 +733,36 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
             content = readme_md
             item_count, skipped = len(rows), 0
         elif export_format == "zip":
-            content, item_count, skipped = await asyncio.to_thread(
-                _zip_bytes, rows, manifest_csv, readme_md
-            )
+            item_count, skipped = 0, 0
+            used_rust = False
+            if len(rows) >= settings.media_worker_archive_threshold:
+                try:
+                    rust_result = await _zip_bytes_via_media_worker(
+                        rows, manifest_csv, readme_md, stored_path
+                    )
+                except Exception as exc:
+                    # Rust 失败不能影响导出：删掉半成品，回退 Python 内存实现
+                    stored_path.unlink(missing_ok=True)
+                    logger.warning(
+                        "Rust ZIP 导出失败，回退 Python：collection=%s err=%s",
+                        collection_id,
+                        exc,
+                    )
+                    rust_result = None
+                if rust_result is not None:
+                    item_count, skipped, _ = rust_result
+                    used_rust = True
+            if not used_rust:
+                content, item_count, skipped = await asyncio.to_thread(
+                    _zip_bytes, rows, manifest_csv, readme_md
+                )
         else:  # pdf
             content, item_count, skipped = await asyncio.to_thread(
                 _pdf_bytes, snapshot, rows
             )
-        await asyncio.to_thread((export_dir / stored_name).write_bytes, content)
+        if content is not None:
+            await asyncio.to_thread(stored_path.write_bytes, content)
+        size_bytes = stored_path.stat().st_size
 
         expires_at = utcnow() + timedelta(hours=EXPORT_TTL_HOURS)
         meta = {
@@ -675,7 +774,7 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
             "download_filename": _download_filename(snapshot, export_format),
             "item_count": item_count,
             "skipped_count": skipped,
-            "size_bytes": len(content),
+            "size_bytes": size_bytes,
             "created_at": utcnow().isoformat(),
             "expires_at": expires_at.isoformat(),
         }
@@ -697,7 +796,7 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
         "format": export_format,
         "item_count": item_count,
         "skipped_count": skipped,
-        "size_bytes": len(content),
+        "size_bytes": size_bytes,
         "download_url": f"/api/exports/{token}",
         "expires_at": format_utc(expires_at),
     }

@@ -114,7 +114,10 @@ fn run() -> Result<()> {
 
 #[derive(Deserialize)]
 struct ArchiveEntry {
-    path: PathBuf,
+    #[serde(default)]
+    path: Option<PathBuf>,
+    #[serde(default)]
+    content: Option<String>,
     archive: String,
 }
 
@@ -155,18 +158,30 @@ fn write_archive_entries(output: &Path, entries: &[ArchiveEntry]) -> Result<Arch
     let mut written = 0_usize;
     let mut skipped = 0_usize;
     for entry in entries {
-        let source = match File::open(&entry.path) {
+        let name = entry.archive.replace(['/', '\\'], "_");
+        if let Some(content) = &entry.content {
+            zip.start_file(name, options)
+                .with_context(|| format!("ZIP 写入条目失败：{}", entry.archive))?;
+            zip.write_all(content.as_bytes())
+                .with_context(|| format!("ZIP 写入内嵌内容失败：{}", entry.archive))?;
+            written += 1;
+            continue;
+        }
+        let Some(path) = &entry.path else {
+            skipped += 1;
+            continue;
+        };
+        let source = match File::open(path) {
             Ok(file) => file,
             Err(_) => {
                 skipped += 1;
                 continue;
             }
         };
-        let name = entry.archive.replace(['/', '\\'], "_");
         zip.start_file(name, options)
             .with_context(|| format!("ZIP 写入条目失败：{}", entry.archive))?;
         std::io::copy(&mut BufReader::new(source), &mut zip)
-            .with_context(|| format!("ZIP 复制文件失败：{}", entry.path.display()))?;
+            .with_context(|| format!("ZIP 复制文件失败：{}", path.display()))?;
         written += 1;
     }
     zip.finish().context("完成 ZIP 失败")?;
@@ -456,20 +471,27 @@ mod tests {
         std::fs::write(&first, b"hello").unwrap();
         let entries = vec![
             ArchiveEntry {
-                path: first.clone(),
+                path: Some(first.clone()),
+                content: None,
                 archive: "0001_first.txt".to_string(),
             },
             ArchiveEntry {
-                path: dir.join("missing.txt"),
+                path: Some(dir.join("missing.txt")),
+                content: None,
                 archive: "0002_missing.txt".to_string(),
+            },
+            ArchiveEntry {
+                path: None,
+                content: Some("manifest".to_string()),
+                archive: "manifest.csv".to_string(),
             },
         ];
         let result = write_archive_entries(&output, &entries).unwrap();
-        assert_eq!(result.entries, 1);
+        assert_eq!(result.entries, 2);
         assert_eq!(result.skipped, 1);
         assert!(result.bytes > 0);
         let mut archive = zip::ZipArchive::new(File::open(&output).unwrap()).unwrap();
-        assert_eq!(archive.len(), 1);
+        assert_eq!(archive.len(), 2);
         let mut text = String::new();
         archive
             .by_index(0)

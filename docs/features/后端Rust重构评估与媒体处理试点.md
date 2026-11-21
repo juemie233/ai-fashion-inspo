@@ -1,7 +1,7 @@
 # 后端 Rust 重构评估与媒体处理试点
 
 > 日期：2026-11-21
-> 状态：v0 已完成；缩略图否决、流式 ZIP 候选；均**暂不接入生产**（见 §9、§10）
+> 状态：缩略图否决；流式 ZIP 已**可选接入**（默认关闭、阈值启用、失败回退）；分支不合并 master
 > 范围：只评估“是否/在哪里引入 Rust”，不承诺全量重写后端
 
 ## 1. 结论
@@ -237,14 +237,16 @@ Rust 的 `zip` crate 可以边读文件边写输出，理论上同时改善**内
 
 ZIP 输出大小与条目名完全一致。
 
-### 判断
+### 判断与接入
 
 - 速度提升不大（约 1.05~1.26×），**不是压倒性优势**；
 - 真正的收益是 **Rust 流式写入，内存不随 ZIP 文件大小线性增长**；
-- 因此本轮不直接改生产导出链路，但把 `archive` 作为**下一阶段最值得接入的 Rust 候选**：
-  - 由 Python 传入文件清单；
-  - Rust 输出 `.zip` 后由 Python 写 meta / 返回下载 token；
-  - 保留 Python 实现作为 fallback；
-  - 先只对大于一定素材数的 ZIP 启用。
-
-当前仍保持“实验分支，不合并、不接入生产”。
+- 因此把 `archive` 接入导出链路，但**默认关闭、按阈值启用、失败自动回退**：
+  - 新增 `MEDIA_WORKER_BIN`：不配置则完全走 Python；
+  - `MEDIA_WORKER_ARCHIVE_THRESHOLD`：素材数达到阈值才尝试 Rust（默认 100）；
+  - `MEDIA_WORKER_ARCHIVE_TIMEOUT_SECONDS`：sidecar 超时（默认 300s）；
+  - Rust 输出 `.zip` 到既有导出目录，Python 继续写 `meta.json`、返回下载 token；
+  - Rust 失败/超时/二进制缺失：删除半成品，自动回退 Python `_zip_bytes`；
+  - Python 仍是唯一数据库/业务状态写入方，Rust 不连数据库。
+- 已用真实合集 4（52 张）手动验证：Rust 路径成功，`manifest.csv`/`README.md`/52 个媒体条目均完整。
+- 当前仍保持“实验分支，不合并到 `master`”；生产启用只需在 `.env` 配置 `MEDIA_WORKER_BIN`。

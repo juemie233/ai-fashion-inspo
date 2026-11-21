@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import async_session
 from app.models.collection import CollectionItem
 from app.models.inspiration import Inspiration
+from app.services import collection_export_service
 from app.utils.time import utcnow
 
 
@@ -290,6 +291,32 @@ async def test_export_pdf_skips_unreadable_and_keeps_valid(client, upload):
     download = client.get(data["download_url"])
     assert download.status_code == 200
     assert download.content.startswith(b"%PDF")
+
+
+async def test_export_zip_falls_back_when_rust_sidecar_fails(
+    client, upload, monkeypatch
+):
+    """Rust ZIP 失败/不可用时必须删除半成品并回退 Python，不能影响导出可用性。"""
+    collection_id = _create_collection(client, "Rust 回退")
+    _add_members(
+        client, collection_id, [_upload(client, upload), _upload(client, upload)]
+    )
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("模拟 sidecar 崩溃")
+
+    monkeypatch.setattr(collection_export_service, "_zip_bytes_via_media_worker", boom)
+    monkeypatch.setattr(settings, "media_worker_bin", "fake-media-worker.exe")
+    monkeypatch.setattr(settings, "media_worker_archive_threshold", 1)
+
+    data = _export_ok(client, collection_id, "zip")
+    assert data["item_count"] == 2
+    assert data["skipped_count"] == 0
+    download = client.get(data["download_url"])
+    assert download.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
+        assert archive.namelist()[:2] == ["manifest.csv", "README.md"]
+        assert len(archive.namelist()) == 4
 
 
 async def test_export_broken_meta_does_not_break_download_or_cleanup(client, upload):
