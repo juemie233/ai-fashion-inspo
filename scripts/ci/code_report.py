@@ -54,6 +54,7 @@ TEXT_EXTS = {
     ".py", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".vue", ".md", ".mdx",
     ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".txt",
     ".sh", ".bat", ".ps1", ".sql", ".html", ".css", ".scss", ".less",
+    ".rs",
 }
 
 """即使扩展名命中也要跳过的文件（锁文件：自动生成、行数无信息量）。"""
@@ -79,7 +80,7 @@ EXCLUDE_DIRS = {
     "test-results", "playwright-report", ".next", ".turbo", ".nuxt",
     "storage", "backups", "logs", "uploads",
     ".expo", "android", "ios", ".gradle", ".cxx",
-    ".idea", ".vscode", ".DS_Store",
+    ".idea", ".vscode", ".DS_Store", "target",
 }
 
 """模型权重 / 媒体 / 数据库等非源码产物（显式列出，便于说明「已排除模型权重」）。"""
@@ -96,6 +97,7 @@ EXCLUDE_EXTS = {
 
 BUCKET_ORDER = [
     "backend_src",
+    "rust_sidecar",
     "frontend_src",
     "backend_tests",
     "frontend_tests",
@@ -111,6 +113,7 @@ BUCKET_ORDER = [
 
 BUCKET_LABELS = {
     "backend_src": "后端 源码",
+    "rust_sidecar": "Rust sidecar",
     "frontend_src": "前端 源码",
     "backend_tests": "后端 测试",
     "frontend_tests": "前端 测试",
@@ -338,7 +341,7 @@ def _read_text_file(rel: str, read_bytes) -> SourceFile | None:
 
 
 def classify(rel: str) -> str:
-    """把相对路径归到 12 个职能桶之一（口径见模块 docstring 与 BUCKET_LABELS）。"""
+    """把相对路径归到 13 个职能桶之一（口径见模块 docstring 与 BUCKET_LABELS）。"""
     parts = PurePosixPath(rel).parts
     name = parts[-1]
     top = parts[0] if parts else ""
@@ -348,6 +351,8 @@ def classify(rel: str) -> str:
             return "backend_migrations"
         if len(parts) > 1 and parts[1] == "tests":
             return "backend_tests"
+        if len(parts) > 1 and parts[1] == "rust":
+            return "rust_sidecar"
         if len(parts) > 1 and parts[1] in ("app", "scripts"):
             # app/ 里偶有 test_ 前缀的辅助文件，仍按测试归类（与 tests/ 同口径）
             if name.startswith("test_") or name.endswith("_test.py"):
@@ -408,6 +413,7 @@ class Stats:
 
 LANGUAGE_GROUPS = [
     ("Python", {".py"}),
+    ("Rust", {".rs"}),
     ("Vue", {".vue"}),
     ("TypeScript", {".ts", ".tsx"}),
     ("Markdown", {".md", ".mdx"}),
@@ -825,9 +831,12 @@ def print_report(stats: Stats, *, deep: bool) -> None:
     langs = sorted(
         stats.languages.items(), key=lambda kv: kv[1]["lines"], reverse=True
     )
+    # 不只取 Top 6：Rust sidecar 等新语言行数占比很小，仍必须出现在报告里，
+    # 否则「统计程序已支持 Rust」在输出上看不出来。
     lang_text = "、".join(
-        f"{label} {value['lines']:,} 行（{value['lines'] / total * 100:.0f}%）"
-        for label, value in langs[:6]
+        f"{label} {value['lines']:,} 行（{value['lines'] / total * 100:.1f}%）"
+        for label, value in langs
+        if value["lines"] > 0
     )
     print(f" {lang_text}")
 

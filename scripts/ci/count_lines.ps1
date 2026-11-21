@@ -43,6 +43,7 @@ $RE_PY = '^#'
 $RE_TS = '^(//|/\*|\*|<!--)'
 $RE_BAT = '^(rem|REM|::)'
 $RE_HTML = '^<!--'
+$RE_RS = '^(//|/\*|\*)'
 
 Write-Host ""
 Write-Host "=== Code Line Count ===" -ForegroundColor Cyan
@@ -90,6 +91,13 @@ if ($sharedFiles.Count -gt 0) {
     Count-FileLines -files $paths -commentPattern $RE_TS -label "[6] Shared Types"
 }
 
+$rustFiles = Get-ChildItem -Path (Join-Path $projectRoot "backend/rust") -Recurse -File -Include "*.rs" -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -NotMatch "(\\|/)(target|node_modules|\.venv)($|\\)" }
+if ($rustFiles.Count -gt 0) {
+    $paths = $rustFiles | ForEach-Object { $_.FullName }
+    Count-FileLines -files $paths -commentPattern $RE_RS -label "[7] Rust Sidecar"
+}
+
 $docFiles = @()
 $mdFiles = Get-ChildItem -Path (Join-Path $projectRoot "*") -File -Include "*.md", "*.mdx" -ErrorAction SilentlyContinue
 $mdFiles += Get-ChildItem -Path (Join-Path $projectRoot "backend\*") -File -Include "*.txt", ".env", ".gitignore" -ErrorAction SilentlyContinue
@@ -98,7 +106,7 @@ foreach ($f in $mdFiles) {
     $docFiles += $f.FullName
 }
 if ($docFiles.Count -gt 0) {
-    Count-FileLines -files $docFiles -commentPattern $RE_HTML -label "[7] Docs/Config"
+    Count-FileLines -files $docFiles -commentPattern $RE_HTML -label "[8] Docs/Config"
 }
 
 Write-Host ""
@@ -109,8 +117,8 @@ $totalBlank = 0
 $totalComment = 0
 
 $allFiles = Get-ChildItem -Path $projectRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
-    Where-Object { $_.Extension -in @(".py", ".ts", ".tsx", ".vue", ".css", ".js", ".html", ".json", ".md", ".sh", ".bat") } |
-    Where-Object { $_.FullName -NotMatch "(\\|/)(node_modules|__pycache__|dist|build|\.git|\.claude|storage|\.pytest_cache|\.egg-info|\.venv|site-packages|backups)($|\\)" } |
+    Where-Object { $_.Extension -in @(".py", ".ts", ".tsx", ".vue", ".css", ".js", ".html", ".json", ".md", ".sh", ".bat", ".rs") } |
+    Where-Object { $_.FullName -NotMatch "(\\|/)(node_modules|__pycache__|dist|build|\.git|\.claude|storage|\.pytest_cache|\.egg-info|\.venv|site-packages|backups|target)($|\\)" } |
     Where-Object { $_.Name -notin @("package-lock.json", "pnpm-lock.yaml", "yarn.lock") }
 
 Write-Host ("File count: {0}" -f $allFiles.Count)
@@ -120,7 +128,7 @@ foreach ($f in $allFiles) {
     foreach ($l in $line) {
         $trimmed = $l.Trim()
         if ($trimmed -eq "") { $totalBlank++ }
-        elseif ($trimmed -match $RE_PY -or $trimmed -match $RE_TS -or $trimmed -match $RE_BAT) { $totalComment++ }
+        elseif ($trimmed -match $RE_PY -or $trimmed -match $RE_TS -or $trimmed -match $RE_BAT -or $trimmed -match $RE_RS) { $totalComment++ }
         else { $totalCode++ }
     }
 }

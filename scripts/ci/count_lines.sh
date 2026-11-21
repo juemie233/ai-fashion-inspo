@@ -28,6 +28,7 @@ count_style() {
 # 注释行正则（忽略前导空白；不同语言注释符号取并集；awk 中字面 * 用 [*]）
 RE_PY='^[[:space:]]*#'                                          # Python / Shell / gitignore
 RE_TS='^[[:space:]]*(//|/[*]|[*]|<!--)'                          # TS / JS / CSS / Vue
+RE_RS='^[[:space:]]*(//|/[*]|[*])'                               # Rust
 RE_HTML='^[[:space:]]*<!--'                                      # HTML / Markdown 注释
 RE_BAT='^[[:space:]]*(rem|REM|::)'                               # Windows 批处理
 
@@ -73,19 +74,26 @@ read code blank comment <<< "$(count_style "$files" "$RE_TS")"
 total=$((code + blank + comment))
 echo "   共享类型 (shared/)      总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
 
-# 7. 文档/配置（根目录 md/gitignore + backend 配置）
+# 7. Rust sidecar（backend/rust，排除 Cargo target）
+files=$(find backend/rust -type f -name "*.rs" -not -path "*/target/*" 2>/dev/null)
+read code blank comment <<< "$(count_style "$files" "$RE_RS")"
+total=$((code + blank + comment))
+echo "   Rust sidecar            总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
+
+# 8. 文档/配置（根目录 md/gitignore + backend 配置）
 files=$( { find . -maxdepth 1 -type f \( -name "*.md" -o -name ".gitignore" \); find backend -maxdepth 1 -type f \( -name "*.txt" -o -name ".env" -o -name ".gitignore" \); } 2>/dev/null )
 read code blank comment <<< "$(count_style "$files" "$RE_HTML")"
 total=$((code + blank + comment))
 echo "   文档/配置               总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
 
-# 8. 总计（全仓代码文件，排除依赖与产物目录）
-files=$(find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.css" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.md" -o -name "*.sh" -o -name "*.bat" \) \
+# 9. 总计（全仓代码文件，排除依赖与产物目录）
+files=$(find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.css" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.md" -o -name "*.sh" -o -name "*.bat" -o -name "*.rs" \) \
   -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -not -path "*/dist/*" -not -path "*/build/*" \
+  -not -path "*/target/*" \
   -not -path "*/.git/*" -not -path "*/.claude/*" -not -path "*/package-lock.json" \
   -not -path "*/.venv/*" -not -path "*/site-packages/*" -not -path "*/.egg-info/*" \
   -not -path "*/storage/*" -not -path "*/.pytest_cache/*" -not -path "*/backups/*")
-read code blank comment <<< "$(count_style "$files" "$RE_PY|$RE_TS|$RE_BAT")"
+read code blank comment <<< "$(count_style "$files" "$RE_PY|$RE_TS|$RE_BAT|$RE_RS")"
 total=$((code + blank + comment))
 echo "   ─────────────────────────────────────────────────────────"
 echo "   总计                    总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"

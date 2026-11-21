@@ -300,7 +300,26 @@ ZIP 输出大小与条目名完全一致。
 
 当前仍保持“实验分支，不合并到 `master`”。
 
-## 12. 近重复分组的再评估（本轮不开发）
+## 12. 代码统计中的 Rust
+
+统计脚本已同步支持 Rust：
+
+- `scripts/ci/count_lines.sh`：新增「Rust sidecar」分节（`backend/rust/**/*.rs`，排除 target）
+- `scripts/ci/count_lines.ps1`：同一口径；文件保持 UTF-8 BOM
+- `scripts/ci/project_stats.py`：`SOURCE_EXTS` 加 `.rs`，新增 `backend/rust` 分块
+- `scripts/ci/code_report.py`：新增 `rust_sidecar` 桶与 Rust 语言组，按语言输出不再只取 Top 6
+
+当前统计（2026-11-21）：
+
+| 口径 | 文件 | 总行 | 代码 |
+| --- | ---: | ---: | ---: |
+| count_lines / project_stats（仅 `.rs`） | 3 | 902 | 790 |
+| code_report Rust 语言（仅 `.rs`） | 3 | 902 | — |
+| code_report `Rust sidecar` 桶（含 Cargo.toml/README 等） | 5 | 1,007 | — |
+
+全仓代码总量约 **34 万行**；Rust 目前约 **0.3%**。
+
+## 13. 近重复分组的再评估（本轮不开发）
 
 - 现有 Python 分带倒排索引在 22,347 张已缓存素材上约 **1.7s**（历史实测）；
 - 当前库规模约 2.6 万素材，管理页近重复扫描不是用户可感知瓶颈；
