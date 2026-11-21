@@ -96,6 +96,7 @@ fashion-inspo/
 │   │   ├── services/      # 业务逻辑层
 │   │   ├── scrapers/      # 平台爬虫
 │   │   └── utils/         # 工具函数
+│   ├── rust/              # Rust sidecar 试点（media-worker；不参与 Python 主链路）
 │   ├── storage/           # 本地文件存储（gitignore）
 │   ├── alembic/           # 数据库迁移
 │   └── requirements.txt
