@@ -33,6 +33,12 @@ media-worker hash <input>
 media-worker thumbnail <input> <output> --max-width 400 --max-height 600 --quality 85
 ```
 
+流式 ZIP（从 stdin 读 manifest，不把整个 ZIP 放内存）：
+
+```bash
+echo '{"entries":[{"path":"G:/.../a.webp","archive":"0001_a.webp"}]}' | media-worker archive D:/exports/out.zip
+```
+
 常驻批量模式（Python 调用方保持进程存活，按行 stdin/stdout 收发 JSON）：
 
 ```text

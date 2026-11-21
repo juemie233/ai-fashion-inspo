@@ -53,6 +53,11 @@ enum Command {
     },
     /// 常驻批量模式：stdin 逐行读 JSON，stdout 逐行回 JSON（避免每张图启动进程）
     Batch,
+    /// 流式 ZIP：从 stdin 读 {output, entries:[{path,archive}]}，不把整个 ZIP 放内存
+    Archive {
+        /// 输出 zip 路径（同时覆盖 manifest 内的 output）
+        output: PathBuf,
+    },
 }
 
 #[derive(Serialize)]
@@ -100,7 +105,80 @@ fn run() -> Result<()> {
             print_json(&output)
         }
         Command::Batch => run_batch(),
+        Command::Archive { output } => {
+            let result = write_archive(&output)?;
+            print_json(&result)
+        }
     }
+}
+
+#[derive(Deserialize)]
+struct ArchiveEntry {
+    path: PathBuf,
+    archive: String,
+}
+
+#[derive(Deserialize)]
+struct ArchiveManifest {
+    entries: Vec<ArchiveEntry>,
+}
+
+#[derive(Serialize)]
+struct ArchiveOutput {
+    output: String,
+    entries: usize,
+    skipped: usize,
+    bytes: u64,
+}
+
+fn write_archive(output: &Path) -> Result<ArchiveOutput> {
+    let manifest: ArchiveManifest =
+        serde_json::from_reader(std::io::stdin().lock()).context("解析 archive manifest 失败")?;
+    write_archive_entries(output, &manifest.entries)
+}
+
+fn write_archive_entries(output: &Path, entries: &[ArchiveEntry]) -> Result<ArchiveOutput> {
+    if entries.is_empty() {
+        bail!("archive manifest 没有 entries");
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("创建输出目录失败：{}", parent.display()))?;
+        }
+    }
+    let file =
+        File::create(output).with_context(|| format!("无法创建输出文件：{}", output.display()))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut written = 0_usize;
+    let mut skipped = 0_usize;
+    for entry in entries {
+        let source = match File::open(&entry.path) {
+            Ok(file) => file,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let name = entry.archive.replace(['/', '\\'], "_");
+        zip.start_file(name, options)
+            .with_context(|| format!("ZIP 写入条目失败：{}", entry.archive))?;
+        std::io::copy(&mut BufReader::new(source), &mut zip)
+            .with_context(|| format!("ZIP 复制文件失败：{}", entry.path.display()))?;
+        written += 1;
+    }
+    zip.finish().context("完成 ZIP 失败")?;
+    let bytes = std::fs::metadata(output)
+        .with_context(|| format!("读取输出文件失败：{}", output.display()))?
+        .len();
+    Ok(ArchiveOutput {
+        output: output.to_string_lossy().into_owned(),
+        entries: written,
+        skipped,
+        bytes,
+    })
 }
 
 #[derive(Deserialize)]
@@ -367,6 +445,39 @@ mod tests {
 
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn archive_streams_entries_and_skips_missing() {
+        let dir = temp_path("media-worker-archive", "dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first.txt");
+        let output = dir.join("out.zip");
+        std::fs::write(&first, b"hello").unwrap();
+        let entries = vec![
+            ArchiveEntry {
+                path: first.clone(),
+                archive: "0001_first.txt".to_string(),
+            },
+            ArchiveEntry {
+                path: dir.join("missing.txt"),
+                archive: "0002_missing.txt".to_string(),
+            },
+        ];
+        let result = write_archive_entries(&output, &entries).unwrap();
+        assert_eq!(result.entries, 1);
+        assert_eq!(result.skipped, 1);
+        assert!(result.bytes > 0);
+        let mut archive = zip::ZipArchive::new(File::open(&output).unwrap()).unwrap();
+        assert_eq!(archive.len(), 1);
+        let mut text = String::new();
+        archive
+            .by_index(0)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "hello");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
