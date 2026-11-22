@@ -835,20 +835,18 @@ async def expand_collection(
         added_by="ai_suggest",
         batch_id=batch_id,
     )
+    if result["added"] == 0:
+        # 全部已在合集内（例如另一个标签页先加了）：没有可撤销的成员，
+        # 不返回批次号，避免前端显示「已加入 0 个素材 · 撤销」且撤销必 404
+        return {"batch_id": None, **result}
+
     from app.services.audit_service import record_audit_log
 
     await record_audit_log(
         action="collection_expand",
         target_type="collections",
         count=int(result["added"]),
-        detail=json.dumps(
-            {
-                "collection_id": collection_id,
-                "batch_id": batch_id,
-                "added_ids": result["added_ids"],
-            },
-            ensure_ascii=False,
-        ),
+        detail=f"合集#{collection_id} 扩充 {result['added']} 个素材（批次 {batch_id}）",
     )
     return {"batch_id": batch_id, **result}
 
@@ -888,10 +886,7 @@ async def undo_expansion(db: AsyncSession, collection_id: int, batch_id: str) ->
         action="collection_expand_undo",
         target_type="collections",
         count=len(rows),
-        detail=json.dumps(
-            {"collection_id": collection_id, "batch_id": batch_id},
-            ensure_ascii=False,
-        ),
+        detail=f"合集#{collection_id} 撤销扩充（批次 {batch_id}，移除 {len(rows)} 个素材）",
     )
     return {"removed": len(rows), "batch_id": batch_id}
 

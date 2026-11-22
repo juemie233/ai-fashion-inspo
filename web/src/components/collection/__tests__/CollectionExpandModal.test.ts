@@ -14,7 +14,7 @@ import ArcoVue from '@arco-design/web-vue'
 const mocks = vi.hoisted(() => ({
   suggest: vi.fn(),
   expand: vi.fn(),
-  message: { success: vi.fn(), error: vi.fn() },
+  message: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
 vi.mock('@/api/collections', () => ({
@@ -146,7 +146,9 @@ describe('CollectionExpandModal', () => {
     await flushPromises()
 
     expect(mocks.expand).toHaveBeenCalledWith(5, ['i1', 'i2'])
-    expect(wrapper.emitted('applied')?.[0]).toEqual([{ batch_id: 'batch-1', added: 2 }])
+    expect(wrapper.emitted('applied')?.[0]).toEqual([
+      { collectionId: 5, batch_id: 'batch-1', added: 2 },
+    ])
     expect(mocks.message.success).toHaveBeenCalled()
   })
 
@@ -163,6 +165,27 @@ describe('CollectionExpandModal', () => {
     // 没有可加入项时按钮禁用
     const add = bodyButtons().find((b) => b.textContent?.includes('加入合集'))
     expect(add?.disabled).toBe(true)
+  })
+
+  it('全部已在合集内（added=0）时不显示撤销条', async () => {
+    mocks.expand.mockResolvedValue({
+      batch_id: null,
+      added: 0,
+      skipped: 2,
+      not_found: 0,
+      added_ids: [],
+    })
+    const wrapper = mountModal()
+    await flushPromises()
+
+    clickBodyButton('全选本页')
+    await flushPromises()
+    clickBodyButton('加入合集')
+    await flushPromises()
+
+    expect(mocks.expand).toHaveBeenCalled()
+    expect(mocks.message.info).toHaveBeenCalledWith('所选素材都已在合集内，没有新增')
+    expect(wrapper.emitted('applied')).toBeUndefined()
   })
 
   it('生成失败展示错误并可重试', async () => {

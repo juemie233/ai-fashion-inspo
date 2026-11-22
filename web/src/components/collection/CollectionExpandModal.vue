@@ -26,8 +26,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:visible', v: boolean): void
-  /** 扩充成功：父级据此显示「撤销」提示条 */
-  (e: 'applied', payload: { batch_id: string; added: number }): void
+  /** 扩充成功：父级据此显示「撤销」提示条（带合集 ID，避免切合集后挂错） */
+  (e: 'applied', payload: { collectionId: number; batch_id: string; added: number }): void
 }>()
 
 const loading = ref(false)
@@ -37,6 +37,8 @@ const selectedIds = ref<Set<string>>(new Set<string>())
 const submitting = ref(false)
 /** 请求序号：切换合集/重复生成时丢弃过期响应 */
 let requestSeq = 0
+/** 滑杆/开关的防抖定时器：Arco slider 拖动期间每个 pointermove 都会 emit change */
+let generateTimer: ReturnType<typeof setTimeout> | null = null
 
 const minSimilarity = ref(0.5)
 const outfitOnly = ref(false)
@@ -108,18 +110,42 @@ function clearSelection(): void {
   selectedIds.value = new Set<string>()
 }
 
+/** 防抖生成：滑杆拖动/开关切换时合并请求，避免每个 pointermove 打一次后端 */
+function scheduleGenerate(): void {
+  if (generateTimer !== null) clearTimeout(generateTimer)
+  generateTimer = setTimeout(() => {
+    generateTimer = null
+    void generate()
+  }, 300)
+}
+
+function runNow(): void {
+  if (generateTimer !== null) {
+    clearTimeout(generateTimer)
+    generateTimer = null
+  }
+  void generate()
+}
+
 async function submit(): Promise<void> {
   const collection = props.collection
   if (!collection || selectedCount.value === 0 || submitting.value) return
+  const collectionId = collection.id
   submitting.value = true
   try {
-    const data = await expandCollection(collection.id, [...selectedIds.value])
+    const data = await expandCollection(collectionId, [...selectedIds.value])
+    if (data.added === 0 || !data.batch_id) {
+      // 全部已在合集内：没有可撤销的批次，不显示撤销条
+      Message.info('所选素材都已在合集内，没有新增')
+      emit('update:visible', false)
+      return
+    }
     Message.success(
       data.skipped > 0
         ? `已扩充 ${data.added} 个素材（${data.skipped} 个已在合集内）`
         : `已扩充 ${data.added} 个素材`,
     )
-    emit('applied', { batch_id: data.batch_id, added: data.added })
+    emit('applied', { collectionId, batch_id: data.batch_id, added: data.added })
     emit('update:visible', false)
   } catch (e) {
     Message.error(getApiErrorMessage(e, '扩充失败'))
@@ -133,6 +159,10 @@ watch(
   [() => props.visible, () => props.collection?.id],
   ([visible]) => {
     requestSeq++
+    if (generateTimer !== null) {
+      clearTimeout(generateTimer)
+      generateTimer = null
+    }
     if (!visible) {
       loading.value = false
       result.value = null
@@ -169,16 +199,16 @@ watch(
           :max="0.9"
           :step="0.05"
           style="width: 180px"
-          @change="() => void generate()"
+          @change="scheduleGenerate"
         />
       </div>
-      <a-checkbox v-model="outfitOnly" @change="() => void generate()">
+      <a-checkbox v-model="outfitOnly" @change="scheduleGenerate">
         只用大标签相近的素材
       </a-checkbox>
-      <a-checkbox v-model="excludeOtherAuto" @change="() => void generate()">
+      <a-checkbox v-model="excludeOtherAuto" @change="scheduleGenerate">
         排除其它抖音收藏夹里的素材
       </a-checkbox>
-      <a-button size="small" :loading="loading" @click="() => void generate()">重新生成</a-button>
+      <a-button size="small" :loading="loading" @click="runNow">重新生成</a-button>
     </div>
 
     <p v-if="profileText" class="expand-profile">{{ profileText }}</p>
@@ -217,6 +247,7 @@ watch(
             selectable
             :selected-ids="selectedIds"
             :show-actions="false"
+            :show-rating="false"
             @toggle-select="toggleSelect"
           />
         </div>

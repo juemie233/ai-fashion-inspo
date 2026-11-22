@@ -238,7 +238,8 @@ export async function suggestCollectionItems(
 }
 
 export interface CollectionExpandResult {
-  batch_id: string
+  /** 批次号；本次没有真正加入任何素材时为 null（前端不显示撤销条） */
+  batch_id: string | null
   added: number
   skipped: number
   not_found: number

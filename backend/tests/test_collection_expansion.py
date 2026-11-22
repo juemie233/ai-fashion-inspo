@@ -206,3 +206,63 @@ async def test_suggest_falls_back_to_tags_without_vectors(client, upload, monkey
     assert resp.status_code == 200
     ids = [item["inspiration"]["id"] for item in resp.json()["items"]]
     assert candidate_id in ids
+
+
+async def test_expand_with_no_new_members_returns_no_batch(client, upload):
+    """全部已在合集内时不返回可撤销批次（前端据此不显示撤销条）。"""
+    collection_id = _create_collection(client, "重复扩充")
+    insp_id = upload().json()["id"]
+
+    first = _expand(client, collection_id, [insp_id])
+    assert first.status_code == 200
+    assert first.json()["added"] == 1
+    assert first.json()["batch_id"]
+
+    again = _expand(client, collection_id, [insp_id])
+    assert again.status_code == 200
+    body = again.json()
+    assert body["added"] == 0
+    assert body["batch_id"] is None
+
+
+async def test_suggest_uses_vectors_when_available(client, upload, monkeypatch):
+    """向量可用时走混合打分（回归：suggest 服务必须用 vector.store，不是薄壳）。"""
+    from app.services import collection_suggest_service as suggest_service
+
+    # 薄壳 app/services/vector_store.py 没有 get_vectors_batch；这条断言防止退回薄壳
+    assert hasattr(suggest_service.vector_store, "get_vectors_batch")
+
+    seed_id = upload().json()["id"]
+    candidate_id = upload().json()["id"]
+    collection_id = _create_collection(client, "向量扩充")
+    client.post(
+        f"/api/collections/{collection_id}/inspirations",
+        json={"inspiration_ids": [seed_id]},
+    )
+
+    monkeypatch.setattr(suggest_service, "MIN_SEED_VECTORS", 1)
+    monkeypatch.setattr(
+        suggest_service.vector_store, "is_lancedb_available", lambda: True
+    )
+
+    async def fake_vectors(kind, ids):
+        return {insp_id: [1.0, 0.0] for insp_id in ids}
+
+    async def fake_search(kind, vector, top_k):
+        return [{"inspiration_id": candidate_id, "score": 0.9}]
+
+    monkeypatch.setattr(suggest_service.vector_store, "get_vectors_batch", fake_vectors)
+    monkeypatch.setattr(suggest_service.vector_store, "search_vectors", fake_search)
+
+    resp = _suggest(client, collection_id, min_similarity=0.5)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["profile"]["vector_available"] is True
+    assert data["profile"]["seeds_used"] == 1
+    hit = next(
+        (item for item in data["items"] if item["inspiration"]["id"] == candidate_id),
+        None,
+    )
+    assert hit is not None
+    assert hit["match_source"] == "hybrid"
+    assert hit["similarity"] >= 0.5

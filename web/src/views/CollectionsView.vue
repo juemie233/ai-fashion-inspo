@@ -269,13 +269,14 @@ function openExpand(): void {
   expandOpen.value = true
 }
 
-function handleExpanded(payload: { batch_id: string; added: number }): void {
-  const collection = current.value
-  if (!collection) return
-  lastExpansion.value = {
-    collectionId: collection.id,
-    batchId: payload.batch_id,
-    added: payload.added,
+function handleExpanded(payload: { collectionId: number; batch_id: string; added: number }): void {
+  // 只在与当前合集一致时挂撤销条：请求期间可能已切到别的合集
+  if (current.value?.id === payload.collectionId) {
+    lastExpansion.value = {
+      collectionId: payload.collectionId,
+      batchId: payload.batch_id,
+      added: payload.added,
+    }
   }
   void loadContent()
   void loadCollections()

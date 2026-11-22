@@ -22,8 +22,8 @@ from app.config import settings
 from app.models.collection import CollectionItem
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
-from app.services import vector_store
 from app.services.collection_service import require_expandable
+from app.services.vector import store as vector_store  # 注意：不是 services.vector_store 薄壳（无 get_vectors_batch）
 from app.services.inspiration_query import inspiration_load_options
 
 logger = logging.getLogger(__name__)

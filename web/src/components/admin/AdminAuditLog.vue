@@ -35,6 +35,8 @@ const ACTION_LABELS: Record<string, string> = {
   retry_scraper_task: '重试采集任务',
   deduplicate: '近似重复删除',
   f2_rollback: '回滚 f2 批次',
+  collection_expand: '合集扩充',
+  collection_expand_undo: '撤销合集扩充',
 }
 
 function actionLabel(action: string): string {
