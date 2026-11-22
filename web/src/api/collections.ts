@@ -188,6 +188,85 @@ export async function mergeCollections(
   return data
 }
 
+// ── 「按此合集扩充」（2026-11-22）──
+
+/** 扩充候选条目：相似度 + 共同标签 + 命中理由 */
+export interface CollectionSuggestItem {
+  inspiration: InspirationOut
+  similarity: number
+  shared_tags: string[]
+  outfit_tags: string[]
+  /** hybrid = 向量+标签；tag = 仅标签（向量不可用时的降级） */
+  match_source: string
+  reason: string
+}
+
+/** 候选接口的种子画像 */
+export interface CollectionSuggestProfile {
+  top_tags: string[]
+  outfit_tags: string[]
+  seeds_used: number
+  vector_available: boolean
+}
+
+export interface CollectionSuggestResult {
+  items: CollectionSuggestItem[]
+  total: number
+  profile: CollectionSuggestProfile
+}
+
+export interface CollectionSuggestParams {
+  limit?: number
+  /** 综合相似度下限（0~1） */
+  min_similarity?: number
+  /** 只保留与种子共享穿搭大标签的候选 */
+  outfit_only?: boolean
+  /** 排除已属于其它抖音自动合集的素材 */
+  exclude_other_auto?: boolean
+}
+
+/** 生成扩充候选（只读，不写库；只服务用户自建手动合集） */
+export async function suggestCollectionItems(
+  id: number,
+  params: CollectionSuggestParams = {},
+): Promise<CollectionSuggestResult> {
+  const { data } = await apiClient.post<CollectionSuggestResult>(
+    `/collections/${id}/suggest-items`,
+    params,
+  )
+  return data
+}
+
+export interface CollectionExpandResult {
+  batch_id: string
+  added: number
+  skipped: number
+  not_found: number
+  added_ids: string[]
+}
+
+/** 把勾选的候选按「扩充批次」写入手动合集（返回 batch_id 供撤销） */
+export async function expandCollection(
+  id: number,
+  inspirationIds: string[],
+): Promise<CollectionExpandResult> {
+  const { data } = await apiClient.post<CollectionExpandResult>(`/collections/${id}/expansions`, {
+    inspiration_ids: inspirationIds,
+  })
+  return data
+}
+
+/** 撤销某一扩充批次（只删该批次 ai_suggest 成员） */
+export async function undoCollectionExpansion(
+  id: number,
+  batchId: string,
+): Promise<{ removed: number; batch_id: string }> {
+  const { data } = await apiClient.delete<{ removed: number; batch_id: string }>(
+    `/collections/${id}/expansions/${encodeURIComponent(batchId)}`,
+  )
+  return data
+}
+
 /** 合集内素材拖拽排序（仅手动合集） */
 export async function reorderCollectionItems(id: number, orderedIds: string[]): Promise<void> {
   await apiClient.patch(`/collections/${id}/items/order`, { ordered_ids: orderedIds })

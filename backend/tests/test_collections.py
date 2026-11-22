@@ -94,12 +94,17 @@ def test_batch_add_dedup(client, upload):
 
     r = client.post(f"/api/collections/{c['id']}/inspirations",
                     json={"inspiration_ids": [a, a, b]})
-    assert r.json() == {"added": 2, "skipped": 0, "not_found": 0}
+    body = r.json()
+    # added_ids 是 2026-11-22 新增字段（「按此扩充」按批次撤销需要），其余为原契约
+    assert (body["added"], body["skipped"], body["not_found"]) == (2, 0, 0)
+    assert sorted(body["added_ids"]) == sorted([a, b])
 
     # 重复加入全部跳过，不存在的素材计入 not_found
     r = client.post(f"/api/collections/{c['id']}/inspirations",
                     json={"inspiration_ids": [a, "nonexistent-id"]})
-    assert r.json() == {"added": 0, "skipped": 1, "not_found": 1}
+    body = r.json()
+    assert (body["added"], body["skipped"], body["not_found"]) == (0, 1, 1)
+    assert body["added_ids"] == []
 
     ids, total = get_content(client, c["id"])
     assert sorted(ids) == sorted([a, b])

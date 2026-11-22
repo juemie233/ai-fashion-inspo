@@ -38,6 +38,15 @@ const canMerge = computed(
     !props.current.child_count,
 )
 
+/** 「按此扩充」入口：只服务用户自建手动合集（后端同样 400 兜底） */
+const canExpand = computed(
+  () =>
+    props.current.kind === 'manual' &&
+    !props.current.auto_source &&
+    !isSystemManualRoot.value &&
+    !props.current.child_count,
+)
+
 const emit = defineEmits<{
   (e: 'edit-smart'): void
   /** 把智能合集当前匹配到的内容固化为手动合集 */
@@ -52,6 +61,8 @@ const emit = defineEmits<{
   (e: 'export'): void
   /** 打开 AI 整理预览（只读的系统收藏根不提供） */
   (e: 'ai'): void
+  /** 打开「按此合集扩充」（仅用户自建手动合集） */
+  (e: 'expand'): void
   (e: 'delete'): void
 }>()
 </script>
@@ -71,6 +82,7 @@ const emit = defineEmits<{
       <a-button size="small" @click="emit('export')">导出</a-button>
       <template v-if="!isSystemManualRoot">
         <a-button size="small" @click="emit('ai')">AI 整理</a-button>
+        <a-button v-if="canExpand" size="small" @click="emit('expand')">按此扩充</a-button>
         <template v-if="current.kind === 'smart'">
           <a-button size="small" @click="emit('edit-smart')">编辑条件</a-button>
           <a-popconfirm content="将当前匹配内容固化为手动合集？" @ok="emit('solidify')">

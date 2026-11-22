@@ -155,6 +155,12 @@ class CollectionItem(Base):
     )  # 素材物理删除时由外键级联自动出合集
     position: Mapped[int] = mapped_column(Integer, default=0)  # 合集内自定义顺序（拖拽编排）
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)  # 加入时间
+    # 成员来源：manual（手工加入）/ ai_suggest（「按此合集扩充」写入）/ sync（抖音同步）
+    added_by: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
+    # 扩充批次号：仅 ai_suggest 有值，用于「撤销本次扩充」按批次精确回退
+    added_batch: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
 
     # 关联关系
     collection: Mapped["Collection"] = relationship(

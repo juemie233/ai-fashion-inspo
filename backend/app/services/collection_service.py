@@ -13,6 +13,7 @@
 """
 
 import json
+import secrets
 
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, Select, delete, func, or_, select
@@ -707,12 +708,24 @@ async def delete_collection(db: AsyncSession, collection_id: int) -> None:
 
 
 async def add_inspirations(
-    db: AsyncSession, collection_id: int, inspiration_ids: list[str]
+    db: AsyncSession,
+    collection_id: int,
+    inspiration_ids: list[str],
+    *,
+    added_by: str = "manual",
+    batch_id: str | None = None,
 ) -> dict:
     """批量加入素材到手动合集（请求内去重、跳过已加入与不存在的素材）。
 
     智能合集返回 400；分类节点（一级/有子夹）返回 400（见 :func:`_require_container`）；
     新成员 append 到末尾（position = 当前最大值 + 1）。
+
+    Args:
+        added_by: 写入来源（manual / ai_suggest / sync），落在 ``collection_items.added_by``。
+        batch_id: 扩充批次号，仅 ``added_by='ai_suggest'`` 时使用，供撤销按批次回退。
+
+    Returns:
+        ``{added, skipped, not_found, added_ids}``；``added_ids`` 是本次真正新增的素材 ID。
     """
     collection = await get_collection(db, collection_id)
     await _require_manual(collection)
@@ -764,6 +777,8 @@ async def add_inspirations(
                 collection_id=collection.id,
                 inspiration_id=insp_id,
                 position=max_position + offset,
+                added_by=added_by,
+                added_batch=batch_id,
             )
         )
     await db.commit()
@@ -771,7 +786,114 @@ async def add_inspirations(
         "added": len(to_add),
         "skipped": len(existing_members),
         "not_found": not_found,
+        "added_ids": list(to_add),
     }
+
+
+# ── 「按此合集扩充」：批次写入与撤销 ──
+
+
+async def require_expandable(db: AsyncSession, collection_id: int) -> Collection:
+    """校验合集可用于「按此扩充」，返回合集对象。
+
+    口径（用户已确认）：只允许**用户自建手动合集**——智能合集、系统收藏根、
+    分类节点、抖音同步合集（``auto_source`` 非空）一律 400。
+    """
+    collection = await get_collection(db, collection_id)
+    await _require_manual(collection)
+    _guard_manual_root(collection, "扩充")
+    if collection.auto_source is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="抖音同步收藏夹不能扩充；请先复制为手动合集后再扩充",
+        )
+    await _require_container(db, collection)
+    return collection
+
+
+async def expand_collection(
+    db: AsyncSession, collection_id: int, inspiration_ids: list[str]
+) -> dict:
+    """把人工勾选的候选素材按「扩充批次」写入手动合集。
+
+    口径（用户已确认）：
+    - **只允许用户自建手动合集**：智能合集、系统收藏根、分类节点、抖音同步合集
+      （``auto_source`` 非空）一律 400；需要扩充抖音收藏夹时先复制为手动合集；
+    - 每批生成一个 ``batch_id``，成员 ``added_by='ai_suggest'``，供一键撤销；
+    - 去重/跳过垃圾桶/append 位置复用 :func:`add_inspirations`。
+
+    Returns:
+        ``{batch_id, added, skipped, not_found, added_ids}``。
+    """
+    await require_expandable(db, collection_id)
+
+    batch_id = secrets.token_urlsafe(8)
+    result = await add_inspirations(
+        db,
+        collection_id,
+        inspiration_ids,
+        added_by="ai_suggest",
+        batch_id=batch_id,
+    )
+    from app.services.audit_service import record_audit_log
+
+    await record_audit_log(
+        action="collection_expand",
+        target_type="collections",
+        count=int(result["added"]),
+        detail=json.dumps(
+            {
+                "collection_id": collection_id,
+                "batch_id": batch_id,
+                "added_ids": result["added_ids"],
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return {"batch_id": batch_id, **result}
+
+
+async def undo_expansion(db: AsyncSession, collection_id: int, batch_id: str) -> dict:
+    """撤销某一扩充批次：只删该批次、且 ``added_by='ai_suggest'`` 的成员。
+
+    手工加入（manual）与抖音同步（sync）的成员永远不会被误删。
+    """
+    collection = await get_collection(db, collection_id)
+    await _require_manual(collection)
+
+    rows = (
+        await db.execute(
+            select(CollectionItem.inspiration_id).where(
+                CollectionItem.collection_id == collection.id,
+                CollectionItem.added_batch == batch_id,
+                CollectionItem.added_by == "ai_suggest",
+            )
+        )
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="没有可撤销的扩充记录")
+
+    await db.execute(
+        delete(CollectionItem).where(
+            CollectionItem.collection_id == collection.id,
+            CollectionItem.added_batch == batch_id,
+            CollectionItem.added_by == "ai_suggest",
+        )
+    )
+    await db.commit()
+
+    from app.services.audit_service import record_audit_log
+
+    await record_audit_log(
+        action="collection_expand_undo",
+        target_type="collections",
+        count=len(rows),
+        detail=json.dumps(
+            {"collection_id": collection_id, "batch_id": batch_id},
+            ensure_ascii=False,
+        ),
+    )
+    return {"removed": len(rows), "batch_id": batch_id}
 
 
 async def remove_inspirations(

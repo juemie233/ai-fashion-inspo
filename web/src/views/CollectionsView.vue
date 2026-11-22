@@ -12,6 +12,7 @@ import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
 import CollectionExportModal from '@/components/collection/CollectionExportModal.vue'
 import CollectionAiModal from '@/components/collection/CollectionAiModal.vue'
+import CollectionExpandModal from '@/components/collection/CollectionExpandModal.vue'
 import CollectionOrderingStrip from '@/components/collection/CollectionOrderingStrip.vue'
 import CollectionSidebar from '@/components/collection/CollectionSidebar.vue'
 import CollectionTargetPickerModal from '@/components/collection/CollectionTargetPickerModal.vue'
@@ -23,6 +24,7 @@ import {
   mergeCollections,
   removeFromCollection,
   transferCollectionItems,
+  undoCollectionExpansion,
   type CollectionOut,
 } from '@/api/collections'
 import {
@@ -256,6 +258,49 @@ function openAi(): void {
   aiOpen.value = true
 }
 
+// ── 按此合集扩充（2026-11-22）──
+
+const expandOpen = ref(false)
+/** 最近一次扩充批次：用于顶部「撤销」提示条（仅当前合集生效） */
+const lastExpansion = ref<{ collectionId: number; batchId: string; added: number } | null>(null)
+const undoingExpansion = ref(false)
+
+function openExpand(): void {
+  expandOpen.value = true
+}
+
+function handleExpanded(payload: { batch_id: string; added: number }): void {
+  const collection = current.value
+  if (!collection) return
+  lastExpansion.value = {
+    collectionId: collection.id,
+    batchId: payload.batch_id,
+    added: payload.added,
+  }
+  void loadContent()
+  void loadCollections()
+}
+
+async function undoExpansion(): Promise<void> {
+  const record = lastExpansion.value
+  const collection = current.value
+  if (!record || !collection || record.collectionId !== collection.id || undoingExpansion.value) {
+    return
+  }
+  undoingExpansion.value = true
+  try {
+    const result = await undoCollectionExpansion(collection.id, record.batchId)
+    Message.success(`已撤销本次扩充（移除 ${result.removed} 个素材）`)
+    lastExpansion.value = null
+    void loadContent()
+    void loadCollections()
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '撤销失败'))
+  } finally {
+    undoingExpansion.value = false
+  }
+}
+
 /** AI 采用了候选名/描述：刷新合集列表（侧栏与当前标题都跟着变） */
 function handleAiApplied(): void {
   void loadCollections()
@@ -265,9 +310,10 @@ watch(currentId, () => {
   page.value = 1
   exitBatchMode()
   ordering.value = false
-  // 切合集时关掉上一合集打开的导出/AI 弹窗，避免在错误的合集上操作
+  // 切合集时关掉上一合集打开的导出/AI/扩充弹窗，避免在错误的合集上操作
   exportOpen.value = false
   aiOpen.value = false
+  expandOpen.value = false
   resetContentFilters()
   loadContent()
 })
@@ -552,7 +598,27 @@ onMounted(() => {
           @merge="openMerge"
           @export="openExport"
           @ai="openAi"
+          @expand="openExpand"
         />
+
+        <!-- 本次扩充的撤销提示条（切合集后自动不再展示） -->
+        <a-alert
+          v-if="lastExpansion && current && lastExpansion.collectionId === current.id"
+          type="success"
+          closable
+          class="expand-banner"
+          @close="lastExpansion = null"
+        >
+          <template #title> 本次扩充已加入 {{ lastExpansion.added }} 个素材 </template>
+          <a-button
+            size="mini"
+            type="text"
+            :loading="undoingExpansion"
+            @click="() => void undoExpansion()"
+          >
+            撤销本次扩充
+          </a-button>
+        </a-alert>
 
         <!-- 智能合集条件摘要 -->
         <a-alert v-if="current.kind === 'smart'" type="info" style="margin-bottom: 12px">
@@ -842,6 +908,13 @@ onMounted(() => {
 
     <!-- AI 整理预览（手动开始生成；采用名称/描述后才写回合集） -->
     <CollectionAiModal v-model:visible="aiOpen" :collection="current" @applied="handleAiApplied" />
+
+    <!-- 按此合集扩充（生成候选 → 勾选 → 按批次写入，可撤销） -->
+    <CollectionExpandModal
+      v-model:visible="expandOpen"
+      :collection="current"
+      @applied="handleExpanded"
+    />
   </div>
 </template>
 
@@ -852,6 +925,11 @@ onMounted(() => {
   max-width: 1800px;
   margin: 0 auto;
   align-items: flex-start;
+}
+
+/* 本次扩充的撤销提示条：与内容区同宽，贴着头部的信息区 */
+.expand-banner {
+  margin-bottom: 12px;
 }
 
 /* iPad 竖屏/分屏：合集列表移到顶部，内容区拿回完整宽度 */

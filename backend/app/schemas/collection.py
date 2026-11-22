@@ -83,6 +83,27 @@ class CollectionExportRequest(BaseModel):
     format: Literal["pdf", "zip", "csv", "markdown"]
 
 
+class CollectionSuggestRequest(BaseModel):
+    """「按此合集扩充」生成候选的请求体（2026-11-22）：只读，不写库。"""
+
+    limit: int = Field(40, ge=1, le=100, description="返回候选条数")
+    min_similarity: float = Field(
+        0.5, ge=0.0, le=1.0, description="综合相似度下限（视觉 0.6 + 标签 0.4）"
+    )
+    outfit_only: bool = Field(
+        False, description="只保留与种子共享至少一个穿搭大标签的候选"
+    )
+    exclude_other_auto: bool = Field(
+        True, description="排除已属于其它抖音自动合集的素材"
+    )
+
+
+class CollectionExpandRequest(BaseModel):
+    """把候选素材按「扩充批次」写入手动合集（2026-11-22）。"""
+
+    inspiration_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class ItemReorderRequest(BaseModel):
     """合集内成员拖拽排序的请求体（按新顺序提交全部成员 ID）。"""
 

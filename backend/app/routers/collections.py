@@ -14,9 +14,11 @@ from app.schemas.collection import (
     CollectionCreate,
     CollectionUpdate,
     CollectionExportRequest,
-    AddInspirationsRequest,
+    CollectionExpandRequest,
     CollectionMergeRequest,
+    CollectionSuggestRequest,
     CollectionTransferRequest,
+    AddInspirationsRequest,
     ItemReorderRequest,
     CollectionReorderRequest,
     CollectionOut,
@@ -26,6 +28,7 @@ from app.services import (
     collection_ai_service,
     collection_export_service,
     collection_service,
+    collection_suggest_service,
 )
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
@@ -249,6 +252,77 @@ async def generate_ai_summary(
     - 结果只供前端预览，由前端用现有 PATCH 应用名称/描述（不自动写入）。
     """
     return await collection_ai_service.generate_summary(db, collection_id)
+
+
+@router.post("/{collection_id}/suggest-items", status_code=status.HTTP_200_OK)
+async def suggest_collection_items(
+    collection_id: int,
+    body: CollectionSuggestRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """「按此合集扩充」生成候选素材（**只读，不写库**）。
+
+    召回：种子成员图像向量质心 Top200 + 种子 Top 标签命中的素材；打分沿用
+    0.6 视觉 + 0.4 标签。只服务用户自建手动合集（智能/抖音同步/分类节点 400）。
+    响应含 ``items[{inspiration, similarity, shared_tags, outfit_tags, reason,
+    match_source}]`` 与 ``profile{top_tags, outfit_tags, seeds_used,
+    vector_available}``，供前端预览勾选后再调 ``POST /{id}/expansions``。
+    """
+    result = await collection_suggest_service.suggest_items(
+        db,
+        collection_id,
+        limit=body.limit,
+        min_similarity=body.min_similarity,
+        outfit_only=body.outfit_only,
+        exclude_other_auto=body.exclude_other_auto,
+    )
+    return {
+        "items": [
+            {
+                "inspiration": inspiration_to_out(item["inspiration"]),
+                "similarity": item["similarity"],
+                "shared_tags": item["shared_tags"],
+                "outfit_tags": item["outfit_tags"],
+                "match_source": item["match_source"],
+                "reason": item["reason"],
+            }
+            for item in result["items"]
+        ],
+        "total": result["total"],
+        "profile": result["profile"],
+    }
+
+
+@router.post("/{collection_id}/expansions", status_code=status.HTTP_200_OK)
+async def expand_collection(
+    collection_id: int,
+    body: CollectionExpandRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """把勾选的候选素材按「扩充批次」写入手动合集。
+
+    只允许用户自建手动合集（抖音同步合集 400：同步只增不删，写了会让本地夹与
+    抖音不一致）；每批生成 ``batch_id``，成员 ``added_by='ai_suggest'``，
+    可调 ``DELETE /{id}/expansions/{batch_id}`` 一键撤销。
+    """
+    return await collection_service.expand_collection(
+        db, collection_id, body.inspiration_ids
+    )
+
+
+@router.delete(
+    "/{collection_id}/expansions/{batch_id}", status_code=status.HTTP_200_OK
+)
+async def undo_collection_expansion(
+    collection_id: int,
+    batch_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """撤销某一扩充批次：只删该批次、``added_by='ai_suggest'`` 的成员。
+
+    手工加入与抖音同步的成员不受影响；批次不存在返回 404。
+    """
+    return await collection_service.undo_expansion(db, collection_id, batch_id)
 
 
 @router.post("/{collection_id}/exports", status_code=status.HTTP_200_OK)

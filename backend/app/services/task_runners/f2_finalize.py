@@ -96,7 +96,9 @@ async def _aggregate_collect_stage(
                 auto_source=DOUYIN_AUTO_SOURCE,
                 description=f"抖音收藏夹「{folder_name}」（随「获取我的收藏」自动同步）",
             )
-            child_added = await collection_service.add_inspirations(db, child_id, ids)
+            child_added = await collection_service.add_inspirations(
+                db, child_id, ids, added_by="sync"
+            )
             attributed.update(ids)
             folder_stats.append(
                 {
@@ -124,7 +126,9 @@ async def _aggregate_collect_stage(
                 auto_source=DOUYIN_AUTO_SOURCE,
                 description="没有收藏夹归属的收藏作品（平铺下载/清单缺失时才会出现）",
             )
-            unc_added = await collection_service.add_inspirations(db, unc_id, unclassified_ids)
+            unc_added = await collection_service.add_inspirations(
+                db, unc_id, unclassified_ids, added_by="sync"
+            )
             unclassified_stats = {
                 "id": unc_id,
                 "name": UNCLASSIFIED_COLLECTION_NAME,

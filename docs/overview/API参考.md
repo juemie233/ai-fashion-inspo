@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-20，共 25 个模块 / 344 个端点）。
+> **状态**：自动生成（2026-11-22，共 25 个模块 / 347 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -18,7 +18,7 @@
 | [ai_reset](#ai_reset) | `/api/ai` | 1 |
 | [ai_settings](#ai_settings) | `/api/ai` | 15 |
 | [bloggers](#bloggers) | `/api/bloggers` | 43 |
-| [collections](#collections) | `/api/collections` | 14 |
+| [collections](#collections) | `/api/collections` | 17 |
 | [exports](#exports) | `/api` | 1 |
 | [face_scan](#face_scan) | `/api/face-match、/api/face-scan` | 15 |
 | [favorites](#favorites) | `/api/favorites` | 5 |
@@ -245,6 +245,9 @@
 | `DELETE` | `/api/collections/{collection_id}/inspirations` | `remove_inspirations` | 批量移出素材（不在合集内的 ID 跳过）；智能合集返回 400。 |
 | `PATCH` | `/api/collections/{collection_id}/items/order` | `reorder_collection_items` | 提交合集内成员展示顺序（拖拽编排）：按 ordered_ids 重排 position。 |
 | `POST` | `/api/collections/{collection_id}/ai-summary` | `generate_ai_summary` | 合集 AI 整理预览（规则分组 + Ollama 起名，**不写库**）。 |
+| `POST` | `/api/collections/{collection_id}/suggest-items` | `suggest_collection_items` | 「按此合集扩充」生成候选素材（**只读，不写库**）。 |
+| `POST` | `/api/collections/{collection_id}/expansions` | `expand_collection` | 把勾选的候选素材按「扩充批次」写入手动合集。 |
+| `DELETE` | `/api/collections/{collection_id}/expansions/{batch_id}` | `undo_collection_expansion` | 撤销某一扩充批次：只删该批次、``added_by='ai_suggest'`` 的成员。 |
 | `POST` | `/api/collections/{collection_id}/exports` | `create_collection_export` | 生成合集导出（CSV / Markdown / ZIP / PDF），返回下载 token。 |
 | `POST` | `/api/collections/{collection_id}/solidify` | `solidify_collection` | 智能合集转手动：把当前匹配素材按当前位置固化并清空 query_json。 |
 

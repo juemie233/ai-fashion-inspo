@@ -75,6 +75,20 @@ describe('CollectionContentHeader 系统收藏根', () => {
     expect(system.findAll('button').some((b) => b.text().includes('合并到…'))).toBe(false)
   })
 
+  it('「按此扩充」只对用户自建手动合集显示', () => {
+    const manual = mountHeader(collection({ kind: 'manual' }))
+    expect(manual.findAll('button').some((b) => b.text() === '按此扩充')).toBe(true)
+
+    const smart = mountHeader(collection({ kind: 'smart' }))
+    expect(smart.findAll('button').some((b) => b.text() === '按此扩充')).toBe(false)
+
+    const auto = mountHeader(collection({ kind: 'manual', auto_source: 'douyin' }))
+    expect(auto.findAll('button').some((b) => b.text() === '按此扩充')).toBe(false)
+
+    const container = mountHeader(collection({ kind: 'manual', child_count: 2 }))
+    expect(container.findAll('button').some((b) => b.text() === '按此扩充')).toBe(false)
+  })
+
   it('导出对所有合集可见；AI 整理对系统收藏根隐藏', () => {
     const manual = mountHeader(collection({ kind: 'manual' }))
     expect(manual.findAll('button').some((b) => b.text() === '导出')).toBe(true)
