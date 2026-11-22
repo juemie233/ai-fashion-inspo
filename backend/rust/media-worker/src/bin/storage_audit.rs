@@ -29,9 +29,11 @@ struct Cli {
     root: PathBuf,
     /// 数据库导出的 expected manifest JSON
     manifest: PathBuf,
-    /// 只扫描这些一级目录（逗号分隔）
-    #[arg(long, default_value = "images,thumbnails,videos")]
-    dirs: String,
+    /// 只扫描这些一级目录（逗号分隔；省略时默认 images,thumbnails,videos）
+    ///
+    /// 显式指定时 manifest 也按同一范围过滤，否则未扫描目录下的素材会被误报为缺失。
+    #[arg(long)]
+    dirs: Option<String>,
     /// 输出报告 JSON；不填则打印到 stdout
     #[arg(long)]
     output: Option<PathBuf>,
@@ -113,13 +115,20 @@ fn run() -> Result<()> {
         normalized.insert(rel, entry.clone());
     }
 
-    let dirs: Vec<String> = cli
-        .dirs
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
+    let scope_explicit = cli.dirs.is_some();
+    let dirs: Vec<String> = match &cli.dirs {
+        Some(raw) => parse_dirs(raw),
+        None => vec!["images".to_owned(), "thumbnails".to_owned(), "videos".to_owned()],
+    };
+    // 显式限定范围时，manifest 也要按同一组目录过滤：否则没被扫描的目录下的
+    // 素材会被报成 missing（文件其实在盘上），missing 语义对子集扫描不成立。
+    if scope_explicit && !dirs.is_empty() {
+        let prefixes: Vec<String> = dirs.iter().map(|dir| format!("{dir}/")).collect();
+        normalized.retain(|path, _| {
+            dirs.iter().any(|dir| path == dir) || prefixes.iter().any(|p| path.starts_with(p))
+        });
+    }
+
     let mut actual = BTreeSet::new();
     for dir in &dirs {
         let base = root.join(dir);
@@ -156,6 +165,9 @@ fn run() -> Result<()> {
         })
         .collect();
 
+    // 参与比对的清单条数（已剔除非法路径与 --dirs 之外的条目），比 manifest.expected.len()
+    // 更能反映「这次实际校验了多少」
+    let expected_files = normalized.len();
     let existing: Vec<(String, ExpectedEntry)> = normalized
         .into_iter()
         .filter(|(path, _)| actual.contains(path))
@@ -193,7 +205,7 @@ fn run() -> Result<()> {
     let report = Report {
         root: root.to_string_lossy().into_owned(),
         scanned_media_dirs: dirs,
-        expected_files: manifest.expected.len(),
+        expected_files,
         actual_files: actual.len(),
         missing,
         orphans,
@@ -212,18 +224,36 @@ fn run() -> Result<()> {
 }
 
 /// 只接受相对路径；绝对路径/`..` 一律忽略，避免扫描逃逸 storage_root。
+///
+/// 输出按 `Normal` 组件重新拼接（分隔符统一为 `/`）：`./images/a.jpg` 要归一成
+/// `images/a.jpg`，否则与磁盘侧路径字符串不相等，同一文件会同时出现在 missing
+/// 和 orphans 里，size/hash 校验也会因 key 不匹配被跳过。
 fn normalize_relative(raw: &str) -> Option<String> {
     let path = Path::new(raw);
     if path.is_absolute() {
         return None;
     }
+    let mut parts: Vec<&str> = Vec::new();
     for component in path.components() {
         match component {
-            Component::Normal(_) | Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_str()?),
+            Component::CurDir => {}
             _ => return None,
         }
     }
-    Some(path.to_string_lossy().replace('\\', "/"))
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// 逗号分隔的目录参数解析（去空白、丢空项）。
+fn parse_dirs(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn sha256_file(path: &Path) -> Result<String> {

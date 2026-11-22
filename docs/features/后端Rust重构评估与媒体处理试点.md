@@ -1,7 +1,7 @@
 # 后端 Rust 重构评估与媒体处理试点
 
 > 日期：2026-11-21
-> 状态：缩略图否决；流式 ZIP 已**可选接入**；存储审计 Rust 版实测约 14×，尚未接入；分支不合并 master
+> 状态：缩略图否决；流式 ZIP（archive）与存储审计（storage-audit）均已**可选接入**（默认关闭/按阈值启用，失败自动回退 Python）；分支不合并 master
 > 范围：只评估“是否/在哪里引入 Rust”，不承诺全量重写后端
 
 ## 1. 结论
@@ -168,7 +168,9 @@ export PATH="/d/tools/cargo/bin:$PATH"
 feat/rust-media-worker
 ```
 
-该分支只包含评估文档与 media-worker 试点代码；不合并回 `master`。
+该分支包含评估文档、media-worker 试点代码，以及 archive（合集导出）与
+storage-audit（完整性巡检 / 备份前预检）的**可选接入**——两者均默认关闭，
+失败/超时/二进制缺失时自动回退 Python，不影响主链路。分支不合并回 `master`。
 
 ## 9. v0 实现与基准结果（2026-11-21）
 

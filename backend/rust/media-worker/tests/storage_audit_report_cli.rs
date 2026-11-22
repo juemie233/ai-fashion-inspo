@@ -260,15 +260,15 @@ fn absolute_and_parent_entries_are_ignored_but_expected_count_is_raw() {
 
     let report = report_from_stdout(&run_audit(&storage, &manifest, &[]));
 
-    // 当前契约：expected_files 是 manifest 原始条目数（含被忽略的 3 条）。
-    assert_eq!(report["expected_files"], 4);
+    // expected_files 是**参与比对的条数**：绝对路径/父目录逃逸被剔除后只剩 1 条。
+    assert_eq!(report["expected_files"], 1);
     assert_eq!(report["actual_files"], 1);
     assert_eq!(report["missing"], json!([]));
     assert_eq!(report["orphans"], json!([]));
 }
 
 #[test]
-fn dot_prefixed_manifest_path_is_currently_reported_missing() {
+fn dot_prefixed_manifest_path_is_normalized() {
     let dir = TempDir::new("report-dot");
     let storage = dir.path().join("storage");
     write_file(&storage.join("images/a.jpg"), b"abc");
@@ -279,15 +279,20 @@ fn dot_prefixed_manifest_path_is_currently_reported_missing() {
 
     let report = report_from_stdout(&run_audit(&storage, &manifest, &[]));
 
-    // 当前契约（缺陷，见 task-6 报告）：normalize_relative 用 Path::to_string_lossy()
-    // 输出，保留 "./" 前缀而没有按组件重拼，于是 "./images/a.jpg" 与磁盘侧
-    // "images/a.jpg" 不相等：同一个文件既进 missing（带 ./ 前缀）又进 orphans。
-    // 若后续修复为剥离 CurDir，本用例应同步改为断言 missing/orphans 均为空。
+    // "./" 前缀按组件重拼时被剥离：归一后与磁盘侧 "images/a.jpg" 相等，
+    // 既不算 missing 也不算 orphan，size 校验照常覆盖。
     assert_eq!(report["expected_files"], 1);
     assert_eq!(report["actual_files"], 1);
-    assert_eq!(report["missing"], json!(["./images/a.jpg"]));
-    assert_eq!(paths_of(&report, "orphans"), ["images/a.jpg"]);
-    // 因 key 与 actual 不相等，size/hash 校验也不会覆盖该条目。
+    assert_eq!(report["missing"], json!([]));
+    assert_eq!(paths_of(&report, "orphans"), Vec::<String>::new());
     assert_eq!(report["size_mismatches"], json!([]));
     assert_eq!(report["hash_mismatches"], json!([]));
+
+    // 尺寸不符时要真的报出来（证明归一后的 key 能命中 actual）
+    let mismatch_manifest = write_manifest(
+        dir.path(),
+        &json!([{ "path": "./images/a.jpg", "size": 999 }]),
+    );
+    let report = report_from_stdout(&run_audit(&storage, &mismatch_manifest, &[]));
+    assert_eq!(report["size_mismatches"].as_array().unwrap().len(), 1);
 }

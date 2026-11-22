@@ -72,4 +72,6 @@ storage-audit G:/fashion-inspo-storage manifest.json \
 
 - 不连数据库、不读业务配置
 - 不处理视频、不计算 pHash
-- 不接入生产 API；先做双跑一致性和性能对比
+- 生产 API 只做**可选**接入：archive（合集导出 ZIP，按素材数阈值启用）与
+  storage-audit（完整性巡检 / 备份前预检）；均默认关闭，失败/超时/二进制缺失
+  自动回退 Python，详见 `docs/features/后端Rust重构评估与媒体处理试点.md`

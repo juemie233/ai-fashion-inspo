@@ -32,22 +32,43 @@ const SHA256_PATTERN_MULTI: &str =
 // ---------------------------------------------------------------------------
 
 /// 每个用例独立的临时目录：`<系统临时目录>/media-worker-cli-<tag>-<纳秒时间戳>/`。
-fn temp_dir(tag: &str) -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("系统时间应晚于 UNIX 纪元")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("media-worker-cli-{tag}-{stamp}"));
-    std::fs::create_dir_all(&dir).expect("应能创建临时目录");
-    dir
+///
+/// 用 `Drop` 守卫而不是在用例末尾手动 `cleanup`：断言 panic 时同样会清理，
+/// 不会在系统临时目录残留（与 storage_audit_report_cli.rs 同款）。
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(tag: &str) -> Self {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("系统时间应晚于 UNIX 纪元")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("media-worker-cli-{tag}-{stamp}"));
+        std::fs::create_dir_all(&dir).expect("应能创建临时目录");
+        Self(dir)
+    }
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(tag: &str) -> TempDir {
+    TempDir::new(tag)
 }
 
 fn path_str(path: &Path) -> String {
     path.to_string_lossy().into_owned()
-}
-
-fn cleanup(dir: &Path) {
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn file_len(path: &Path) -> u64 {
@@ -221,7 +242,6 @@ fn hash_known_vector_returns_json_contract() {
     assert_eq!(value["path"], path_str(&file).as_str());
     assert_eq!(value["sha256"], SHA256_ABC);
     assert_eq!(value["bytes"].as_u64(), Some(3));
-    cleanup(&dir);
 }
 
 #[test]
@@ -240,7 +260,6 @@ fn hash_empty_file() {
     let value = stdout_json(&output);
     assert_eq!(value["sha256"], SHA256_EMPTY);
     assert_eq!(value["bytes"].as_u64(), Some(0));
-    cleanup(&dir);
 }
 
 #[test]
@@ -257,7 +276,6 @@ fn hash_binary_with_nul_bytes() {
     let value = stdout_json(&output);
     assert_eq!(value["sha256"], SHA256_PATTERN_4096);
     assert_eq!(value["bytes"].as_u64(), Some(4096));
-    cleanup(&dir);
 }
 
 #[test]
@@ -277,7 +295,6 @@ fn hash_multi_megabyte_file_crosses_read_buffer() {
     let value = stdout_json(&output);
     assert_eq!(value["sha256"], SHA256_PATTERN_MULTI);
     assert_eq!(value["bytes"].as_u64(), Some(MULTI_LEN as u64));
-    cleanup(&dir);
 }
 
 #[test]
@@ -291,7 +308,6 @@ fn hash_missing_file_reports_chinese_error() {
         String::from_utf8_lossy(&output.stderr).contains(&path_str(&missing)),
         "stderr 应包含缺失文件路径"
     );
-    cleanup(&dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +353,6 @@ fn thumbnail_downscales_into_max_box() {
         (source_ratio - output_ratio).abs() < 1e-6,
         "等比缩放不应改变宽高比：源 {source_ratio}，产物 {output_ratio}"
     );
-    cleanup(&dir);
 }
 
 #[test]
@@ -365,7 +380,6 @@ fn thumbnail_keeps_aspect_ratio_for_portrait() {
     assert_eq!(value["height"].as_u64(), Some(600));
     let decoded = decode_image(&output);
     assert_eq!((decoded.width(), decoded.height()), (300, 600));
-    cleanup(&dir);
 }
 
 #[test]
@@ -391,7 +405,6 @@ fn thumbnail_limits_landscape_by_width() {
     assert_eq!(value["height"].as_u64(), Some(100));
     let decoded = decode_image(&output);
     assert_eq!((decoded.width(), decoded.height()), (400, 100));
-    cleanup(&dir);
 }
 
 #[test]
@@ -419,7 +432,6 @@ fn thumbnail_does_not_upscale_small_image() {
     assert_eq!(value["height"].as_u64(), Some(80));
     let decoded = decode_image(&output);
     assert_eq!((decoded.width(), decoded.height()), (100, 80));
-    cleanup(&dir);
 }
 
 #[test]
@@ -450,7 +462,6 @@ fn thumbnail_converts_rgba_png_to_jpeg() {
         image::ColorType::Rgb8,
         "JPEG 产物应为无 alpha 的 RGB"
     );
-    cleanup(&dir);
 }
 
 #[test]
@@ -474,7 +485,6 @@ fn thumbnail_creates_missing_output_parent_directory() {
     assert!(output.exists(), "输出文件应存在");
     let decoded = decode_image(&output);
     assert_eq!((decoded.width(), decoded.height()), (120, 90));
-    cleanup(&dir);
 }
 
 #[test]
@@ -529,7 +539,6 @@ fn thumbnail_quality_changes_output_bytes() {
         std::fs::read(&high).expect("应能读取高质量产物"),
         "不同 quality 的产物字节应不同"
     );
-    cleanup(&dir);
 }
 
 #[test]
@@ -548,7 +557,6 @@ fn thumbnail_rejects_zero_max_width() {
     ]);
     assert_cli_failure(&cli, "max_width / max_height 必须大于 0");
     assert!(!output.exists(), "参数校验失败时不应创建输出文件");
-    cleanup(&dir);
 }
 
 #[test]
@@ -567,7 +575,6 @@ fn thumbnail_rejects_zero_max_height() {
     ]);
     assert_cli_failure(&cli, "max_width / max_height 必须大于 0");
     assert!(!output.exists(), "参数校验失败时不应创建输出文件");
-    cleanup(&dir);
 }
 
 #[test]
@@ -588,7 +595,6 @@ fn thumbnail_rejects_out_of_range_quality() {
         assert_cli_failure(&cli, "JPEG quality 必须在 1~100");
     }
     assert!(!output.exists(), "参数校验失败时不应创建输出文件");
-    cleanup(&dir);
 }
 
 #[test]
@@ -605,7 +611,6 @@ fn thumbnail_rejects_non_image_input() {
     ]);
     assert_cli_failure(&cli, "无法解码图片");
     assert!(!output.exists(), "解码失败时不应创建输出文件");
-    cleanup(&dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +658,6 @@ fn archive_packs_real_files_and_embedded_content() {
     assert_eq!(entries[0].1.as_slice(), b"hello".as_slice());
     assert_eq!(entries[1].0, "manifest.csv");
     assert_eq!(entries[1].1, "内嵌内容".as_bytes().to_vec());
-    cleanup(&dir);
 }
 
 #[test]
@@ -689,7 +693,6 @@ fn archive_sanitizes_slashes_in_entry_names() {
         vec!["dir_sub_file.txt", "a_b.txt", "plain.txt"],
         "archive 名中的 / 与 \\ 应替换为 _"
     );
-    cleanup(&dir);
 }
 
 #[test]
@@ -701,7 +704,6 @@ fn archive_rejects_empty_entries() {
     let cli = run_with_stdin(&["archive", path_str(&zip_path).as_str()], &manifest);
     assert_cli_failure(&cli, "没有 entries");
     assert!(!zip_path.exists(), "空 entries 失败时不应创建 zip");
-    cleanup(&dir);
 }
 
 #[test]
@@ -727,7 +729,6 @@ fn archive_creates_missing_output_parent_directory() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0, "readme.md");
     assert_eq!(entries[0].1, b"readme".to_vec());
-    cleanup(&dir);
 }
 
 #[test]
@@ -741,7 +742,6 @@ fn archive_rejects_invalid_manifest_json() {
     );
     assert_cli_failure(&cli, "解析 archive manifest 失败");
     assert!(!zip_path.exists(), "manifest 解析失败时不应创建 zip");
-    cleanup(&dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -793,12 +793,10 @@ fn batch_mixed_hash_and_thumbnail_preserves_order() {
 
     let decoded = decode_image(&jpg);
     assert_eq!((decoded.width(), decoded.height()), (200, 300));
-    cleanup(&dir);
 }
 
 #[test]
 fn batch_unknown_op_returns_error_and_keeps_id() {
-    let dir = temp_dir("batch-unknown-op");
     let stdin_text = batch_stdin(&[json!({"id": "x9", "op": "resize", "input": "whatever"})]);
 
     let cli = run_with_stdin(&["batch"], &stdin_text);
@@ -814,7 +812,6 @@ fn batch_unknown_op_returns_error_and_keeps_id() {
         error.contains("未知 op：resize"),
         "error 应说明未知 op：{error}"
     );
-    cleanup(&dir);
 }
 
 #[test]
@@ -846,7 +843,6 @@ fn batch_bad_json_line_does_not_crash() {
     assert_eq!(responses[1]["id"], "h1");
     assert_eq!(responses[1]["ok"].as_bool(), Some(true));
     assert_eq!(responses[1]["sha256"], SHA256_ABC);
-    cleanup(&dir);
 }
 
 #[test]
@@ -891,7 +887,6 @@ fn batch_missing_arguments_report_param_errors() {
             "第 {index} 行 error 应包含「{reason}」：{error}"
         );
     }
-    cleanup(&dir);
 }
 
 #[test]
@@ -910,7 +905,6 @@ fn batch_ignores_blank_lines() {
     assert_eq!(responses.len(), 2, "空行不应产生响应");
     assert_eq!(responses[0]["id"], "a");
     assert_eq!(responses[1]["id"], "b");
-    cleanup(&dir);
 }
 
 #[test]
@@ -961,7 +955,6 @@ fn batch_applies_default_thumbnail_options() {
         std::fs::read(&cli_jpg).expect("应能读取 CLI 产物"),
         "batch 默认 max_width/max_height/quality 应与 CLI 默认值完全一致"
     );
-    cleanup(&dir);
 }
 
 #[test]
@@ -984,5 +977,4 @@ fn batch_finishes_at_eof_without_trailing_newline() {
     assert_eq!(responses[0]["id"], "eof1");
     assert_eq!(responses[0]["ok"].as_bool(), Some(true));
     assert_eq!(responses[0]["sha256"], SHA256_ABC);
-    cleanup(&dir);
 }

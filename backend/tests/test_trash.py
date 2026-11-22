@@ -249,8 +249,13 @@ async def test_trash_invariants_detect_broken_state(client, upload):
     assert not any(v["rule"] == "R2" for v in violations)  # 其余字段未被误报
 
 
-async def test_integrity_check_includes_trash_invariants(client, upload):
-    """管理页完整性检查返回垃圾桶不变量结果（空列表 = 健康）。"""
+async def test_integrity_check_includes_trash_invariants(client, upload, monkeypatch):
+    """管理页完整性检查返回垃圾桶不变量结果（空列表 = 健康）。
+
+    显式固定「未配置 sidecar」：开发机在 .env 里配了 MEDIA_WORKER_BIN（同目录已有
+    storage_audit 二进制）时，scanner 会变成 rust，这里要断言的是 Python 默认口径。
+    """
+    monkeypatch.setattr(settings, "media_worker_bin", "")
     upload()
     r = client.get("/api/admin/integrity-check")
     assert r.status_code == 200

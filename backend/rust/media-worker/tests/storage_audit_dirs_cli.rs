@@ -145,7 +145,7 @@ fn dirs_nonexistent_directory_is_silently_skipped() {
 }
 
 #[test]
-fn manifest_entries_outside_scanned_dirs_are_reported_missing() {
+fn manifest_entries_outside_scanned_dirs_are_ignored() {
     let dir = TempDir::new("dirs-subset");
     let storage = dir.path().join("storage");
     write_file(&storage.join("images/a.jpg"), b"a");
@@ -160,10 +160,11 @@ fn manifest_entries_outside_scanned_dirs_are_reported_missing() {
 
     let report = report_from_stdout(&run_audit(&storage, &manifest, &["--dirs", "images"]));
 
-    // 当前契约（缺陷，见 task-6 报告）：--dirs 只限制磁盘扫描范围，不过滤 manifest。
-    // thumbnails/t.jpg 明明在盘上，但因目录未被扫描而被判为 missing。
+    // 显式 --dirs 时 manifest 也按同一范围过滤：没被扫描的目录下的素材不参与比对，
+    // 否则「明明在盘上」的文件会被误报为 missing。
     assert_eq!(report["actual_files"], 1);
-    assert_eq!(report["missing"], json!(["thumbnails/t.jpg"]));
+    assert_eq!(report["expected_files"], 1);
+    assert_eq!(report["missing"], json!([]));
     assert_eq!(report["orphans"], json!([]));
 }
 

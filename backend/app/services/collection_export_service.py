@@ -100,16 +100,6 @@ class ExportCollection:
     description: str | None = None
     # PDF 封面用：合集手动封面；没有则取第一条图片素材
     cover_relative_path: str | None = None
-_PDF_FONT_CANDIDATES = (
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/msyhbd.ttc",
-    "C:/Windows/Fonts/simhei.ttf",
-    "/System/Library/Fonts/PingFang.ttc",
-    "/System/Library/Fonts/STHeiti Light.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-)
 _PDF_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 
@@ -243,6 +233,29 @@ def _zip_bytes(rows: list[dict], manifest_csv: bytes, readme_md: bytes) -> tuple
             archive.write(source, _zip_archive_name(row, source))
             added += 1
     return buffer.getvalue(), added, skipped
+
+
+_archive_threshold_warned = False
+
+
+def _archive_threshold() -> int:
+    """Rust 流式 ZIP 的素材数阈值。
+
+    单次导出上限就是 ``MAX_EXPORT_ITEMS``，阈值配得比它还大就永远达不到，Rust 分支
+    会静默失效（用户以为已启用）。这里夹到上限，并在第一次遇到时提示一次。
+    """
+    global _archive_threshold_warned
+    threshold = settings.media_worker_archive_threshold
+    if threshold > MAX_EXPORT_ITEMS:
+        if not _archive_threshold_warned:
+            logger.warning(
+                "MEDIA_WORKER_ARCHIVE_THRESHOLD=%s 超过单次导出上限 %s，已按上限处理",
+                threshold,
+                MAX_EXPORT_ITEMS,
+            )
+            _archive_threshold_warned = True
+        return MAX_EXPORT_ITEMS
+    return threshold
 
 
 async def _zip_bytes_via_media_worker(
@@ -735,7 +748,7 @@ async def create_export(db, collection_id: int, export_format: str) -> dict:
         elif export_format == "zip":
             item_count, skipped = 0, 0
             used_rust = False
-            if len(rows) >= settings.media_worker_archive_threshold:
+            if len(rows) >= _archive_threshold():
                 try:
                     rust_result = await _zip_bytes_via_media_worker(
                         rows, manifest_csv, readme_md, stored_path

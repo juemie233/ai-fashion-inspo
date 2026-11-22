@@ -64,8 +64,8 @@ fn duplicate_manifest_paths_count_raw_but_validate_last_entry() {
         serde_json::from_slice(&std::fs::read(dir.join("report.json")).unwrap()).unwrap();
     assert_eq!(
         report["expected_files"].as_u64(),
-        Some(2),
-        "按 manifest 原始条数计"
+        Some(1),
+        "按去重后的比对条数计（同路径后一条覆盖前一条）"
     );
     assert_eq!(report["actual_files"].as_u64(), Some(1));
     assert_eq!(report["missing"].as_array().unwrap().len(), 0);

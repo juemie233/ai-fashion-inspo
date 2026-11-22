@@ -2,7 +2,7 @@
 name = "media-worker"
 version = "0.1.0"
 edition = "2021"
-description = "Adorable media worker sidecar: SHA-256 and image thumbnails"
+description = "媒体处理 sidecar：SHA-256、缩略图、流式 ZIP 与只读存储审计"
 license = "MIT"
 
 [[bin]]

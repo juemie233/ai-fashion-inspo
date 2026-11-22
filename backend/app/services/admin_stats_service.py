@@ -14,7 +14,7 @@ import asyncio  # noqa: E402  (有意延迟导入：避免循环依赖)
 
 from datetime import datetime, timedelta  # noqa: E402  (有意延迟导入：避免循环依赖)
 
-from sqlalchemy import func, select, text  # noqa: E402  (有意延迟导入：避免循环依赖)
+from sqlalchemy import func, literal, select, text  # noqa: E402  (有意延迟导入：避免循环依赖)
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402  (有意延迟导入：避免循环依赖)
 
 from app.config import settings  # noqa: E402  (有意延迟导入：避免循环依赖)
@@ -395,33 +395,49 @@ async def integrity_check(db: AsyncSession) -> dict:
         # sidecar 是可选加速路径，任何启动/临时目录/进程异常都不能让巡检 500
         logger.warning("Rust storage-audit 调用异常，回退 Python：%s", exc)
         rust_report = None
+    if rust_report is not None and not isinstance(rust_report, dict):
+        # 契约外形状（不是对象）：按 sidecar 异常处理，回退 Python 而不是 500
+        logger.warning("Rust storage-audit 返回形状异常，回退 Python：%r", type(rust_report).__name__)
+        rust_report = None
     if rust_report is not None:
-        missing_files = [
-            {
-                "file_path": file_path,
-                "inspiration_ids": sorted(set(id_by_path.get(file_path, []))),
+        try:
+            # 逐项做类型过滤/兜底：sidecar 输出被写坏时不能让整个巡检 500
+            missing_files = [
+                {
+                    "file_path": file_path,
+                    "inspiration_ids": sorted(set(id_by_path.get(file_path, ()))),
+                }
+                for file_path in rust_report.get("missing", [])
+                if isinstance(file_path, str)
+            ]
+            orphan_files = []
+            for item in rust_report.get("orphans", []):
+                if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                    continue
+                raw_size = item.get("size")
+                size_bytes = 0
+                if isinstance(raw_size, (int, float)) and not isinstance(raw_size, bool):
+                    try:
+                        # None/非数字已排除；NaN/inf 的 int() 会抛错 → 按 0 处理
+                        size_bytes = max(0, int(raw_size))
+                    except (OverflowError, ValueError):
+                        size_bytes = 0
+                orphan_files.append(
+                    {"file_path": item["path"], "size_bytes": size_bytes}
+                )
+            return {
+                "missing_files": missing_files,
+                "missing_count": len(missing_files),
+                "orphan_files": orphan_files,
+                "orphan_count": len(orphan_files),
+                "orphan_total_size_bytes": sum(
+                    int(item["size_bytes"]) for item in orphan_files
+                ),
+                "trash_invariants": await inspiration_service.verify_trash_invariants(db),
+                "scanner": "rust",
             }
-            for file_path in rust_report.get("missing", [])
-        ]
-        orphan_files = [
-            {
-                "file_path": item["path"],
-                "size_bytes": item.get("size", 0),
-            }
-            for item in rust_report.get("orphans", [])
-            if isinstance(item, dict) and isinstance(item.get("path"), str)
-        ]
-        return {
-            "missing_files": missing_files,
-            "missing_count": len(missing_files),
-            "orphan_files": orphan_files,
-            "orphan_count": len(orphan_files),
-            "orphan_total_size_bytes": sum(
-                int(item["size_bytes"]) for item in orphan_files
-            ),
-            "trash_invariants": await inspiration_service.verify_trash_invariants(db),
-            "scanner": "rust",
-        }
+        except Exception as exc:  # noqa: BLE001 —— 契约外报告：映射失败一律回退 Python
+            logger.warning("Rust storage-audit 报告映射失败，回退 Python：%s", exc)
 
     # 检查 missing files（磁盘 exists 属阻塞 I/O，放线程池）
     def _find_missing() -> list[dict]:
@@ -527,6 +543,7 @@ async def person_frequency(
             Blogger.name.label("name"),
             Blogger.platform.label("platform"),
             func.count(InspirationBlogger.inspiration_id).label("cnt"),
+            literal("blogger").label("person_type"),
         )
         .join(InspirationBlogger, InspirationBlogger.blogger_id == Blogger.id)
         .join(Inspiration, Inspiration.id == InspirationBlogger.inspiration_id)
@@ -538,6 +555,7 @@ async def person_frequency(
                 Model.name.label("name"),
                 Model.platform.label("platform"),
                 func.count(InspirationModel.inspiration_id).label("cnt"),
+                literal("model").label("person_type"),
             )
             .join(InspirationModel, InspirationModel.model_id == Model.id)
             .join(Inspiration, Inspiration.id == InspirationModel.inspiration_id)
@@ -547,7 +565,13 @@ async def person_frequency(
         .subquery()
     )
     rows = (await db.execute(
-        select(combined.c.id, combined.c.name, combined.c.platform, combined.c.cnt)
+        select(
+            combined.c.id,
+            combined.c.name,
+            combined.c.platform,
+            combined.c.cnt,
+            combined.c.person_type,
+        )
         .select_from(combined)
         .order_by(combined.c.cnt.desc(), combined.c.name.asc())
         .limit(limit)
@@ -556,7 +580,7 @@ async def person_frequency(
         {
             "id": r[0],
             "name": r[1],
-            "person_type": "blogger",
+            "person_type": r[4],
             "platform": r[2],
             "count": r[3],
         }
