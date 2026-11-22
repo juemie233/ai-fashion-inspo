@@ -44,6 +44,8 @@ watch(activeTab, (tab) => {
     query.tab = tab
   }
   router.replace({ query })
+  // 完整性巡检是懒加载的：第一次进入该 Tab 时扫一次，之后来回切换不重复扫描
+  loadIntegrityIfNeeded(tab)
 })
 
 // ── 响应式状态 ──
@@ -127,6 +129,9 @@ async function loadAll() {
   }
 }
 
+/** 完整性巡检结果是否已加载过：懒加载去重，避免来回切 Tab 重复扫描全库 */
+let integrityLoaded = false
+
 async function loadIntegrity() {
   checking.value = true
   try {
@@ -135,11 +140,17 @@ async function loadIntegrity() {
     orphanFiles.value = res.data.orphan_files
     orphanSize.value = res.data.orphan_total_size_bytes
     integrityScanner.value = res.data.scanner || 'python'
+    integrityLoaded = true
   } catch {
     Message.error('完整性检查失败')
   } finally {
     checking.value = false
   }
+}
+
+/** 进入「数据完整性」Tab 时懒加载一次巡检（挂载时初始 Tab 就是 integrity 也触发） */
+function loadIntegrityIfNeeded(tab: GovernanceTab) {
+  if (tab === 'integrity' && !integrityLoaded) loadIntegrity()
 }
 
 async function loadDuplicates() {
@@ -271,6 +282,8 @@ function handleTaskStarted(taskId: number, msg: string) {
 onMounted(() => {
   loadAll()
   resumeAdminTask(() => handleAdminTaskDone())
+  // 初始 URL 就停在「数据完整性」时（如刷新/分享链接）立即巡检，否则等用户切过去
+  loadIntegrityIfNeeded(activeTab.value)
 })
 
 onUnmounted(() => {

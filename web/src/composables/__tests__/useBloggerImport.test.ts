@@ -78,14 +78,16 @@ describe('useBloggerImport', () => {
     expect(options.onError).not.toHaveBeenCalled()
   })
 
-  it('未获取到文件：提示且不调接口、不刷新、不回调', async () => {
+  it('未获取到文件：提示、记录错误并回调 onError，不调接口/不刷新', async () => {
     const importer = useBloggerImport('blogger')
     const options = requestOptions({ fileItem: { file: undefined } })
 
     importer.handleImportCsv(options)
     await flush()
 
+    expect(importer.importError.value).toBe('未获取到文件，请重新选择')
     expect(mocks.message.error).toHaveBeenCalledWith('未获取到文件，请重新选择')
+    expect(options.onError).toHaveBeenCalledTimes(1)
     expect(mocks.importBloggersCsv).not.toHaveBeenCalled()
     expect(mocks.reload).not.toHaveBeenCalled()
     expect(options.onSuccess).not.toHaveBeenCalled()

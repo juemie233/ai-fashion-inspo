@@ -79,7 +79,14 @@ def _colors_of(item) -> list[str]:
         raw = parsed
     if not isinstance(raw, list):
         return []
-    return [str(color).strip() for color in raw if str(color).strip()]
+    # 只保留非空字符串颜色：None/数字/空串都不是颜色（历史数据可能混入脏元素）
+    colors: list[str] = []
+    for color in raw:
+        if isinstance(color, str):
+            text = color.strip()
+            if text:
+                colors.append(text)
+    return colors
 
 
 def _rule_groups(items: list) -> list[dict]:

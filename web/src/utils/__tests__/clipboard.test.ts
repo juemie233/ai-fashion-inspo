@@ -79,19 +79,22 @@ describe('copyToClipboard', () => {
     expect(execCommand).toHaveBeenCalledWith('copy')
   })
 
-  it('回退 execCommand 返回 false 时整体返回 false', async () => {
+  it('回退 execCommand 返回 false 时整体返回 false，且不残留 textarea', async () => {
     writeText.mockRejectedValue(new Error('denied'))
     setExecCommand(() => false)
 
     await expect(copyToClipboard('x')).resolves.toBe(false)
+    expect(document.querySelector('textarea')).toBeNull()
   })
 
-  it('两条路都抛异常时返回 false，不向调用方抛错', async () => {
+  it('两条路都抛异常时返回 false，不向调用方抛错，且不残留 textarea', async () => {
     writeText.mockRejectedValue(new Error('denied'))
     setExecCommand(() => {
       throw new DOMException('copy failed')
     })
 
     await expect(copyToClipboard('x')).resolves.toBe(false)
+    // execCommand 抛异常也要走 finally 清理，否则每失败一次 body 多一个隐藏输入框
+    expect(document.querySelector('textarea')).toBeNull()
   })
 })

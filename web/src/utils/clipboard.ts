@@ -13,10 +13,13 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       ta.value = text
       ta.style.cssText = 'position:fixed;left:-9999px'
       document.body.appendChild(ta)
-      ta.select()
-      const ok = document.execCommand('copy')
-      document.body.removeChild(ta)
-      return ok
+      try {
+        ta.select()
+        return document.execCommand('copy')
+      } finally {
+        // execCommand 不存在/抛异常时也必须清理，否则页面残留隐藏 textarea
+        document.body.removeChild(ta)
+      }
     } catch {
       return false
     }

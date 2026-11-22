@@ -261,22 +261,15 @@ async def test_integrity_conflict_retry_updates_existing():
     assert out == {"imported": 0, "updated": 1, "skipped": 0, "failed": 0, "errors": []}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "疑似统计 bug：IntegrityError 且重查不到行时，new_person 已先 imported += 1，"
-        "失败分支未回退计数，导致 imported 与 failed 同时 +1（应只计 failed）"
-    ),
-)
 async def test_integrity_conflict_without_retry_row_does_not_count_as_imported():
-    """并发冲突且重查不到行：该行应只计入 failed，不应同时计入 imported。"""
+    """并发冲突且重查不到行：该行只计入 failed，不留在 imported 计数里。"""
     session = _ConflictSession(retry=None)
     out = await import_bloggers_csv(
         session, _csv_upload("nickname,xhs_id\n冲突,race002\n")
     )
 
-    assert out["failed"] == 1  # 已复现：failed=1
-    assert out["imported"] == 0  # 当前实现为 1（疑似 bug）
+    assert out["failed"] == 1
+    assert out["imported"] == 0  # 插入失败（重查不到）必须回退 imported 计数
 
 
 async def test_integrity_conflict_without_retry_row_reports_error():

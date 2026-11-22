@@ -95,7 +95,8 @@ describe('useScraperConfig', () => {
 
       await expect(config.verifyCookie('xiaohongshu')).resolves.toBeNull()
 
-      expect(mocks.message.error).toHaveBeenCalledWith('校验失败: 后端 500')
+      // 兜底文案统一交给 getApiErrorMessage：有后端 detail 时不额外拼「校验失败: 」前缀
+      expect(mocks.message.error).toHaveBeenCalledWith('后端 500')
       expect(config.verifyingCookie.value).toBeNull()
     })
 
@@ -105,7 +106,16 @@ describe('useScraperConfig', () => {
 
       await config.verifyCookie('xiaohongshu')
 
-      expect(mocks.message.error).toHaveBeenCalledWith('校验失败: Network Error')
+      expect(mocks.message.error).toHaveBeenCalledWith('Network Error')
+    })
+
+    it('请求失败且既无 detail 也无 message：兜底文案为「校验失败」（不出现空尾）', async () => {
+      mocks.post.mockRejectedValue({})
+      const config = useScraperConfig()
+
+      await config.verifyCookie('xiaohongshu')
+
+      expect(mocks.message.error).toHaveBeenCalledWith('校验失败')
     })
   })
 

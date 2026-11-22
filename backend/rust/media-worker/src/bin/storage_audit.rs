@@ -118,7 +118,11 @@ fn run() -> Result<()> {
     let scope_explicit = cli.dirs.is_some();
     let dirs: Vec<String> = match &cli.dirs {
         Some(raw) => parse_dirs(raw),
-        None => vec!["images".to_owned(), "thumbnails".to_owned(), "videos".to_owned()],
+        None => vec![
+            "images".to_owned(),
+            "thumbnails".to_owned(),
+            "videos".to_owned(),
+        ],
     };
     // 显式限定范围时，manifest 也要按同一组目录过滤：否则没被扫描的目录下的
     // 素材会被报成 missing（文件其实在盘上），missing 语义对子集扫描不成立。

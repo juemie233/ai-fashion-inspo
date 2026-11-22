@@ -16,11 +16,15 @@ export function useBloggerImport(kind: PersonKind) {
    * Arco 的 custom-request 期望同步返回（UploadRequest），异步逻辑用内部 IIFE 包裹。 */
   function handleImportCsv(options: RequestOption): UploadRequest {
     void (async () => {
-      const file = options.fileItem.file
+      // fileItem 在 Arco 的 custom-request 里理论上必传，但缺省时不能让异步 IIFE 抛
+      // TypeError 变成未捕获异常（用户既看不到提示也收不到 onError）
+      const file = options.fileItem?.file
       importResult.value = null
       importError.value = ''
       if (!file) {
-        Message.error('未获取到文件，请重新选择')
+        importError.value = '未获取到文件，请重新选择'
+        Message.error(importError.value)
+        options.onError?.(new Error(importError.value))
         return
       }
       try {

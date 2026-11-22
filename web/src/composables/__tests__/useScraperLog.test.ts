@@ -106,7 +106,7 @@ describe('useScraperLog', () => {
     expect(log.logLoading.value).toBe(false)
   })
 
-  it('竞态：旧任务请求失败会提示，但不能收起当前已打开的任务', async () => {
+  it('竞态：旧任务请求失败静默丢弃，不提示也不影响当前任务', async () => {
     const slow = deferred<{ data: { content: string } }>()
     const fast = deferred<{ data: { content: string } }>()
     mocks.get.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise)
@@ -122,9 +122,11 @@ describe('useScraperLog', () => {
     await first
     await flush()
 
-    expect(mocks.message.error).toHaveBeenCalledWith('日志加载失败')
+    // 旧任务的失败属于已过期的请求：不弹错误（否则快速切换会多弹一次），也不再动当前状态
+    expect(mocks.message.error).not.toHaveBeenCalled()
     expect(log.logTaskId.value).toBe(2)
     expect(log.logContent.value).toBe('任务 2 的日志')
+    expect(log.logLoading.value).toBe(false)
   })
 
   it('closeLog：清空 id 与内容', async () => {

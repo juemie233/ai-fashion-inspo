@@ -9,8 +9,9 @@
  * 3. 空串（后端异常返回）→ 兜底 'python'（空串不能当「无标签」传下去）；
  * 4. 请求失败 → 提示「完整性检查失败」、不崩、checking 复位。
  *
- * 另外验证 loadIntegrity 的触发方式：当前实现由「重新检查」按钮和「清理孤立文件」
- * 后重新加载触发，onMounted 只加载统计与大文件列表（见下方已知落差用例）。
+ * 另外验证 loadIntegrity 的懒加载触发方式：默认 cleanup Tab 不扫描（其它 Tab 不付出
+ * 全库扫描成本），首次进入「数据完整性」Tab（或初始 URL 就是 `?tab=integrity`）自动
+ * 巡检一次并回填扫描器来源；之后来回切换不重复扫描。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -133,6 +134,12 @@ async function clickRecheck(wrapper: ViewWrapper) {
   await flushPromises()
 }
 
+/** GET /admin/integrity-check 实际被调用的次数（懒加载去重用） */
+function integrityCallCount(): number {
+  return mocks.get.mock.calls.filter(([url]) => String(url).startsWith('/admin/integrity-check'))
+    .length
+}
+
 describe('GovernanceView 完整性检查扫描器来源回填', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -155,25 +162,56 @@ describe('GovernanceView 完整性检查扫描器来源回填', () => {
     mocks.post.mockResolvedValue({ data: { deleted_count: 2, freed_bytes: 1024 } })
   })
 
-  it('挂载后只自动加载统计与大文件，完整性巡检需手动触发（当前实现）', async () => {
-    const wrapper = mountView()
+  it('默认停在 cleanup Tab：挂载不触发完整性巡检（其它 Tab 不付扫描成本）', async () => {
+    mocks.routeQuery = {}
+    mountView()
     await flushPromises()
 
     expect(mocks.get).toHaveBeenCalledWith('/admin/stats')
     expect(mocks.get).toHaveBeenCalledWith('/admin/largest-files?limit=20')
-    expect(mocks.get).not.toHaveBeenCalledWith('/admin/integrity-check')
-    // 尚未巡检时不能凭空显示来源标签：父组件把空串传给子组件，由子组件隐藏标签
-    expect(integrityChild(wrapper).props('scanner')).toBe('')
+    expect(integrityCallCount()).toBe(0)
   })
 
-  // 任务书期望「mounted 时调用 loadIntegrity」，但当前 onMounted 只调 loadAll +
-  // resumeAdminTask，完整性巡检由「重新检查」/「清理孤立文件」触发（mounted 不调用）。
-  // 这里用 it.fails 记录该落差：若哪天 onMounted 补上巡检，本用例会转为失败并提醒删除标记。
-  it.fails('（已知落差）mounted 时自动调用 loadIntegrity', async () => {
-    mountView()
+  it('首次切到 integrity Tab：自动巡检一次并回填 rust 扫描器', async () => {
+    mocks.routeQuery = {}
+    const wrapper = mountView()
+    await flushPromises()
+    expect(integrityCallCount()).toBe(0)
+
+    const vm = wrapper.vm as unknown as { activeTab: string }
+    vm.activeTab = 'integrity'
     await flushPromises()
 
-    expect(mocks.get).toHaveBeenCalledWith('/admin/integrity-check')
+    expect(integrityCallCount()).toBe(1)
+    expect(integrityChild(wrapper).props('scanner')).toBe('rust')
+  })
+
+  it('切走再切回 integrity：不重复扫描（懒加载只扫一次）', async () => {
+    mocks.routeQuery = {}
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as { activeTab: string }
+
+    vm.activeTab = 'integrity'
+    await flushPromises()
+    expect(integrityCallCount()).toBe(1)
+
+    vm.activeTab = 'cleanup'
+    await flushPromises()
+    vm.activeTab = 'integrity'
+    await flushPromises()
+
+    expect(integrityCallCount()).toBe(1)
+    expect(integrityChild(wrapper).props('scanner')).toBe('rust')
+  })
+
+  it('初始 URL 就是 ?tab=integrity：挂载即自动巡检一次', async () => {
+    mocks.routeQuery = { tab: 'integrity' }
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(integrityCallCount()).toBe(1)
+    expect(integrityChild(wrapper).props('scanner')).toBe('rust')
   })
 
   it('重新检查返回 scanner=rust：回填并透传给完整性卡片', async () => {

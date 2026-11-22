@@ -68,7 +68,12 @@ async def _overview(db: AsyncSession) -> dict:
 
     avg_time = (await db.execute(
         select(func.avg(AIAnalysisLog.processing_time_ms))
-        .where(analysis_log_filter(), AIAnalysisLog.error.is_(None))
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(
+            analysis_log_filter(),
+            AIAnalysisLog.error.is_(None),
+            Inspiration.deleted_at.is_(None),
+        )
     )).scalar() or 0
 
     return {
@@ -128,7 +133,8 @@ async def _model_comparison(db: AsyncSession) -> list[dict]:
             func.count().label("total"),
             func.sum(case((AIAnalysisLog.error.is_(None), 1), else_=0)).label("success"),
         )
-        .where(analysis_log_filter())
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(analysis_log_filter(), Inspiration.deleted_at.is_(None))
         .group_by(AIAnalysisLog.model_name)
         .order_by(func.count().desc())
     )

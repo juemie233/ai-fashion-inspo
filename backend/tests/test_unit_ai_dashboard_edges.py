@@ -632,15 +632,10 @@ async def test_collect_prompt_quality_empty(client):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  疑似统计口径缺口（复现用 xfail strict；修复后 xpass 会提醒更新）
+#  统计口径：平均耗时与模型对比都必须排除垃圾桶素材（已修复）
 # ═══════════════════════════════════════════════════════════════
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="疑似 bug：_overview 的平均耗时只按 error IS NULL 过滤，未排除垃圾桶素材的成功日志，"
-    "与同函数 docstring「排除垃圾桶」及 analyzed_count 口径不一致；修复后本用例 xpass",
-)
 async def test_overview_avg_time_should_exclude_trash(client):
     active = _insp()
     deleted = _insp(
@@ -658,11 +653,6 @@ async def test_overview_avg_time_should_exclude_trash(client):
     assert result["avg_time_ms"] == 100
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="疑似 bug：_model_comparison 未 join inspirations 排除垃圾桶素材，"
-    "与 docstring「排除垃圾桶素材」不符；修复后本用例 xpass",
-)
 async def test_model_comparison_should_exclude_trash(client):
     active = _insp()
     deleted = _insp(

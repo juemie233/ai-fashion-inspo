@@ -74,7 +74,8 @@ def _collection(name: str = "法式通勤") -> SimpleNamespace:
         ("not-json", []),  # JSON 解析失败 → 无颜色
         ('{"a": 1}', []),  # JSON 不是数组 → 无颜色
         ("123", []),
-        (["#fff", "", None, 5], ["#fff", "None", "5"]),  # None 会被 str() 成 "None"
+        (["#fff", "", None, 5], ["#fff"]),  # 空串/None/数字都不是颜色
+        (["#fff", None, " #000 "], ["#fff", "#000"]),  # 非字符串跳过、str 去空白
     ],
 )
 def test_colors_of_variants(raw, expected):  # noqa: ANN001

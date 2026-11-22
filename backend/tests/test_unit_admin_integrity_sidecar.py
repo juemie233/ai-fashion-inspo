@@ -95,6 +95,7 @@ async def test_integrity_check_rust_filters_dirty_orphan_entries(
                 {"size": 9},
                 {"path": 123, "size": 7},
                 {"path": "images/orphan2.png"},
+                {"path": "images/negative-size.png", "size": -5},
             ],
         }
 
@@ -105,8 +106,9 @@ async def test_integrity_check_rust_filters_dirty_orphan_entries(
     assert body["orphan_files"] == [
         {"file_path": "images/orphan.jpg", "size_bytes": 123},
         {"file_path": "images/orphan2.png", "size_bytes": 0},
+        {"file_path": "images/negative-size.png", "size_bytes": 0},  # 负数按 0
     ]
-    assert body["orphan_count"] == 2
+    assert body["orphan_count"] == 3
     assert body["orphan_total_size_bytes"] == 123
 
 
@@ -145,20 +147,14 @@ async def test_integrity_check_rust_report_tolerates_missing_keys(
     assert body["orphan_count"] == 0
 
 
-# ── 疑似健壮性缺口复现（契约外输入；修复后自动 xpass） ──
+# ── 契约外脏数据防御（已修复：始终 200，脏条目被过滤/兜底） ──
 #
-# 背景：Rust 分支的映射阶段（把 report 映射成 missing_files/orphan_files）
-# 不在异常回退的 try 内。orphans 分支过滤了「非 dict / path 非 str」，但
-# missing 分支完全没有过滤；orphans.size 也没有类型兜底。sidecar 输出契约
-# 外脏数据时巡检接口会 500（而非回退 Python）。正常 Rust 二进制不会产出
-# 这类数据，故列为健壮性缺口而非主链路 bug；修复后这两条会 xpass。
+# 背景：Rust 分支的映射阶段把 report 映射成 missing_files/orphan_files。修复前
+# missing 元素未做类型过滤、orphans.size 未兜底、映射阶段也不在异常回退 try 内，
+# sidecar 输出契约外脏数据时巡检接口会 500。现在：missing 只收 str；orphans.size
+# 非法（None/非数字/负数/NaN）按 0；整个映射异常回退 Python，接口始终 200。
 
 
-@pytest.mark.xfail(
-    reason="sidecar 报告 missing 元素不可哈希（list）时映射阶段 TypeError → 500；"
-    "missing 分支缺少与 orphans 对称的类型过滤",
-    strict=True,
-)
 async def test_integrity_check_dirty_missing_entry_should_not_500(
     client, upload, monkeypatch
 ):
@@ -171,13 +167,13 @@ async def test_integrity_check_dirty_missing_entry_should_not_500(
 
     resp = client.get("/api/admin/integrity-check")
     assert resp.status_code == 200
+    body = resp.json()
+    # 脏条目被过滤，而不是整体回退 Python（正常 Rust 报告路径仍生效）
+    assert body["scanner"] == "rust"
+    assert body["missing_files"] == []
+    assert body["missing_count"] == 0
 
 
-@pytest.mark.xfail(
-    reason="sidecar 报告 orphans.size 非数字（None）时 int() TypeError → 500；"
-    "orphan_files 缺 size 数字兜底",
-    strict=True,
-)
 async def test_integrity_check_dirty_orphan_size_should_not_500(
     client, upload, monkeypatch
 ):
@@ -190,3 +186,27 @@ async def test_integrity_check_dirty_orphan_size_should_not_500(
 
     resp = client.get("/api/admin/integrity-check")
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["scanner"] == "rust"
+    assert body["orphan_files"] == [
+        {"file_path": "images/orphan.jpg", "size_bytes": 0}
+    ]
+    assert body["orphan_count"] == 1
+    assert body["orphan_total_size_bytes"] == 0
+
+
+async def test_integrity_check_rust_mapping_crash_falls_back_to_python(
+    client, upload, monkeypatch
+):
+    """映射阶段本身抛异常（如 missing 不是可迭代对象）→ 回退 Python，接口仍 200。"""
+    upload()
+
+    async def broken_report(paths):
+        return {"missing": None, "orphans": []}
+
+    monkeypatch.setattr(storage_audit_service, "run_storage_audit", broken_report)
+
+    body = _get_integrity(client)
+    assert body["scanner"] == "python"
+    assert body["missing_count"] == 0
+    assert body["orphan_count"] == 0

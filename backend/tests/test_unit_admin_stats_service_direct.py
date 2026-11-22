@@ -486,6 +486,9 @@ async def test_person_frequency_merges_and_excludes_trash(client):
     assert [row["count"] for row in rows] == [2, 1]
     assert rows[0]["platform"] == "douyin"
     assert rows[1]["platform"] == "xiaohongshu"
+    # union 两支各带类型判别列：博主行仍是 blogger
+    assert rows[0]["person_type"] == "blogger"
+    assert rows[1]["person_type"] == "model"
     assert len(limited) == 1 and limited[0]["name"] == "博主A"
 
 
@@ -494,24 +497,24 @@ async def test_person_frequency_empty(client):
         assert await stats.person_frequency(db) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="疑似 bug：person_frequency 把 union 后的模特行也硬编码成 person_type='blogger'，"
-    "博主/模特无法区分（函数 docstring 声明 person_type 保留以区分来源）；修复后本用例 xpass",
-)
 async def test_person_frequency_model_row_keeps_person_type(client):
-    """模特行应保留 person_type='model'（当前实现一律返回 blogger）。"""
+    """union 后仍按来源带出 person_type：模特行是 model、博主行是 blogger。"""
+    blogger = Blogger(name="博主B", platform="douyin")
     model = Model(name="模特C", platform="other")
-    await _add(model)
+    await _add(blogger, model)
     insp = _insp()
     await _add(insp)
-    await _add(InspirationModel(inspiration_id=insp.id, model_id=model.id))
+    await _add(
+        InspirationModel(inspiration_id=insp.id, model_id=model.id),
+        InspirationBlogger(inspiration_id=insp.id, blogger_id=blogger.id),
+    )
 
     async with async_session() as db:
         rows = await stats.person_frequency(db)
 
-    row = next(item for item in rows if item["name"] == "模特C")
-    assert row["person_type"] == "model"
+    by_name = {item["name"]: item for item in rows}
+    assert by_name["模特C"]["person_type"] == "model"
+    assert by_name["博主B"]["person_type"] == "blogger"
 
 
 # ═══════════════════════════════════════════════════════════════

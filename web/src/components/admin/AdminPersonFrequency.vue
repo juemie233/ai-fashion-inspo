@@ -47,6 +47,11 @@ const columns: TableColumnData[] = [
   },
 ]
 
+/** 行 key：博主与模特的 id 来自两张表，会重叠；带上 person_type 才能区分同一行 id */
+function personRowKey(record: PersonFrequencyItem): string {
+  return `${record.person_type}:${record.id}`
+}
+
 async function load() {
   loading.value = true
   try {
@@ -74,7 +79,7 @@ onMounted(load)
         size="small"
         :bordered="false"
         :pagination="false"
-        row-key="id"
+        :row-key="personRowKey"
       />
       <div v-else-if="!loading" class="person-empty">暂无人物关联数据</div>
     </a-spin>
