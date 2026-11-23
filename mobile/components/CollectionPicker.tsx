@@ -48,8 +48,10 @@ export default function CollectionPicker({
     if (visible) setName('')
   }, [visible])
 
-  /** 只列一级手动合集（二级收藏夹和智能合集不作为投放目标，避免误操作） */
-  const targets = collections.filter((c) => !c.parent_id && c.kind === 'manual')
+  /** 只列一级、可装实体成员的合集（手动或半智能；二级与纯智能不作为投放目标） */
+  const targets = collections.filter(
+    (c) => !c.parent_id && (c.kind === 'manual' || c.semi_manual),
+  )
 
   return (
     <BottomSheet

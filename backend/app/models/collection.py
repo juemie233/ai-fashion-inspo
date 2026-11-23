@@ -3,7 +3,8 @@
 约定（见 docs/features/收藏合集两级结构.md）：
 - ``query_json IS NULL`` 为手动合集：成员关系落在 collection_items 表；
 - ``query_json IS NOT NULL`` 为智能合集：成员由筛选条件动态求值，
-  items 表不存它的行；
+  items 表默认不存它的行；若 ``semi_manual=True``（半智能），则并集
+  「规则匹配 ∪ collection_items 补充成员」；
 - 垃圾桶素材（deleted_at 非空）一律不作为合集内容返回（查询层排除），
   恢复后自动重现。
 
@@ -148,7 +149,11 @@ class Collection(Base):
 
 
 class CollectionItem(Base):
-    """素材 ↔ 合集多对多关联：仅手动合集有行（按 position 编排展示顺序）。"""
+    """素材 ↔ 合集多对多关联。
+
+    手动合集与半智能合集的**补充成员**在这里有行（按 position 编排展示顺序）；
+    纯智能与半智能里由筛选条件命中的素材不落行，内容由查询动态求值。
+    """
 
     __tablename__ = "collection_items"
 

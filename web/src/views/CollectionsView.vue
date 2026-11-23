@@ -7,7 +7,7 @@
  */
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Message, Modal } from '@arco-design/web-vue'
+import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
 import CollectionExportModal from '@/components/collection/CollectionExportModal.vue'
@@ -19,7 +19,6 @@ import CollectionTargetPickerModal from '@/components/collection/CollectionTarge
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import {
-  convertCollectionToSemi,
   fetchCollectionInspirations,
   fetchCollections,
   mergeCollections,
@@ -270,30 +269,8 @@ const expandOpen = ref(false)
 const lastExpansion = ref<{ collectionId: number; batchId: string; added: number } | null>(null)
 const undoingExpansion = ref(false)
 
-/** 打开扩充弹窗；纯智能合集先确认并转为「半智能」（保留规则匹配 + 允许补充成员） */
+/** 打开扩充弹窗。纯智能合集只在真正点「加入」时才转半智能（取消不留副作用） */
 function openExpand(): void {
-  const collection = current.value
-  if (!collection) return
-  if (collection.kind === 'smart' && !collection.semi_manual) {
-    Modal.confirm({
-      title: '转为半智能合集并扩充？',
-      content:
-        '半智能会保留当前筛选条件的自动匹配，同时允许往合集里补充素材（扩充/手动加入）。之后也可以再「转手动」固化为普通合集。',
-      okText: '转为半智能并扩充',
-      onOk: async () => {
-        try {
-          const updated = await convertCollectionToSemi(collection.id)
-          const target = collections.value.find((c) => c.id === updated.id)
-          if (target) Object.assign(target, updated)
-          Message.success('已转为半智能合集')
-          expandOpen.value = true
-        } catch (e) {
-          Message.error(getApiErrorMessage(e, '转为半智能失败'))
-        }
-      },
-    })
-    return
-  }
   expandOpen.value = true
 }
 
@@ -398,12 +375,18 @@ async function handleContentFavorite(id: string) {
     item.favorited_at = updated.favorited_at
     // 系统入库手动收藏 = {is_favorite:true} 智能合集：取消后当前列表应收敛；
     // 其它智能合集可能仍匹配（例如仅按标签筛），不能一律移除
+    const isSmart = current.value?.kind === 'smart'
     const favoriteSmart =
-      current.value?.kind === 'smart' &&
+      isSmart &&
+      !current.value?.semi_manual &&
       Boolean((current.value.query_json as { is_favorite?: boolean } | null)?.is_favorite)
     if (!next && favoriteSmart) {
       items.value = items.value.filter((i) => i.id !== id)
       total.value = Math.max(0, total.value - 1)
+    } else if (isSmart) {
+      // 半智能：可能是手动补充的成员，取消收藏后仍在并集里——交给服务端重算，
+      // 避免本地删掉、刷新又冒出来
+      void loadContent()
     }
   } catch (e) {
     item.is_favorite = previous
@@ -422,8 +405,14 @@ async function handleBatchRemove() {
   const c = current.value
   if (!c || selectedIds.value.size === 0) return
   try {
-    const { removed } = await removeFromCollection(c.id, [...selectedIds.value])
-    Message.success(`已移出 ${removed} 个素材`)
+    const { removed, skipped } = await removeFromCollection(c.id, [...selectedIds.value])
+    if (removed === 0 && skipped > 0) {
+      Message.warning('所选素材由筛选条件命中（没有成员关系），请修改条件或先转为手动合集')
+    } else if (skipped > 0) {
+      Message.success(`已移出 ${removed} 个素材（${skipped} 个由筛选条件命中、未移出）`)
+    } else {
+      Message.success(`已移出 ${removed} 个素材`)
+    }
     exitBatchMode()
     loadContent()
     loadCollections()

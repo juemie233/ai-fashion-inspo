@@ -264,7 +264,7 @@ export default function CollectionsScreen() {
                 {item.name}
               </AppText>
               {item.kind === 'smart' ? (
-                <Badge text="智能合集" tone="brand" />
+                <Badge text={item.semi_manual ? '半智能合集' : '智能合集'} tone="brand" />
               ) : (
                 <AppText variant="caption" color="textTertiary" tabularNums>
                   {item.item_count ?? 0} 张

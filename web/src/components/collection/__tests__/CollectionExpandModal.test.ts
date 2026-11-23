@@ -14,12 +14,14 @@ import ArcoVue from '@arco-design/web-vue'
 const mocks = vi.hoisted(() => ({
   suggest: vi.fn(),
   expand: vi.fn(),
+  convert: vi.fn(),
   message: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
 vi.mock('@/api/collections', () => ({
   suggestCollectionItems: mocks.suggest,
   expandCollection: mocks.expand,
+  convertCollectionToSemi: mocks.convert,
 }))
 
 vi.mock('@arco-design/web-vue', async () => {
@@ -110,6 +112,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   document.body.innerHTML = ''
   mocks.suggest.mockResolvedValue(SUGGEST_RESULT)
+  mocks.convert.mockResolvedValue({ ...COLLECTION, semi_manual: true })
   mocks.expand.mockResolvedValue({
     batch_id: 'batch-1',
     added: 2,
@@ -168,6 +171,7 @@ describe('CollectionExpandModal', () => {
   })
 
   it('全部已在合集内（added=0）时不显示撤销条', async () => {
+    mocks.convert.mockResolvedValue({ ...COLLECTION, semi_manual: true })
     mocks.expand.mockResolvedValue({
       batch_id: null,
       added: 0,
@@ -200,5 +204,44 @@ describe('CollectionExpandModal', () => {
     clickBodyButton('重试')
     await flushPromises()
     expect(document.body.textContent).toContain('88%')
+  })
+})
+
+describe('CollectionExpandModal 纯智能合集', () => {
+  const SMART: CollectionOut = {
+    ...COLLECTION,
+    id: 6,
+    name: '纯智能',
+    kind: 'smart',
+    semi_manual: false,
+    query_json: { is_favorite: true },
+  }
+
+  it('加入时才转半智能：先调 to-semi 再扩充', async () => {
+    const wrapper = mountModal(SMART)
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('点「加入」会先转为半智能')
+    expect(mocks.convert).not.toHaveBeenCalled()
+
+    clickBodyButton('全选本页')
+    await flushPromises()
+    clickBodyButton('转为半智能并加入')
+    await flushPromises()
+
+    expect(mocks.convert).toHaveBeenCalledWith(6)
+    expect(mocks.expand).toHaveBeenCalledWith(6, ['i1', 'i2'])
+    const calls = mocks.convert.mock.invocationCallOrder[0]
+    const expandCall = mocks.expand.mock.invocationCallOrder[0]
+    expect(calls).toBeLessThan(expandCall)
+    expect(wrapper.emitted('applied')).toBeTruthy()
+  })
+
+  it('仅打开/取消不会改变合集类型', async () => {
+    mountModal(SMART)
+    await flushPromises()
+    clickBodyButton('取消')
+    await flushPromises()
+    expect(mocks.convert).not.toHaveBeenCalled()
   })
 })

@@ -59,7 +59,7 @@ const emit = defineEmits<{
   (e: 'export'): void
   /** 打开 AI 整理预览（只读的系统收藏根不提供） */
   (e: 'ai'): void
-  /** 打开「按此合集扩充」（仅用户自建手动合集） */
+  /** 打开「按此合集扩充」（手动/智能/半智能；纯智能在写入时转半智能） */
   (e: 'expand'): void
   (e: 'delete'): void
 }>()

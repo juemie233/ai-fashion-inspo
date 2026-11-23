@@ -11,6 +11,7 @@ import { computed, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import {
+  convertCollectionToSemi,
   expandCollection,
   suggestCollectionItems,
   type CollectionOut,
@@ -59,6 +60,11 @@ const selectedCount = computed(() => selectedIds.value.size)
 const allSelected = computed(
   () => items.value.length > 0 && items.value.every((item) => selectedIds.value.has(item.id)),
 )
+/** 纯智能合集：点「加入」时才转半智能（打开/取消不改合集类型） */
+const needsSemiConversion = computed(
+  () => props.collection?.kind === 'smart' && !props.collection?.semi_manual,
+)
+
 const profileText = computed(() => {
   const profile = result.value?.profile
   if (!profile) return ''
@@ -131,8 +137,11 @@ async function submit(): Promise<void> {
   const collection = props.collection
   if (!collection || selectedCount.value === 0 || submitting.value) return
   const collectionId = collection.id
+  // 纯智能合集不能直接写入：确认加入时才转半智能（取消不留副作用）
+  const needsSemi = collection.kind === 'smart' && !collection.semi_manual
   submitting.value = true
   try {
+    if (needsSemi) await convertCollectionToSemi(collectionId)
     const data = await expandCollection(collectionId, [...selectedIds.value])
     if (data.added === 0 || !data.batch_id) {
       // 全部已在合集内：没有可撤销的批次，不显示撤销条
@@ -211,6 +220,10 @@ watch(
       <a-button size="small" :loading="loading" @click="runNow">重新生成</a-button>
     </div>
 
+    <p v-if="needsSemiConversion" class="expand-hint">
+      该合集是纯智能合集：点「加入」会先转为半智能（保留规则匹配，同时允许补充素材）。
+    </p>
+
     <p v-if="profileText" class="expand-profile">{{ profileText }}</p>
 
     <div v-if="error" class="expand-error">
@@ -262,7 +275,11 @@ watch(
         :disabled="selectedCount === 0"
         @click="() => void submit()"
       >
-        加入合集{{ selectedCount > 0 ? `（${selectedCount}）` : '' }}
+        {{
+          needsSemiConversion
+            ? `转为半智能并加入${selectedCount > 0 ? `（${selectedCount}）` : ''}`
+            : `加入合集${selectedCount > 0 ? `（${selectedCount}）` : ''}`
+        }}
       </a-button>
     </div>
   </a-modal>

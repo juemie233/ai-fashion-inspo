@@ -803,6 +803,15 @@ def test_semi_manual_content_is_union_and_members_editable(client, upload):
     # 移出补充成员：规则命中的 fav 仍在，other 消失
     r = delete_json(client, f"{base}/inspirations", {"inspiration_ids": [other]})
     assert r.status_code == 200
+    assert r.json() == {"removed": 1, "skipped": 0}
+    items, total = get_content(client, cid)
+    assert total == 1 and items == [fav]
+
+    # 规则命中的 fav 没有成员行：移出为空操作，接口要能区分（skipped），
+    # 前端据此提示「由筛选条件命中、需改条件」而不是假装成功
+    r = delete_json(client, f"{base}/inspirations", {"inspiration_ids": [fav]})
+    assert r.status_code == 200
+    assert r.json() == {"removed": 0, "skipped": 1}
     items, total = get_content(client, cid)
     assert total == 1 and items == [fav]
 

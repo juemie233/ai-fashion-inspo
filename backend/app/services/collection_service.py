@@ -16,7 +16,7 @@ import json
 import secrets
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, Select, and_, delete, func, or_, select, true
+from sqlalchemy import ColumnElement, Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.collection import (
@@ -73,35 +73,53 @@ def _guard_manual_root(collection: Collection, action: str) -> None:
 # ── 智能合集动态求值 ──
 
 
-def _smart_base_query(collection: Collection):
-    """构建智能合集的动态求值查询（含标签/博主/模特预加载与垃圾桶排除）。
+def _smart_content_conditions(collection: Collection) -> list[ColumnElement[bool]]:
+    """智能合集内容条件（半智能为「规则匹配 ∪ 实体成员」）。
 
-    半智能（``semi_manual``）：内容是「规则匹配 ∪ collection_items 实体成员」，
-    与手动补充/扩充进来的素材取并集后再统一分页；纯手动/纯智能行为不变。
+    **不要依赖 build_filters_from_query_json 的返回顺序**：外层显式 and NOT_DELETED，
+    规则条件整体作为 OR 的一侧，成员子查询作为另一侧——未来给规则函数加前置条件
+    也不会把垃圾桶排除弄丢。
     """
     filters = build_filters_from_query_json(_load_query_json(collection))
     if not collection.semi_manual:
-        return (
-            select(Inspiration)
-            .options(
-                *inspiration_load_options(),
-            )
-            .where(*filters)
-        )
-
-    # filters[0] 恒为 NOT_DELETED（见 build_filters_from_query_json 的口径），
-    # 并集的两侧要各自带垃圾桶排除：规则匹配只取剩余条件，成员行本身也要过滤
-    not_deleted, *rule_filters = filters
+        return filters
     member_ids = select(CollectionItem.inspiration_id).where(
         CollectionItem.collection_id == collection.id
     )
-    rule_expr = and_(*rule_filters) if rule_filters else true()
+    return [NOT_DELETED, or_(and_(*filters), Inspiration.id.in_(member_ids))]
+
+
+def _smart_base_query(collection: Collection):
+    """构建智能合集的动态求值查询（含标签/博主/模特预加载与垃圾桶排除）。"""
     return (
         select(Inspiration)
         .options(
             *inspiration_load_options(),
         )
-        .where(not_deleted, or_(rule_expr, Inspiration.id.in_(member_ids)))
+        .where(*_smart_content_conditions(collection))
+    )
+
+
+def content_id_query(collection: Collection) -> Select:
+    """合集内容 ID 查询（只需要 ID 时用：避免加载 ORM 与标签/人物预加载）。
+
+    - 手动合集：成员按 position 顺序；
+    - 智能/半智能：规则（半智能为并集）按默认的「最新在前」排序。
+    """
+    if collection.query_json is None:
+        return (
+            select(CollectionItem.inspiration_id)
+            .join(Inspiration, Inspiration.id == CollectionItem.inspiration_id)
+            .where(
+                CollectionItem.collection_id == collection.id,
+                NOT_DELETED,
+            )
+            .order_by(CollectionItem.position.asc(), CollectionItem.added_at.asc())
+        )
+    return (
+        select(Inspiration.id)
+        .where(*_smart_content_conditions(collection))
+        .order_by(Inspiration.created_at.desc(), Inspiration.id.desc())
     )
 
 
@@ -165,11 +183,15 @@ async def get_collection(db: AsyncSession, collection_id: int) -> Collection:
 
 
 async def _require_manual(collection: Collection) -> None:
-    """智能合集不支持实体成员操作（加入/移出/排序），返回 400。"""
+    """**仅手动合集**可用的操作（排序、移动/复制/合并）守卫。
+
+    半智能虽然可装成员，但这些操作依赖纯手动语义，同样拒绝；提示只让用户
+    固化为手动合集（说「转半智能」是错的）。
+    """
     if collection.query_json is not None:
         raise HTTPException(
             status_code=400,
-            detail="智能合集不支持该操作，请先转为半智能或固化（solidify）转手动合集",
+            detail="该操作仅支持手动合集；智能/半智能合集请先固化为手动合集",
         )
 
 
@@ -856,8 +878,26 @@ async def enable_semi_manual(db: AsyncSession, collection_id: int) -> dict:
     return await collection_to_dict(db, collection)
 
 
+async def require_suggestable(db: AsyncSession, collection_id: int) -> Collection:
+    """校验合集可生成扩充候选（**只读**，不要求可写）。
+
+    允许手动、智能、半智能合集——纯智能也能先生成候选，等用户真正点「加入」时
+    再转半智能（避免确认后又取消就永久改了合集类型）。
+    仅排除抖音同步合集、系统收藏根与分类节点。
+    """
+    collection = await get_collection(db, collection_id)
+    _guard_manual_root(collection, "生成扩充候选")
+    if collection.auto_source is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="抖音同步收藏夹不能扩充；请先复制为手动合集后再扩充",
+        )
+    await _require_container(db, collection)
+    return collection
+
+
 async def require_expandable(db: AsyncSession, collection_id: int) -> Collection:
-    """校验合集可用于「按此扩充」，返回合集对象。
+    """校验合集可写入扩充批次（真正落库时），返回合集对象。
 
     口径：允许**用户自建手动合集与半智能合集**；纯智能合集、系统收藏根、
     分类节点、抖音同步合集（``auto_source`` 非空）一律 400。
@@ -879,9 +919,10 @@ async def expand_collection(
 ) -> dict:
     """把人工勾选的候选素材按「扩充批次」写入手动合集。
 
-    口径（用户已确认）：
-    - **只允许用户自建手动合集**：智能合集、系统收藏根、分类节点、抖音同步合集
-      （``auto_source`` 非空）一律 400；需要扩充抖音收藏夹时先复制为手动合集；
+    口径：
+    - **允许用户自建手动合集与半智能合集**：纯智能合集（未转半智能）、系统收藏根、
+      分类节点、抖音同步合集（``auto_source`` 非空）一律 400；
+      需要扩充抖音收藏夹时先复制为手动合集；
     - 每批生成一个 ``batch_id``，成员 ``added_by='ai_suggest'``，供一键撤销；
     - 去重/跳过垃圾桶/append 位置复用 :func:`add_inspirations`。
 
@@ -920,7 +961,7 @@ async def undo_expansion(db: AsyncSession, collection_id: int, batch_id: str) ->
     手工加入（manual）与抖音同步（sync）的成员永远不会被误删。
     """
     collection = await get_collection(db, collection_id)
-    await _require_manual(collection)
+    await _require_materializable(collection, "撤销扩充")
 
     rows = (
         await db.execute(
@@ -965,14 +1006,28 @@ async def remove_inspirations(
     collection = await get_collection(db, collection_id)
     await _require_materializable(collection, "移出素材")
 
-    result = await db.execute(
-        delete(CollectionItem).where(
-            CollectionItem.collection_id == collection.id,
-            CollectionItem.inspiration_id.in_(inspiration_ids),
-        )
+    unique_ids = list(dict.fromkeys(inspiration_ids))
+    member_ids = set(
+        (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == collection.id,
+                    CollectionItem.inspiration_id.in_(unique_ids),
+                )
+            )
+        ).scalars().all()
     )
-    await db.commit()
-    return {"removed": result.rowcount or 0}
+    if member_ids:
+        await db.execute(
+            delete(CollectionItem).where(
+                CollectionItem.collection_id == collection.id,
+                CollectionItem.inspiration_id.in_(member_ids),
+            )
+        )
+        await db.commit()
+    # skipped = 没有成员行的 ID（半智能里多半是规则命中的素材）：前端据此提示
+    # 「由筛选条件命中、需要改条件」，而不是假装移出成功
+    return {"removed": len(member_ids), "skipped": len(unique_ids) - len(member_ids)}
 
 
 async def transfer_inspirations(

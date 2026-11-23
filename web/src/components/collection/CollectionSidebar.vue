@@ -47,8 +47,9 @@ function toggleCollapse(id: number) {
   collapsed.value = next
 }
 
-/** 列表项副标题：一级显示子夹数（+ 素材数），二级显示素材数 */
+/** 列表项副标题：一级显示子夹数（+ 素材数），二级显示素材数；半智能标注类型 */
 function itemMeta(c: CollectionOut): string {
+  if (c.semi_manual) return '半智能合集'
   if (c.kind === 'smart') return '智能合集'
   const own = c.item_count ?? 0
   const children = props.childrenByParent.get(c.id)?.length ?? 0

@@ -127,10 +127,13 @@ export async function addToCollection(
 export async function removeFromCollection(
   id: number,
   inspirationIds: string[],
-): Promise<{ removed: number }> {
-  const { data } = await apiClient.delete<{ removed: number }>(`/collections/${id}/inspirations`, {
-    data: { inspiration_ids: inspirationIds },
-  })
+): Promise<{ removed: number; skipped: number }> {
+  const { data } = await apiClient.delete<{ removed: number; skipped: number }>(
+    `/collections/${id}/inspirations`,
+    {
+      data: { inspiration_ids: inspirationIds },
+    },
+  )
   return data
 }
 

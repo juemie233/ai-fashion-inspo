@@ -162,8 +162,12 @@ async def test_suggest_rejects_special_collections(client, upload):
     auto_id = await _create_raw_collection("抖音夹2", auto_source="douyin")
     assert _suggest(client, auto_id).status_code == 400
 
+    # 纯智能合集允许「只读预览」候选（写入时才转半智能），不再 400
     smart_id = _create_collection(client, "智能夹2", {"is_favorite": True})
-    assert _suggest(client, smart_id).status_code == 400
+    assert _suggest(client, smart_id).status_code == 200
+    # 但真正写入（扩充）仍要求半智能/手动
+    insp_id = upload().json()["id"]
+    assert _expand(client, smart_id, [insp_id]).status_code == 400
 
 
 async def test_suggest_falls_back_to_tags_without_vectors(client, upload, monkeypatch):
@@ -305,3 +309,18 @@ async def test_suggest_for_semi_uses_rule_matches_as_seeds(
     data = resp.json()
     assert data["profile"]["seeds_used"] == 1
     assert fav not in [item["inspiration"]["id"] for item in data["items"]]
+
+
+async def test_undo_expansion_works_on_semi_manual(client, upload):
+    """回归：半智能扩充后必须能撤销（此前 undo 仍用 _require_manual 直接 400）。"""
+    collection_id = _create_collection(client, "半智能撤销", {"is_favorite": True})
+    insp_id = upload().json()["id"]
+    assert client.post(f"/api/collections/{collection_id}/to-semi").status_code == 200
+
+    resp = _expand(client, collection_id, [insp_id])
+    assert resp.status_code == 200, resp.text
+    batch_id = resp.json()["batch_id"]
+
+    resp = client.delete(f"/api/collections/{collection_id}/expansions/{batch_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["removed"] == 1

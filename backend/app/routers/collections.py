@@ -276,7 +276,8 @@ async def suggest_collection_items(
     """「按此合集扩充」生成候选素材（**只读，不写库**）。
 
     召回：种子成员图像向量质心 Top200 + 种子 Top 标签命中的素材；打分沿用
-    0.6 视觉 + 0.4 标签。只服务用户自建手动合集（智能/抖音同步/分类节点 400）。
+    0.6 视觉 + 0.4 标签。手动/智能/半智能合集都可生成（只读）；纯智能仅供预览，
+    真正写入时前端会先转半智能。抖音同步/系统收藏根/分类节点 400。
     响应含 ``items[{inspiration, similarity, shared_tags, outfit_tags, reason,
     match_source}]`` 与 ``profile{top_tags, outfit_tags, seeds_used,
     vector_available}``，供前端预览勾选后再调 ``POST /{id}/expansions``。
@@ -314,8 +315,8 @@ async def expand_collection(
 ) -> dict:
     """把勾选的候选素材按「扩充批次」写入手动合集。
 
-    只允许用户自建手动合集（抖音同步合集 400：同步只增不删，写了会让本地夹与
-    抖音不一致）；每批生成 ``batch_id``，成员 ``added_by='ai_suggest'``，
+    允许用户自建手动合集与半智能合集；纯智能合集需先转半智能（400 提示）；
+    抖音同步合集 400（同步只增不删，写了会让本地夹与抖音不一致）。每批生成 ``batch_id``，成员 ``added_by='ai_suggest'``，
     可调 ``DELETE /{id}/expansions/{batch_id}`` 一键撤销。
     """
     return await collection_service.expand_collection(

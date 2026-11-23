@@ -527,6 +527,8 @@ export interface CollectionItem {
   item_count?: number | null
   cover_thumbnail_path?: string | null
   auto_source?: string | null
+  /** 半智能：智能合集同时接受实体成员（2026-11-22） */
+  semi_manual?: boolean
   child_count?: number
   created_at?: string
 }

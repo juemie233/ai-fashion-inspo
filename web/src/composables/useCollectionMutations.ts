@@ -109,12 +109,15 @@ export function useCollectionMutations(opts: CollectionMutationDeps) {
       Message.warning('系统收藏根不能删除')
       return
     }
+    const isSemi = c.kind === 'smart' && c.semi_manual === true
     const isSmart = c.kind === 'smart'
     Modal.confirm({
       title: `删除合集「${c.name}」？`,
-      content: isSmart
-        ? '智能合集仅删除条件本身，素材不受任何影响。'
-        : '仅删除合集与成员关联，素材本体与标签不受影响，此操作不可恢复。',
+      content: isSemi
+        ? '半智能合集会删除筛选条件与手动补充的成员关系（素材本体与标签不受影响），此操作不可恢复。'
+        : isSmart
+          ? '智能合集仅删除条件本身，素材不受任何影响。'
+          : '仅删除合集与成员关联，素材本体与标签不受影响，此操作不可恢复。',
       okText: '删除',
       okButtonProps: { status: 'danger' },
       onOk: async () => {
@@ -190,7 +193,8 @@ export function useCollectionMutations(opts: CollectionMutationDeps) {
 
   async function confirmAddByIds() {
     const c = current.value
-    if (!c || c.kind !== 'manual') return
+    // 手动合集与半智能合集都能装实体成员；纯智能合集（未转半智能）不允许
+    if (!c || (c.kind !== 'manual' && !c.semi_manual)) return
     const ids = addIdInput.value
       .split(/[,，\s]+/)
       .map((x) => x.trim())
