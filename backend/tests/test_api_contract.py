@@ -37,6 +37,8 @@ WATCHED: list[tuple[str, str]] = [
     ("get", "/api/tags"),
     ("get", "/api/search"),
     ("get", "/api/collections"),
+    # 半智能合集（2026-11-22）：to-semi 有 response_model=CollectionOut → 可做字段契约
+    ("post", "/api/collections/{collection_id}/to-semi"),
     ("get", "/api/bloggers"),
     ("get", "/api/bloggers/{blogger_id}"),
     ("get", "/api/models"),
@@ -53,6 +55,12 @@ UNMODELED_ALLOWLIST: set[tuple[str, str]] = {
     ("get", "/api/admin/stats"),
     ("get", "/api/tags/stats"),
     ("get", "/api/ai/quality-stats"),
+    # 合集「按此扩充 / 半智能」（2026-11-22）：以下接口返回自由 dict（无 response_model），
+    # 字段契约暂无法从 OpenAPI 校验；前端消费 items/total/profile、batch_id/added/skipped/
+    # removed 等字段。补上 response_model 后移到 WATCHED。
+    ("post", "/api/collections/{collection_id}/suggest-items"),
+    ("post", "/api/collections/{collection_id}/expansions"),
+    ("delete", "/api/collections/{collection_id}/expansions/{batch_id}"),
 }
 
 

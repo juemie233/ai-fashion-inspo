@@ -143,5 +143,22 @@
     "task_id",
     "task_type",
     "total_count"
+  ],
+  "POST /api/collections/{collection_id}/to-semi": [
+    "auto_source",
+    "child_count",
+    "cover_inspiration_id",
+    "cover_thumbnail_path",
+    "created_at",
+    "description",
+    "id",
+    "item_count",
+    "kind",
+    "name",
+    "parent_id",
+    "position",
+    "query_json",
+    "semi_manual",
+    "updated_at"
   ]
 }
