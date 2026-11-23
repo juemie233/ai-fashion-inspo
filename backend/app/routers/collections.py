@@ -254,6 +254,19 @@ async def generate_ai_summary(
     return await collection_ai_service.generate_summary(db, collection_id)
 
 
+@router.post("/{collection_id}/to-semi", response_model=CollectionOut)
+async def convert_to_semi_manual(
+    collection_id: int, db: AsyncSession = Depends(get_db)
+) -> CollectionOut:
+    """把智能合集转为「半智能」：保留规则匹配，同时允许补充实体成员。
+
+    转后内容 = ``query_json`` 规则匹配 ∪ ``collection_items`` 成员，
+    可用「按此扩充」/手动加入/移出；手动合集或系统收藏根返回 400。
+    """
+    data = await collection_service.enable_semi_manual(db, collection_id)
+    return CollectionOut(**data)
+
+
 @router.post("/{collection_id}/suggest-items", status_code=status.HTTP_200_OK)
 async def suggest_collection_items(
     collection_id: int,

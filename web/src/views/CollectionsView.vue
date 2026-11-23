@@ -7,7 +7,7 @@
  */
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
 import CollectionExportModal from '@/components/collection/CollectionExportModal.vue'
@@ -19,6 +19,7 @@ import CollectionTargetPickerModal from '@/components/collection/CollectionTarge
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import {
+  convertCollectionToSemi,
   fetchCollectionInspirations,
   fetchCollections,
   mergeCollections,
@@ -150,6 +151,10 @@ const contentSortLabel = computed(() => formatContentSortLabel(contentSort.value
 const canEditOrder = computed(
   () => current.value?.kind === 'manual' && contentSort.value === 'manual',
 )
+/** 能装素材的合集：手动合集，或「半智能」智能合集（规则匹配 ∪ 实体成员） */
+const canHoldMaterials = computed(
+  () => current.value?.kind === 'manual' || Boolean(current.value?.semi_manual),
+)
 /** 当前筛选状态（传给纯函数做参数拼装/是否激活判断） */
 function currentContentFilterState(): ContentFilterState {
   return {
@@ -265,7 +270,30 @@ const expandOpen = ref(false)
 const lastExpansion = ref<{ collectionId: number; batchId: string; added: number } | null>(null)
 const undoingExpansion = ref(false)
 
+/** 打开扩充弹窗；纯智能合集先确认并转为「半智能」（保留规则匹配 + 允许补充成员） */
 function openExpand(): void {
+  const collection = current.value
+  if (!collection) return
+  if (collection.kind === 'smart' && !collection.semi_manual) {
+    Modal.confirm({
+      title: '转为半智能合集并扩充？',
+      content:
+        '半智能会保留当前筛选条件的自动匹配，同时允许往合集里补充素材（扩充/手动加入）。之后也可以再「转手动」固化为普通合集。',
+      okText: '转为半智能并扩充',
+      onOk: async () => {
+        try {
+          const updated = await convertCollectionToSemi(collection.id)
+          const target = collections.value.find((c) => c.id === updated.id)
+          if (target) Object.assign(target, updated)
+          Message.success('已转为半智能合集')
+          expandOpen.value = true
+        } catch (e) {
+          Message.error(getApiErrorMessage(e, '转为半智能失败'))
+        }
+      },
+    })
+    return
+  }
   expandOpen.value = true
 }
 
@@ -734,7 +762,7 @@ onMounted(() => {
                能力藏起来（曾写成「任何 auto_source 都藏」，与本意不符）。 -->
           <div
             v-if="
-              current.kind === 'manual' &&
+              canHoldMaterials &&
               !currentChildren.length &&
               !(current.parent_id === null && current.auto_source)
             "

@@ -48,6 +48,7 @@
     "parent_id",
     "position",
     "query_json",
+    "semi_manual",
     "updated_at"
   ],
   "GET /api/inspirations": [

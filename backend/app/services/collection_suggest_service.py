@@ -22,7 +22,7 @@ from app.config import settings
 from app.models.collection import CollectionItem
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
-from app.services.collection_service import require_expandable
+from app.services.collection_service import evaluate_smart_collection, require_expandable
 from app.services.vector import store as vector_store  # 注意：不是 services.vector_store 薄壳（无 get_vectors_batch）
 from app.services.inspiration_query import inspiration_load_options
 
@@ -76,33 +76,33 @@ def _reason(visual: float | None, shared_tags: list[str], outfit_tags: list[str]
     return " · ".join(parts) or "标签相近"
 
 
-async def _member_ids(db: AsyncSession, collection_id: int) -> set[str]:
-    """合集当前全部成员 ID（用于排除，不受 SEED_LIMIT 影响）。"""
-    rows = (
-        await db.execute(
-            select(CollectionItem.inspiration_id).where(
-                CollectionItem.collection_id == collection_id
-            )
-        )
-    ).scalars().all()
-    return set(rows)
+async def _seed_and_members(
+    db: AsyncSession, collection
+) -> tuple[list[str], set[str]]:
+    """返回（种子 ID 前 SEED_LIMIT 条，当前全部内容 ID）。
 
+    - 手动合集：按 position 取实体成员；
+    - 半智能合集（``query_json`` 非空）：求值「规则匹配 ∪ 成员」——种子取其中
+      最新的 SEED_LIMIT 条；成员集合用于排除候选，否则规则已命中的素材会被当成
+      候选重复推荐。
+    """
+    if collection.query_json is not None:
+        items, _total = await evaluate_smart_collection(db, collection)
+        ordered = [item.id for item in items]
+        return ordered[:SEED_LIMIT], set(ordered)
 
-async def _seed_ids(db: AsyncSession, collection_id: int) -> list[str]:
-    """种子：按 position 取合集前 SEED_LIMIT 个未删除成员。"""
     rows = (
         await db.execute(
             select(CollectionItem.inspiration_id)
             .join(Inspiration, Inspiration.id == CollectionItem.inspiration_id)
             .where(
-                CollectionItem.collection_id == collection_id,
+                CollectionItem.collection_id == collection.id,
                 Inspiration.deleted_at.is_(None),
             )
             .order_by(CollectionItem.position.asc(), CollectionItem.added_at.asc())
-            .limit(SEED_LIMIT)
         )
     ).scalars().all()
-    return list(rows)
+    return list(rows[:SEED_LIMIT]), set(rows)
 
 
 async def _tag_profile(
@@ -181,10 +181,8 @@ async def suggest_items(
         ``{items, total, profile}``；``items`` 元素为
         ``{inspiration, similarity, shared_tags, outfit_tags, reason, match_source}``。
     """
-    await require_expandable(db, collection_id)
-
-    seeds = await _seed_ids(db, collection_id)
-    members = await _member_ids(db, collection_id)
+    collection = await require_expandable(db, collection_id)
+    seeds, members = await _seed_and_members(db, collection)
     tag_profile, outfit_profile = await _tag_profile(db, seeds)
     top_tag_ids = [tag_id for tag_id, _name, _category in tag_profile]
     top_tag_names = {tag_id: name for tag_id, name, _category in tag_profile}

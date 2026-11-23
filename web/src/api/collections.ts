@@ -32,6 +32,8 @@ export interface CollectionOut {
   parent_id: number | null
   /** 自动维护来源：'douyin' = 抖音同步自动建（名字不可改）；用户自建为 null */
   auto_source: string | null
+  /** 半智能：智能合集同时接受实体成员（规则匹配 ∪ 成员）；手动合集恒为 false */
+  semi_manual?: boolean
   /** 直接子收藏夹数（一级节点用） */
   child_count: number
   cover_inspiration_id: string | null
@@ -185,6 +187,12 @@ export async function mergeCollections(
   const { data } = await apiClient.post<CollectionMergeResult>(`/collections/${targetId}/merge`, {
     source_ids: sourceIds,
   })
+  return data
+}
+
+/** 把智能合集转为「半智能」：保留规则匹配，同时允许补充实体成员 */
+export async function convertCollectionToSemi(id: number): Promise<CollectionOut> {
+  const { data } = await apiClient.post<CollectionOut>(`/collections/${id}/to-semi`)
   return data
 }
 

@@ -126,6 +126,8 @@ class CollectionOut(BaseModel):
     position: int
     parent_id: int | None = None  # 二级收藏夹的父 ID；一级为 null
     auto_source: str | None = None  # 自动维护来源（douyin）；用户自建为 null
+    # 半智能：智能合集同时接受实体成员（规则匹配 ∪ 成员）；手动合集恒为 False
+    semi_manual: bool = False
     child_count: int = 0  # 直接子收藏夹数（一级节点用）
     cover_inspiration_id: str | None = None
     cover_thumbnail_path: str | None = None

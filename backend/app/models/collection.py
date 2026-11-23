@@ -19,6 +19,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -63,6 +64,11 @@ class Collection(Base):
     query_json: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # 智能合集筛选条件 JSON 字符串；手动合集恒为 NULL
+    # 半智能：仍按 query_json 动态求值，同时允许在 collection_items 里补额外素材
+    # （「按此扩充」/手动加入）。仅对智能合集有意义，手动合集恒为 False。
+    semi_manual: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     # 父合集（二级才有值）；父被删时子合集一并删除（它们是父的子分类，单独留下没有意义）
     parent_id: Mapped[int | None] = mapped_column(
@@ -121,7 +127,11 @@ class Collection(Base):
 
     @property
     def kind(self) -> str:
-        """合集类型：manual 手动合集 / smart 智能合集（由 query_json 区分）。"""
+        """合集类型：manual 手动合集 / smart 智能合集（由 query_json 区分）。
+
+        半智能（``semi_manual=True``）仍归为 smart：内容主体按条件动态求值，
+        只是额外并入了手动补充的成员。
+        """
         return "smart" if self.query_json is not None else "manual"
 
     @property

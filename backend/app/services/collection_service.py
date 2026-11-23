@@ -16,7 +16,7 @@ import json
 import secrets
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, Select, delete, func, or_, select
+from sqlalchemy import ColumnElement, Select, and_, delete, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.collection import (
@@ -74,14 +74,34 @@ def _guard_manual_root(collection: Collection, action: str) -> None:
 
 
 def _smart_base_query(collection: Collection):
-    """构建智能合集的动态求值查询（含标签/博主/模特预加载与垃圾桶排除）。"""
+    """构建智能合集的动态求值查询（含标签/博主/模特预加载与垃圾桶排除）。
+
+    半智能（``semi_manual``）：内容是「规则匹配 ∪ collection_items 实体成员」，
+    与手动补充/扩充进来的素材取并集后再统一分页；纯手动/纯智能行为不变。
+    """
     filters = build_filters_from_query_json(_load_query_json(collection))
+    if not collection.semi_manual:
+        return (
+            select(Inspiration)
+            .options(
+                *inspiration_load_options(),
+            )
+            .where(*filters)
+        )
+
+    # filters[0] 恒为 NOT_DELETED（见 build_filters_from_query_json 的口径），
+    # 并集的两侧要各自带垃圾桶排除：规则匹配只取剩余条件，成员行本身也要过滤
+    not_deleted, *rule_filters = filters
+    member_ids = select(CollectionItem.inspiration_id).where(
+        CollectionItem.collection_id == collection.id
+    )
+    rule_expr = and_(*rule_filters) if rule_filters else true()
     return (
         select(Inspiration)
         .options(
             *inspiration_load_options(),
         )
-        .where(*filters)
+        .where(not_deleted, or_(rule_expr, Inspiration.id.in_(member_ids)))
     )
 
 
@@ -148,7 +168,20 @@ async def _require_manual(collection: Collection) -> None:
     """智能合集不支持实体成员操作（加入/移出/排序），返回 400。"""
     if collection.query_json is not None:
         raise HTTPException(
-            status_code=400, detail="智能合集不支持该操作，请先固化（solidify）转手动合集"
+            status_code=400,
+            detail="智能合集不支持该操作，请先转为半智能或固化（solidify）转手动合集",
+        )
+
+
+async def _require_materializable(collection: Collection, action: str = "该操作") -> None:
+    """允许手动合集与半智能合集：两者都有实体成员（半智能是「规则 ∪ 成员」）。
+
+    纯智能合集没有实体成员，仍返回 400，提示先转半智能或固化。
+    """
+    if collection.query_json is not None and not collection.semi_manual:
+        raise HTTPException(
+            status_code=400,
+            detail=f"智能合集不支持{action}，请先转为半智能或固化（solidify）为手动合集",
         )
 
 
@@ -260,8 +293,8 @@ async def _validate_parent(db: AsyncSession, parent_id: int | None) -> Collectio
 async def collection_to_dict(db: AsyncSession, collection: Collection) -> dict:
     """序列化合集为 API 响应（契约见设计文档「三、API 契约」）。
 
-    - kind: manual / smart；
-    - item_count: 手动 = 成员数；智能 = null（懒计算，进入合集页才查询）；
+    - kind: manual / smart；``semi_manual`` 表示智能合集同时接受实体成员；
+    - item_count: 手动 = 成员数；半智能 = 规则匹配 ∪ 成员；智能 = null（懒计算）；
     - 封面：手动指定的封面优先（素材被物理删除时外键自动置空）；未指定时
       手动合集取「加入最早」的未删除成员，智能合集取动态求值结果第一张。
     """
@@ -274,6 +307,13 @@ async def collection_to_dict(db: AsyncSession, collection: Collection) -> dict:
             )
         ).scalar() or 0
         query_json = None
+    elif collection.semi_manual:
+        # 半智能：数量与内容页同口径（规则 ∪ 成员），进入合集页即可对上
+        count_query = _smart_base_query(collection)
+        item_count = (
+            await db.execute(select(func.count()).select_from(count_query.subquery()))
+        ).scalar() or 0
+        query_json = _load_query_json(collection)
     else:
         item_count = None
         query_json = _load_query_json(collection)
@@ -294,6 +334,7 @@ async def collection_to_dict(db: AsyncSession, collection: Collection) -> dict:
         "position": collection.position,
         "parent_id": collection.parent_id,
         "auto_source": collection.auto_source,
+        "semi_manual": collection.semi_manual,
         "child_count": child_count,
         "cover_inspiration_id": cover_id,
         "cover_thumbnail_path": cover_thumbnail,
@@ -431,6 +472,7 @@ async def _batch_serialize(db: AsyncSession, collections: list[Collection]) -> l
                     "position": c.position,
                     "parent_id": c.parent_id,
                     "auto_source": c.auto_source,
+                    "semi_manual": c.semi_manual,
                     "child_count": child_counts.get(c.id, 0),
                     "cover_inspiration_id": cover_id,
                     "cover_thumbnail_path": cover_thumb,
@@ -728,7 +770,7 @@ async def add_inspirations(
         ``{added, skipped, not_found, added_ids}``；``added_ids`` 是本次真正新增的素材 ID。
     """
     collection = await get_collection(db, collection_id)
-    await _require_manual(collection)
+    await _require_materializable(collection, "加入素材")
     await _require_container(db, collection)
 
     # 请求内去重，保持首次出现顺序
@@ -793,14 +835,35 @@ async def add_inspirations(
 # ── 「按此合集扩充」：批次写入与撤销 ──
 
 
+async def enable_semi_manual(db: AsyncSession, collection_id: int) -> dict:
+    """把智能合集转为「半智能」：保留规则匹配，同时允许补充实体成员。
+
+    - 纯智能 → 设置 ``semi_manual=True``（幂等，重复调用直接返回）；
+    - 手动合集返回 400（它本来就支持实体成员）；
+    - 系统收藏根（智能）返回 400，仍由 ensure_root_collections 维护。
+
+    转后内容口径变为「query_json 规则匹配 ∪ collection_items 成员」，
+    「按此扩充」/手动加入/移出均可使用；随时可再固化为纯手动合集。
+    """
+    collection = await get_collection(db, collection_id)
+    _guard_manual_root(collection, "转为半智能合集")
+    if collection.query_json is None:
+        raise HTTPException(status_code=400, detail="手动合集无需转为半智能")
+    if not collection.semi_manual:
+        collection.semi_manual = True
+        await db.commit()
+        await db.refresh(collection)
+    return await collection_to_dict(db, collection)
+
+
 async def require_expandable(db: AsyncSession, collection_id: int) -> Collection:
     """校验合集可用于「按此扩充」，返回合集对象。
 
-    口径（用户已确认）：只允许**用户自建手动合集**——智能合集、系统收藏根、
+    口径：允许**用户自建手动合集与半智能合集**；纯智能合集、系统收藏根、
     分类节点、抖音同步合集（``auto_source`` 非空）一律 400。
     """
     collection = await get_collection(db, collection_id)
-    await _require_manual(collection)
+    await _require_materializable(collection, "扩充")
     _guard_manual_root(collection, "扩充")
     if collection.auto_source is not None:
         raise HTTPException(
@@ -894,9 +957,13 @@ async def undo_expansion(db: AsyncSession, collection_id: int, batch_id: str) ->
 async def remove_inspirations(
     db: AsyncSession, collection_id: int, inspiration_ids: list[str]
 ) -> dict:
-    """批量移出素材（不在合集内的 ID 静默跳过）。智能合集返回 400。"""
+    """批量移出素材（不在合集内的 ID 静默跳过）。
+
+    手动与半智能合集可用；纯智能合集返回 400。半智能里由规则命中的素材
+    没有成员行，移出只删成员关系，它仍会出现在内容里（规则匹配）。
+    """
     collection = await get_collection(db, collection_id)
-    await _require_manual(collection)
+    await _require_materializable(collection, "移出素材")
 
     result = await db.execute(
         delete(CollectionItem).where(
@@ -1341,19 +1408,52 @@ async def solidify_collection(db: AsyncSession, collection_id: int) -> dict:
 
     inspirations, _total = await evaluate_smart_collection(db, collection)
 
-    # 覆盖式写入：清掉历史成员行（正常为空），按动态求值顺序连续编号
-    await db.execute(
-        delete(CollectionItem).where(CollectionItem.collection_id == collection.id)
-    )
-    for position, inspiration in enumerate(inspirations):
-        db.add(
-            CollectionItem(
-                collection_id=collection.id,
-                inspiration_id=inspiration.id,
-                position=position,
-            )
+    if collection.semi_manual:
+        # 半智能：已有的补充成员（含扩充批次）必须保留，只补进尚未成为成员的
+        # 规则命中；否则「固化为手动」会把用户扩充/手动加入的素材一起删掉
+        existing_members = set(
+            (
+                await db.execute(
+                    select(CollectionItem.inspiration_id).where(
+                        CollectionItem.collection_id == collection.id
+                    )
+                )
+            ).scalars().all()
         )
+        max_position = (
+            await db.execute(
+                select(func.max(CollectionItem.position)).where(
+                    CollectionItem.collection_id == collection.id
+                )
+            )
+        ).scalar() or 0
+        offset = 0
+        for inspiration in inspirations:
+            if inspiration.id in existing_members:
+                continue
+            offset += 1
+            db.add(
+                CollectionItem(
+                    collection_id=collection.id,
+                    inspiration_id=inspiration.id,
+                    position=max_position + offset,
+                )
+            )
+    else:
+        # 覆盖式写入：清掉历史成员行（正常为空），按动态求值顺序连续编号
+        await db.execute(
+            delete(CollectionItem).where(CollectionItem.collection_id == collection.id)
+        )
+        for position, inspiration in enumerate(inspirations):
+            db.add(
+                CollectionItem(
+                    collection_id=collection.id,
+                    inspiration_id=inspiration.id,
+                    position=position,
+                )
+            )
     collection.query_json = None
+    collection.semi_manual = False
     await db.commit()
     await db.refresh(collection)
     return await collection_to_dict(db, collection)

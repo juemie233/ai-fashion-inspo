@@ -266,3 +266,42 @@ async def test_suggest_uses_vectors_when_available(client, upload, monkeypatch):
     assert hit is not None
     assert hit["match_source"] == "hybrid"
     assert hit["similarity"] >= 0.5
+
+
+async def test_expand_into_semi_manual_collection(client, upload):
+    """半智能合集可扩充（规则匹配 ∪ 扩充成员）；纯智能仍 400。"""
+    smart_id = _create_collection(client, "半智能扩充", {"is_favorite": True})
+    insp_id = upload().json()["id"]
+
+    # 纯智能：400
+    assert _expand(client, smart_id, [insp_id]).status_code == 400
+
+    # 转半智能后可扩充
+    assert client.post(f"/api/collections/{smart_id}/to-semi").status_code == 200
+    resp = _expand(client, smart_id, [insp_id])
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["added"] == 1
+
+    assert insp_id in _member_ids(client, smart_id)
+
+
+async def test_suggest_for_semi_uses_rule_matches_as_seeds(
+    client, upload, monkeypatch
+):
+    """半智能扩种：种子取「规则匹配 ∪ 成员」，规则命中的素材不再当候选。"""
+    from app.services import collection_suggest_service as suggest_service
+
+    monkeypatch.setattr(
+        suggest_service.vector_store, "is_lancedb_available", lambda: False
+    )
+
+    fav = upload().json()["id"]
+    client.patch(f"/api/inspirations/{fav}", json={"is_favorite": True})
+    collection_id = _create_collection(client, "半智能种子", {"is_favorite": True})
+    assert client.post(f"/api/collections/{collection_id}/to-semi").status_code == 200
+
+    resp = _suggest(client, collection_id, min_similarity=0.0)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["profile"]["seeds_used"] == 1
+    assert fav not in [item["inspiration"]["id"] for item in data["items"]]

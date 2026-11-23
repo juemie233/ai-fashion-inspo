@@ -746,3 +746,85 @@ async def test_system_manual_root_cannot_be_mutated_or_deleted(client):
     assert listed[collection_service.MANUAL_ROOT_COLLECTION_NAME]["query_json"] == {
         "is_favorite": True
     }
+
+
+# ── 半智能合集（2026-11-22）：保留规则匹配 + 允许补充实体成员 ──
+
+
+def test_convert_smart_to_semi_manual(client, upload):
+    """to-semi：智能合集可转半智能；手动合集与系统收藏根 400。"""
+    smart = create_collection(client, "转半智能", query_json={"is_favorite": True})
+    r = client.post(f"/api/collections/{smart['id']}/to-semi")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "smart"
+    assert body["semi_manual"] is True
+    # 幂等：重复调用仍 200
+    assert client.post(f"/api/collections/{smart['id']}/to-semi").status_code == 200
+
+    manual = create_collection(client, "手动不能转")
+    assert client.post(f"/api/collections/{manual['id']}/to-semi").status_code == 400
+
+    root = create_collection(
+        client, "系统入库手动收藏", query_json={"is_favorite": True}
+    )
+    assert client.post(f"/api/collections/{root['id']}/to-semi").status_code == 400
+
+
+def test_semi_manual_content_is_union_and_members_editable(client, upload):
+    """半智能内容 = 规则匹配 ∪ 实体成员；可手动加入/移出，纯智能仍 400。"""
+    fav = upload().json()["id"]
+    other = upload().json()["id"]
+    client.patch(f"/api/inspirations/{fav}", json={"is_favorite": True})
+
+    col = create_collection(client, "半智能", query_json={"is_favorite": True})
+    cid = col["id"]
+    base = f"/api/collections/{cid}"
+
+    # 纯智能：加入仍 400
+    assert (
+        client.post(f"{base}/inspirations", json={"inspiration_ids": [other]}).status_code
+        == 400
+    )
+
+    assert client.post(f"{base}/to-semi").status_code == 200
+    r = client.post(f"{base}/inspirations", json={"inspiration_ids": [other]})
+    assert r.status_code == 200, r.text
+
+    items, total = get_content(client, cid)
+    assert total == 2
+    assert set(items) == {fav, other}
+
+    # 列表接口的 item_count 与内容页一致（半智能不再返回 null）
+    listed = [c for c in client.get("/api/collections").json() if c["id"] == cid][0]
+    assert listed["item_count"] == 2
+    assert listed["semi_manual"] is True
+
+    # 移出补充成员：规则命中的 fav 仍在，other 消失
+    r = delete_json(client, f"{base}/inspirations", {"inspiration_ids": [other]})
+    assert r.status_code == 200
+    items, total = get_content(client, cid)
+    assert total == 1 and items == [fav]
+
+
+def test_semi_manual_solidify_keeps_added_members(client, upload):
+    """半智能固化：规则命中与补充成员都落成实体成员，不会被覆盖式清理删掉。"""
+    fav = upload().json()["id"]
+    other = upload().json()["id"]
+    client.patch(f"/api/inspirations/{fav}", json={"is_favorite": True})
+
+    col = create_collection(client, "半智能固化", query_json={"is_favorite": True})
+    cid = col["id"]
+    client.post(f"/api/collections/{cid}/to-semi")
+    client.post(
+        f"/api/collections/{cid}/inspirations", json={"inspiration_ids": [other]}
+    )
+
+    r = client.post(f"/api/collections/{cid}/solidify")
+    assert r.status_code == 200, r.text
+    assert r.json()["kind"] == "manual"
+    assert r.json()["semi_manual"] is False
+
+    items, total = get_content(client, cid)
+    assert total == 2
+    assert set(items) == {fav, other}

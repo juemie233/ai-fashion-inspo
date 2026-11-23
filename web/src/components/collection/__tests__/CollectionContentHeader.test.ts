@@ -75,12 +75,16 @@ describe('CollectionContentHeader 系统收藏根', () => {
     expect(system.findAll('button').some((b) => b.text().includes('合并到…'))).toBe(false)
   })
 
-  it('「按此扩充」只对用户自建手动合集显示', () => {
+  it('「按此扩充」对手动与智能合集都显示（智能会先转为半智能）', () => {
     const manual = mountHeader(collection({ kind: 'manual' }))
     expect(manual.findAll('button').some((b) => b.text() === '按此扩充')).toBe(true)
 
     const smart = mountHeader(collection({ kind: 'smart' }))
-    expect(smart.findAll('button').some((b) => b.text() === '按此扩充')).toBe(false)
+    expect(smart.findAll('button').some((b) => b.text() === '按此扩充')).toBe(true)
+
+    const semi = mountHeader(collection({ kind: 'smart', semi_manual: true }))
+    expect(semi.findAll('button').some((b) => b.text() === '按此扩充')).toBe(true)
+    expect(semi.text()).toContain('半智能合集')
 
     const auto = mountHeader(collection({ kind: 'manual', auto_source: 'douyin' }))
     expect(auto.findAll('button').some((b) => b.text() === '按此扩充')).toBe(false)

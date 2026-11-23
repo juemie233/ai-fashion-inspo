@@ -38,13 +38,11 @@ const canMerge = computed(
     !props.current.child_count,
 )
 
-/** 「按此扩充」入口：只服务用户自建手动合集（后端同样 400 兜底） */
+/** 「按此扩充」入口：用户自建手动合集与智能合集都可用。
+ *  纯智能合集点击时会先确认「转为半智能」（保留规则匹配 + 允许补充成员）；
+ *  抖音同步、系统收藏根、分类节点不给入口（后端同样 400 兜底）。 */
 const canExpand = computed(
-  () =>
-    props.current.kind === 'manual' &&
-    !props.current.auto_source &&
-    !isSystemManualRoot.value &&
-    !props.current.child_count,
+  () => !props.current.auto_source && !isSystemManualRoot.value && !props.current.child_count,
 )
 
 const emit = defineEmits<{
@@ -72,7 +70,9 @@ const emit = defineEmits<{
     <div class="content-title">
       <h2>{{ current.name }}</h2>
       <span v-if="parentName" class="content-parent">{{ parentName }} /</span>
-      <a-tag v-if="current.kind === 'smart'" color="arcoblue" size="small">智能合集</a-tag>
+      <a-tag v-if="current.kind === 'smart'" color="arcoblue" size="small">
+        {{ current.semi_manual ? '半智能合集' : '智能合集' }}
+      </a-tag>
       <a-tag v-if="isSystemManualRoot" color="gray" size="small">系统收藏 · 自动同步</a-tag>
       <a-tag v-if="current.auto_source" color="gray" size="small">抖音同步</a-tag>
       <span class="content-total">共 {{ total }} 个素材</span>
