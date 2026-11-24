@@ -5,7 +5,7 @@
  * - 默认是「素材数降序」；第一次点表头 = 主排序，之后点另一列 = 次排序；
  * - 重复点已选列切方向；两列已满时点新列替换次排序；
  * - 主/次状态可见可清除；下拉单选排序必须清空次排序（不能留隐藏条件）；
- * - 评分排序（主或次）命中时后端只返回已评 ≥5 张的博主，页面要有提示；
+ * - 评分排序（主或次）命中时样本不足的博主排在最后但保留在列表里，页面要有提示；
  * - sort2/order2 要进 URL，详情往返后能恢复。
  */
 
@@ -100,7 +100,7 @@ describe('usePersonList 两级排序', () => {
     expect(api.store.sort2).toBe('')
     expect(api.sortMainLabel.value).toBe('作品评分 ↓')
     expect(api.ratingSortActive.value).toBe(true)
-    expect(api.ratingSortHint).toContain('已评 ≥5 张')
+    expect(api.ratingSortHint).toContain('样本不足')
 
     // 表头箭头只回显主排序
     const countColumn = api.columns.value.find((c) => c.dataIndex === 'inspiration_count')
@@ -221,14 +221,14 @@ describe('usePersonList 两级排序', () => {
     expect(mocks.bloggerList).toHaveBeenCalled()
   })
 
-  it('评分排序只出现在次排序时也提示（后端同样只返回已评 ≥5 张）', async () => {
+  it('评分排序只出现在次排序时也提示（样本不足排在最后）', async () => {
     const api = await load()
     api.store.sort = 'count'
     api.store.sort2 = 'rating'
     await Promise.resolve()
 
     expect(api.ratingSortActive.value).toBe(true)
-    expect(api.ratingSortHint).toContain('已评 ≥5 张')
+    expect(api.ratingSortHint).toContain('样本不足')
   })
 
   it('URL 恢复 sort2/order2；非法 sort2 回退为空', async () => {

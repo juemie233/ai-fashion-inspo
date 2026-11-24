@@ -107,7 +107,7 @@ const dormant = computed(() => {
             人脸 {{ detail.face_registered ? '已注册' : '未注册' }}
           </a-tag>
           <a-tag v-if="detail.source === 'auto_collect'" size="small" color="orange">
-            采集自动登记
+            尚未进行自动登记
           </a-tag>
         </div>
 

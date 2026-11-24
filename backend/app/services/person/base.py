@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 STYLE_PROFILE_TOP_TAGS = 15
 
 # 博主作品均分参与排名/筛选所需的最少已评分作品数（2026-11-12 博主作品评分方案）。
-# 预检：当前库 11 位博主达到 5 张，门槛保持 5。
+# 2026-11-24：评分排序不再隐藏样本不足（否则只剩十几行、无法翻页），改为排在最后；
+# 评分筛选仍按该门槛排除。
 MIN_RATING_SAMPLE = 5
 
 
@@ -270,16 +271,9 @@ class PersonServiceBase:
                 order2=order2,
             )
 
-        # 评分排序（主或次）时只显示样本足够的人物：点击「作品评分」表头 = 进入评分
-        # 排序，已评不足 MIN_RATING_SAMPLE 的暂时隐藏（避免「1 张 5 分」霸榜）；
-        # 清空评分排序（主/次都不含 rating）即恢复全量。
-        rating_sort_active = sort in ("rating", "rating_asc") or sort2 in (
-            "rating",
-            "rating_asc",
-        )
-        if rating_sort_active:
-            stmt = stmt.where(rated_count_col >= MIN_RATING_SAMPLE)
-
+        # 评分排序不再隐藏样本不足的人物（2026-11-24 修复：隐藏会让评分排序只剩
+        # 十几行、表格没有下一页，用户无法继续翻页）；排序时把样本不足者排到最后，
+        # 具体见 _flat_level 的样本优先键。评分筛选仍按 rating_min 排除样本不足。
         # 评分筛选（平铺路径）：仅返回样本足够且均分达标的博主。
         # 必须放在折叠分支之后：折叠时评分筛选要在组内合并后做，不能先过滤账号。
         if rating_min is not None:
@@ -298,9 +292,14 @@ class PersonServiceBase:
                 return [cnt_col.asc() if level_order == "asc" else cnt_col.desc()]
             if level_sort in ("rating", "rating_asc"):
                 avg_expr = rating_sum_col * 1.0 / rated_count_col
+                # 样本不足者保留在列表里但排到该排序级别的最后，避免「1 张 5 分」
+                # 霸榜；同时保证 total 仍是全量，分页能继续翻。
+                sample_flag = case(
+                    (rated_count_col >= MIN_RATING_SAMPLE, 0), else_=1
+                )
                 if level_sort == "rating":
-                    return [avg_expr.desc(), rated_count_col.desc()]
-                return [avg_expr.asc(), rated_count_col.desc()]
+                    return [sample_flag, avg_expr.desc(), rated_count_col.desc()]
+                return [sample_flag, avg_expr.asc(), rated_count_col.desc()]
             return [model.created_at.desc()]
 
         # 两级排序：主键 → 次键 → id 稳定兜底；主/次同键时忽略次键（避免同列排两次 /
@@ -321,13 +320,19 @@ class PersonServiceBase:
                 stmt = stmt.order_by(cnt_col.desc(), model.id.desc())
         elif sort == "rating":
             avg_expr = rating_sum_col * 1.0 / rated_count_col
+            sample_flag = case(
+                (rated_count_col >= MIN_RATING_SAMPLE, 0), else_=1
+            )
             stmt = stmt.order_by(
-                avg_expr.desc(), rated_count_col.desc(), model.id.desc()
+                sample_flag, avg_expr.desc(), rated_count_col.desc(), model.id.desc()
             )
         elif sort == "rating_asc":
             avg_expr = rating_sum_col * 1.0 / rated_count_col
+            sample_flag = case(
+                (rated_count_col >= MIN_RATING_SAMPLE, 0), else_=1
+            )
             stmt = stmt.order_by(
-                avg_expr.asc(), rated_count_col.desc(), model.id.asc()
+                sample_flag, avg_expr.asc(), rated_count_col.desc(), model.id.asc()
             )
         else:
             stmt = stmt.order_by(model.created_at.desc(), model.id.desc())
@@ -450,19 +455,8 @@ class PersonServiceBase:
                 and item["rating_average"] >= rating_min
             ]
 
-        # 评分排序（主或次）时只保留样本足够的组/账号：组合并后的 rated_count 已写进
-        # item（组内分子分母相加），必须在这里过滤——先剔账号会扭曲组均分。
-        rating_sort_active = sort in ("rating", "rating_asc") or sort2 in (
-            "rating",
-            "rating_asc",
-        )
-        if rating_sort_active:
-            folded = [
-                item
-                for item in folded
-                if (item.get("rated_count") or 0) >= MIN_RATING_SAMPLE
-            ]
-
+        # 评分排序不再隐藏样本不足的组/账号（2026-11-24）：保留全量分页；
+        # 样本不足只在排序级别内排到最后，见 _level 的 rating 分支。
         # 折叠后分页/排序以主记录为准
         total = len(folded)
 
@@ -476,9 +470,11 @@ class PersonServiceBase:
             if level_sort in ("rating", "rating_asc"):
                 avg = item.get("rating_average") or 0.0
                 rated = item.get("rated_count") or 0
+                # 样本不足者保留在列表里（分页需要全量），但排在评分级别最后
+                sample_flag = 0 if rated >= MIN_RATING_SAMPLE else 1
                 if level_sort == "rating":
-                    return (-avg, -rated)
-                return (avg, -rated)
+                    return (sample_flag, -avg, -rated)
+                return (sample_flag, avg, -rated)
             created = item.get("created_at")
             return (
                 0 if created else 1,

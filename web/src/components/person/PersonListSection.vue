@@ -212,7 +212,7 @@ function handleExpandedChange(keys: Array<string | number>) {
           清除排序
         </a-button>
       </div>
-      <!-- 评分排序时后端只返回已评 ≥5 张的博主，明确提示，避免误以为博主变少了 -->
+      <!-- 评分排序时样本不足的博主仍保留、但排在最后，明确提示排序口径 -->
       <div v-if="ratingSortActive" class="rating-sort-hint">{{ ratingSortHint }}</div>
     </a-card>
 
@@ -261,7 +261,7 @@ function handleExpandedChange(keys: Array<string | number>) {
         <a-space :size="8">
           <a-popconfirm
             v-if="kind === 'blogger'"
-            content="把选中的「自动登记」博主纳入追踪？之后「一键获取素材」会增量下载 TA 的主页作品。非自动登记的不受影响。"
+            content="把选中的「尚未进行自动登记」博主纳入追踪？之后「一键获取素材」会增量下载 TA 的主页作品。其余博主不受影响。"
             @ok="batchPromote"
           >
             <a-button size="small" type="outline" status="warning" :disabled="batchBusy">
@@ -490,16 +490,22 @@ function handleExpandedChange(keys: Array<string | number>) {
   fill: currentColor;
 }
 
-/* 名称与「自动登记」标签纵向排列：名称必须单行，超出省略；标签不挤占名称行 */
+/* 名称与来源标签强制纵向排列：名称必须单行，超出省略；来源标签单独占一行，
+   不挤占名称行（长文案「尚未进行自动登记」也不与头像/网名并排）。 */
 .person-meta {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
+}
+
+.person-source-tag {
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .person-name {

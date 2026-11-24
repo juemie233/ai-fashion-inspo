@@ -22,7 +22,9 @@ import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 export const SOURCE_LABELS: Record<string, string> = {
   manual: '手动',
   ai_generated: 'AI 生成',
-  auto_collect: '自动登记',
+  // 用户口径（2026-11-24）：来源标签不能只写「自动登记」，容易被读成
+  // 「已经完成自动登记」；明确写成「尚未进行自动登记」。
+  auto_collect: '尚未进行自动登记',
 }
 
 /** 表头可排序的列 → 排序分组（与后端 sort/sort2 取值对应） */
@@ -51,7 +53,7 @@ export function formatSortLabel(sort: string, order: 'asc' | 'desc'): string {
   return SORT_LABELS[sort] ?? sort
 }
 
-/** 是否为评分排序：后端在 sort 或 sort2 命中评分时只返回已评 ≥5 张的博主 */
+/** 是否为评分排序：后端在 sort 或 sort2 命中评分时，样本不足者保留但排最后 */
 export function isRatingSort(sort: string | undefined | null): boolean {
   return sort === 'rating' || sort === 'rating_asc'
 }
@@ -203,9 +205,10 @@ export function usePersonList(kind: PersonKind) {
   const sortSecondaryLabel = computed(() =>
     store.sort2 ? formatSortLabel(store.sort2, store.order2) : '',
   )
-  /** 评分排序是否激活（主或次）：后端只返回已评 ≥5 张的博主，页面要提示 */
+  /** 评分排序是否激活（主或次）：样本不足排在最后但仍保留，页面提示口径 */
   const ratingSortActive = computed(() => isRatingSort(store.sort) || isRatingSort(store.sort2))
-  const ratingSortHint = '评分排序仅显示已评 ≥5 张的博主；清除评分排序可恢复全部博主'
+  const ratingSortHint =
+    '评分排序会把样本不足（已评 <5 张）的博主排在最后；评分筛选仍只显示样本足够的博主'
   /** 是否偏离默认排序（默认素材数降序、无次排序）：控制「清除排序」是否出现 */
   const hasActiveSort = computed(
     () => store.sort !== 'count' || store.order !== 'desc' || Boolean(store.sort2),
@@ -315,8 +318,8 @@ export function usePersonList(kind: PersonKind) {
       title: '人物',
       dataIndex: 'name',
       // 头像 + 网名必须单行；自动登记标签放到网名下方，避免挤占同一行宽度
-      width: 180,
-      minWidth: 160,
+      width: 210,
+      minWidth: 190,
       render: ({ record }) => {
         const row = record as Person
         return h('div', { class: 'person-cell' }, [
@@ -350,10 +353,11 @@ export function usePersonList(kind: PersonKind) {
                   {
                     size: 'small',
                     color: 'orange',
+                    class: 'person-source-tag',
                     title:
-                      '由「我的喜欢」采集自动登记；点「纳入追踪」后才会进「一键获取素材」的下载白名单',
+                      '由「我的喜欢」采集的来源作者；尚未进行自动登记，点「纳入追踪」后才会进「一键获取素材」的下载白名单',
                   },
-                  { default: () => '自动登记' },
+                  { default: () => SOURCE_LABELS.auto_collect },
                 )
               : null,
           ]),

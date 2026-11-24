@@ -140,11 +140,31 @@ def _link_group(client, blogger_a: int, blogger_b: int) -> int:
     return resp.json()["group_id"]
 
 
+async def test_rating_sort_keeps_pagination_for_insufficient_samples(client, create_blogger):
+    """回归：评分排序曾隐藏样本不足导致 total 不足一页、没有下一页。"""
+    for index in range(21):
+        blogger_id = create_blogger(f"分页样本{index}")["id"]
+        await _add_blogger_images(blogger_id, [5, 5, 5, 5])  # 已评4 → 样本不足
+
+    first = client.get(
+        "/api/bloggers",
+        params={"sort": "rating", "page": 1, "size": 20, "grouped": "false"},
+    ).json()
+    second = client.get(
+        "/api/bloggers",
+        params={"sort": "rating", "page": 2, "size": 20, "grouped": "false"},
+    ).json()
+    assert first["total"] == 21
+    assert len(first["items"]) == 20
+    assert len(second["items"]) == 1
+    assert second["total"] == 21
+
+
 # ── 平铺路径：主 count + 次 rating ──
 
 
 async def test_primary_count_secondary_rating(client, create_blogger):
-    """主排序 count（desc/asc）+ 次排序 rating；评分排序触发样本过滤。"""
+    """主排序 count（desc/asc）+ 次排序 rating；样本不足保留但排在评分级别最后。"""
     a = create_blogger("A")["id"]
     await _add_blogger_images(a, [5, 5, 5, 5, 5])  # count5 / 已评5 / 均分5
     b = create_blogger("B")["id"]
@@ -163,9 +183,9 @@ async def test_primary_count_secondary_rating(client, create_blogger):
             "grouped": "false",
         },
     ).json()
-    assert desc["total"] == 3  # C 样本不足被隐藏
-    # count desc：D(7) 先；A/B 同为 5 → 次排序 rating desc：A(5) 先于 B(3)
-    assert _ids(desc) == [d, a, b]
+    assert desc["total"] == 4  # C 样本不足也保留，分页可继续
+    # count desc：D(7) 先；A/B/C 同为 5 → 次排序 rating desc：A(5) → B(3) → C(样本不足)
+    assert _ids(desc) == [d, a, b, c]
 
     asc = client.get(
         "/api/bloggers",
@@ -176,15 +196,14 @@ async def test_primary_count_secondary_rating(client, create_blogger):
             "grouped": "false",
         },
     ).json()
-    assert _ids(asc) == [a, b, d]
+    assert _ids(asc) == [c, a, b, d]
 
 
 # ── 平铺路径：主 rating + 次 count ──
 
 
 async def test_primary_rating_secondary_count(client, create_blogger):
-    """主排序 rating + 次排序 count（order2 生效），且过滤样本不足。"""
-    create_blogger("A")  # 占位，确保下面 id 从 2 开始也无妨
+    """主排序 rating + 次排序 count（order2 生效），样本不足排最后。"""
     e = create_blogger("E")["id"]
     await _add_blogger_images(e, [5, 5, 5])  # 已评3 → 隐藏
     f = create_blogger("F")["id"]
@@ -204,9 +223,10 @@ async def test_primary_rating_secondary_count(client, create_blogger):
             "grouped": "false",
         },
     ).json()
-    assert desc["total"] == 3
-    # 主键均分：G/F(5) 在前、H(3) 在后；同均分按次键 count desc → G(6) 先于 F(5)
-    assert _ids(desc) == [g, f, h]
+    assert desc["total"] == 4
+    # 样本足够者先：G/F(5)、H(3)；同均分按次键 count desc → G(6) 先于 F(5)；
+    # E 样本不足（已评3）排最后
+    assert _ids(desc) == [g, f, h, e]
 
     asc = client.get(
         "/api/bloggers",
@@ -217,14 +237,15 @@ async def test_primary_rating_secondary_count(client, create_blogger):
             "grouped": "false",
         },
     ).json()
-    assert _ids(asc) == [f, g, h]
+    # 主排序 rating 的方向由 order 控制（默认 desc）；order2 只影响次排序 count
+    assert _ids(asc) == [f, g, h, e]
 
 
 # ── 评分排序的样本过滤 / 恢复全量 ──
 
 
-async def test_rating_sort_hides_insufficient_samples(client, create_blogger):
-    """评分排序（主或次）隐藏已评 <5；清空评分排序后恢复全量。"""
+async def test_rating_sort_keeps_insufficient_samples_at_end(client, create_blogger):
+    """评分排序保留样本不足者但排在最后，total 不缩水，分页可继续。"""
     low_sample = create_blogger("样本不足")["id"]
     await _add_blogger_images(low_sample, [5, 5, 5, 5])  # 已评4，均分5
     good_low = create_blogger("样本够低分")["id"]
@@ -235,23 +256,23 @@ async def test_rating_sort_hides_insufficient_samples(client, create_blogger):
     desc = client.get(
         "/api/bloggers", params={"sort": "rating", "grouped": "false"}
     ).json()
-    assert desc["total"] == 2
-    assert _ids(desc) == [good_high, good_low]
+    assert desc["total"] == 3
+    assert _ids(desc) == [good_high, good_low, low_sample]
 
     asc = client.get(
         "/api/bloggers", params={"sort": "rating_asc", "grouped": "false"}
     ).json()
-    assert _ids(asc) == [good_low, good_high]
+    assert _ids(asc) == [good_low, good_high, low_sample]
 
-    # 次排序是 rating 时同样过滤
+    # 次排序是 rating 时也保留，并在该排序级别内把样本不足排最后
     by_name = client.get(
         "/api/bloggers",
         params={"sort": "name", "sort2": "rating", "grouped": "false"},
     ).json()
-    assert low_sample not in _ids(by_name)
-    assert by_name["total"] == 2
+    assert by_name["total"] == 3
+    assert set(_ids(by_name)) == {low_sample, good_low, good_high}
 
-    # 清空评分排序 → 恢复全量
+    # 清空评分排序同样全量（作为回退基准）
     all_rows = client.get(
         "/api/bloggers", params={"sort": "newest", "grouped": "false"}
     ).json()
@@ -262,8 +283,8 @@ async def test_rating_sort_hides_insufficient_samples(client, create_blogger):
 # ── 折叠路径：组合并后过滤/排序 ──
 
 
-async def test_grouped_rating_filter_after_merge(client, create_blogger):
-    """人物组按组合并后的 rated_count 过滤；评级排序在折叠后生效。"""
+async def test_grouped_rating_keeps_insufficient_samples(client, create_blogger):
+    """人物组按组合并后的 rated_count 排序；样本不足保留并排最后。"""
     # 组1：两个账号分别已评 3 张与 2 张 → 组合并后已评 5（达到门槛）
     g1a = create_blogger("组1账号A", platform="xiaohongshu")["id"]
     g1b = create_blogger("组1账号B", platform="douyin")["id"]
@@ -281,13 +302,13 @@ async def test_grouped_rating_filter_after_merge(client, create_blogger):
     await _add_blogger_images(solo, [5] * 5)
 
     rated = client.get("/api/bloggers", params={"sort": "rating"}).json()
-    assert rated["total"] == 2  # 组2 被隐藏；组1 与独立账号保留
+    assert rated["total"] == 3  # 组2 也保留，分页不缩水
     ids = _ids(rated)
     assert solo in ids
     assert g1a in ids  # 组主账号 = 素材数最多者（A 有 3 张 > B 有 2 张）
-    assert g2a not in ids
-    # 组1 的组均分 = (5*3 + 4*2)/5 = 4.6，独立账号 5.0 → 独立在前
-    assert ids == [solo, g1a]
+    assert g2a in ids
+    # 组1 的组均分 = (5*3 + 4*2)/5 = 4.6，独立账号 5.0；组2 已评4 样本不足排最后
+    assert ids == [solo, g1a, g2a]
 
     # 不选评分排序 → 恢复全量（组1、组2、独立共 3 行）
     plain = client.get("/api/bloggers", params={"sort": "count"}).json()
@@ -298,12 +319,12 @@ async def test_grouped_rating_filter_after_merge(client, create_blogger):
         "/api/bloggers",
         params={"sort": "count", "order": "desc", "sort2": "rating"},
     ).json()
-    assert _ids(two_level) == [solo, g1a]  # count desc：独立(5) 先于组1(主账号3)
+    assert _ids(two_level) == [solo, g1a, g2a]  # count desc：独立(5) > 组1(3) > 组2(2)
     two_level_asc = client.get(
         "/api/bloggers",
         params={"sort": "count", "order": "asc", "sort2": "rating"},
     ).json()
-    assert _ids(two_level_asc) == [g1a, solo]
+    assert _ids(two_level_asc) == [g2a, g1a, solo]
 
 
 # ── 单排序兼容 / 重复键去重 / 参数校验 ──
@@ -368,7 +389,7 @@ def test_sort_params_validation(client):
 
 
 async def test_models_two_level_sort_and_filter(client, create_model):
-    """模特列表同样支持 sort2/order2；评分排序过滤样本不足。"""
+    """模特列表同样支持 sort2/order2；评分排序保留样本不足并排最后。"""
     m1 = create_model("M1")["id"]
     await _add_model_images(m1, [5] * 5)  # 已评5 / 均分5
     m2 = create_model("M2")["id"]
@@ -380,8 +401,8 @@ async def test_models_two_level_sort_and_filter(client, create_model):
         "/api/models",
         params={"sort": "count", "order": "desc", "sort2": "rating"},
     ).json()
-    assert data["total"] == 2
-    assert _ids(data) == [m1, m2]
+    assert data["total"] == 3
+    assert _ids(data) == [m1, m2, m3]
 
     # 不带评分排序 → m3 恢复显示
     plain = client.get("/api/models", params={"sort": "count"}).json()

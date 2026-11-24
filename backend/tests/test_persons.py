@@ -504,7 +504,7 @@ def test_search_by_xhs_id_and_ip(client):
 
 
 def test_blogger_rating_sort_and_filter(client, create_blogger, upload):
-    """博主列表：作品均分字段、评分排序与样本门槛筛选（2026-11-12；2026-11-19 起评分排序隐藏样本不足）。"""
+    """博主列表：作品均分字段、评分排序与样本门槛筛选（样本不足排序排最后、筛选仍排除）。"""
     high = create_blogger(name="高分博主")
     low = create_blogger(name="低分博主")
     few = create_blogger(name="样本不足博主")
@@ -528,12 +528,12 @@ def test_blogger_rating_sort_and_filter(client, create_blogger, upload):
     by_id = {item["id"]: item for item in body["items"]}
     assert by_id[high["id"]]["rating_average"] == 5.0
     assert by_id[high["id"]]["rated_count"] == 5
-    # 2026-11-19：评分排序只显示已评 ≥5 的人物，样本不足的 few 暂时隐藏
-    assert few["id"] not in by_id
+    # 2026-11-24：评分排序保留样本不足者，但排到最后，分页仍是全量
+    assert few["id"] in by_id
     ordered = [item["id"] for item in body["items"]]
-    assert ordered.index(high["id"]) < ordered.index(low["id"])
+    assert ordered.index(high["id"]) < ordered.index(low["id"]) < ordered.index(few["id"])
 
-    # 清空评分排序 → 恢复全量（few 重新可见）
+    # 清空评分排序 → 仍全量
     plain = client.get("/api/bloggers", params={"sort": "newest", "size": 50}).json()
     assert few["id"] in {item["id"] for item in plain["items"]}
 

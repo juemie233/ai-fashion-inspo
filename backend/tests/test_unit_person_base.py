@@ -752,7 +752,7 @@ async def _rated_works(
 
 
 async def test_list_rating_average_filter_and_sort(client):
-    """均分只算未删除且 rating>0；评分排序隐藏不足 5 张（2026-11-19 口径）。"""
+    """均分只算未删除且 rating>0；评分排序保留不足 5 张但排最后。"""
     full = await _blogger("高分样本足")
     low = await _blogger("低分样本足")
     few = await _blogger("高分样本不足")
@@ -777,17 +777,17 @@ async def test_list_rating_average_filter_and_sort(client):
         assert ftotal == 1
         assert filtered[0]["id"] == full
 
-        # 评分排序：不足 5 张的 few 被隐藏，只在样本足够者之间排序
+        # 评分排序：不足 5 张的 few 保留在列表里，但排到最后（分页不缩水）
         desc, dtotal = await BloggerService().list_items(
             db, page=1, size=10, sort="rating"
         )
-        assert dtotal == 2
-        assert [i["id"] for i in desc] == [full, low]
+        assert dtotal == 3
+        assert [i["id"] for i in desc] == [full, low, few]
         asc, atotal = await BloggerService().list_items(
             db, page=1, size=10, sort="rating_asc"
         )
-        assert atotal == 2
-        assert [i["id"] for i in asc] == [low, full]
+        assert atotal == 3
+        assert [i["id"] for i in asc] == [low, full, few]
 
         # 清空评分排序 → 恢复全量
         plain, ptotal = await BloggerService().list_items(

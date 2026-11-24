@@ -324,12 +324,12 @@ describe('usePersonList 作品评分（博主）', () => {
     expect(store.ratingMin).toBe(3)
   })
 
-  it('人物单元格：头像与网名同格，名称单行，自动登记标签单独一行', async () => {
+  it('人物单元格：头像与网名同格，名称单行，来源标签单独一行', async () => {
     const mod = await import('../usePersonList')
     const { columns } = mod.usePersonList('blogger')
     const column = columns.value.find((c) => c.title === '人物')!
-    expect(column.width).toBe(180)
-    expect(column.minWidth).toBe(160)
+    expect(column.width).toBe(210)
+    expect(column.minWidth).toBe(190)
 
     interface VNodeLike {
       props: Record<string, unknown>
@@ -341,10 +341,12 @@ describe('usePersonList 作品评分（博主）', () => {
     expect(vnode.props.class).toBe('person-cell')
     const meta = vnode.children[1]
     expect(meta.props.class).toBe('person-meta')
-    // 名称和「自动登记」标签是纵向排列，不能把标签塞回 name 同一行
+    // 名称和来源标签是纵向排列，不能把标签塞回 name 同一行
     expect(meta.children[0].props.class).toBe('person-name')
     expect(meta.children[0].props.title).toBe('一个比较长但必须单行显示的网名')
-    expect(meta.children[1]).toBeTruthy()
+    expect(meta.children[1].props.class).toBe('person-source-tag')
+    expect(meta.children[1].props.title).toContain('尚未进行自动登记')
+    expect(mod.SOURCE_LABELS.auto_collect).toBe('尚未进行自动登记')
   })
 
   it('评分排序/筛选选项只在博主端出现', async () => {
