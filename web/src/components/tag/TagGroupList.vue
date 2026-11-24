@@ -254,6 +254,12 @@ onUnmounted(() => {
             </span>
             <span class="row-badge row-usage">{{ tag.usage_count }} 次</span>
             <span
+              v-if="tag.is_legacy"
+              class="row-badge row-legacy"
+              title="历史标签：不再由新 AI 分析生成，等待定向清理"
+              >legacy</span
+            >
+            <span
               class="row-name"
               :title="
                 tag.description ? `点击查看素材 — ${tag.description}` : '点击查看使用该标签的素材'
@@ -374,6 +380,12 @@ onUnmounted(() => {
 .row-usage {
   background: rgba(0, 0, 0, 0.06);
   color: #555;
+}
+
+.row-legacy {
+  background: #fff1e6;
+  color: #b45309;
+  border: 1px solid #fed7aa;
 }
 
 .row-name {
