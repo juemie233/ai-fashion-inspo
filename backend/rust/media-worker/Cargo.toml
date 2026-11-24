@@ -1,0 +1,30 @@
+[package]
+name = "media-worker"
+version = "0.1.0"
+edition = "2021"
+description = "媒体处理 sidecar：SHA-256、缩略图、流式 ZIP 与只读存储审计"
+license = "MIT"
+
+[[bin]]
+name = "media-worker"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "tiff",
+    "webp",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+zip = "2"
+
+# storage-audit 二进制
+rayon = "1.10"
+walkdir = "2.5"

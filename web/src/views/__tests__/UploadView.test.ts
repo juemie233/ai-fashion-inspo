@@ -195,7 +195,7 @@ describe('UploadView 队列与上传', () => {
     expect(mocks.warning).toHaveBeenCalled()
     const warned = mocks.warning.mock.calls.map((c) => String(c[0])).join(' ')
     expect(warned).toMatch(/上限|队列已满/)
-  })
+  }, 15000) // 该用例锁的是「截断提示」，不是性能，给足超时避免环境噪声把门禁打红。 // 1600 个 File 参与选择/队列渲染，在并行门禁负载下单独跑约 2s、并行时可到 6s+；
 
   it('开始上传：每张都调用上传接口，成功后状态变 done', async () => {
     const wrapper = mountView()

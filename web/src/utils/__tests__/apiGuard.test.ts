@@ -93,6 +93,12 @@ describe('warnShape', () => {
 
     expect(errorMessages()).toEqual(['[apiGuard] 扩展: 字段 extra 期望 object，实际 null'])
   })
+
+  it('object 类型排除数组（数组当对象用也是类型漂移）', () => {
+    warnShape({ meta: [] }, { meta: 'object' }, '扩展')
+
+    expect(errorMessages()).toEqual(['[apiGuard] 扩展: 字段 meta 期望 object，实际 array'])
+  })
 })
 
 describe('warnItems', () => {

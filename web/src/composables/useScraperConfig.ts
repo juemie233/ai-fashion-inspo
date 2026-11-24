@@ -31,7 +31,9 @@ export function useScraperConfig() {
       }
       return v.state as string
     } catch (e) {
-      Message.error('校验失败: ' + getApiErrorMessage(e, ''))
+      // 兜底文案交给 getApiErrorMessage：异常既无 detail 也无 message 时输出「校验失败」，
+      // 不要拼成 '校验失败: ' 这样的空尾
+      Message.error(getApiErrorMessage(e, '校验失败'))
       return null
     } finally {
       verifyingCookie.value = null

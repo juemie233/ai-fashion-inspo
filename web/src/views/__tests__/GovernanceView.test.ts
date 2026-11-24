@@ -97,7 +97,12 @@ describe('GovernanceView 编排', () => {
       if (url.startsWith('/admin/largest-files')) return Promise.resolve({ data: [] })
       if (url.startsWith('/admin/integrity-check')) {
         return Promise.resolve({
-          data: { missing_files: [], orphan_files: [], orphan_total_size_bytes: 0 },
+          data: {
+            missing_files: [],
+            orphan_files: [],
+            orphan_total_size_bytes: 0,
+            scanner: 'rust',
+          },
         })
       }
       if (url.startsWith('/admin/duplicates')) {

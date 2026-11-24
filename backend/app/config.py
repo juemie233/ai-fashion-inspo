@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     person_photos_dir: Path = storage_root / "person_photos"
     person_thumbnails_dir: Path = storage_root / "person_thumbnails"
 
+    # ── Rust media-worker sidecar（可选）──
+    # 不配置时所有导出走原 Python 实现，完全不影响现有功能。
+    # 配置为 media-worker 可执行文件绝对路径后，大合集 ZIP 会优先走流式 Rust 导出。
+    media_worker_bin: str = ""
+    media_worker_archive_threshold: int = Field(default=100, ge=1, le=1000)
+    media_worker_archive_timeout_seconds: float = Field(default=300, ge=5, le=1800)
+    media_worker_audit_timeout_seconds: float = Field(default=120, ge=5, le=1800)
+
     # 上传大小限制（MB）：防止误传超大文件导致内存与磁盘暴涨
     max_image_upload_mb: int = 20  # 图片/缩略图
     max_video_upload_mb: int = 500  # 视频

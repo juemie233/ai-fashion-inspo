@@ -7,7 +7,7 @@
  * - 每次变更都要写回 sessionStorage，否则刷新即丢。
  */
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useRecentUploads } from '../useRecentUploads'
 
@@ -91,6 +91,20 @@ describe('useRecentUploads', () => {
     expect(recent.recentUploads.value[0].id).toBe('id-20')
     expect(recent.recentUploads.value.at(-1)?.id).toBe('id-1')
     expect(JSON.parse(sessionStorage.getItem(KEY) ?? '[]')).toHaveLength(20)
+  })
+
+  it('sessionStorage 写入失败（配额/隐私模式）时静默降级，内存列表仍更新', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError')
+    })
+    try {
+      const recent = useRecentUploads()
+
+      expect(() => recent.prependRecent('q', null, 'q.webp')).not.toThrow()
+      expect(recent.recentUploads.value.map((r) => r.id)).toEqual(['q'])
+    } finally {
+      setItem.mockRestore()
+    }
   })
 
   it('写入后可被新实例读回（刷新页面场景）', () => {

@@ -26,7 +26,8 @@ function typeOf(v: unknown, type: FieldShape[string]): boolean {
   const base = nullable ? type.slice(0, -1) : type
   if (nullable && v === null) return true
   if (base === 'array') return Array.isArray(v)
-  if (base === 'object') return typeof v === 'object' && v !== null
+  // 数组也是 typeof 'object'，但业务期望 object 时数组属于类型漂移，必须告警
+  if (base === 'object') return typeof v === 'object' && v !== null && !Array.isArray(v)
   return typeof v === base
 }
 

@@ -252,7 +252,7 @@ CONFIG_GROUPS: list[tuple[str, str]] = [
         "存储与媒体",
         r"^(storage_root|images_dir|thumbnails_dir|videos_dir|trash_dir|keyframes_dir|"
         r"person_photos_dir|person_thumbnails_dir|max_.*_upload_mb|thumbnail_|keyframe_|"
-        r"video_analysis_max_frames)",
+        r"media_worker_|video_analysis_max_frames)",
     ),
     ("向量检索", r"^(lancedb_|clip_model_name|vector_)"),
     (

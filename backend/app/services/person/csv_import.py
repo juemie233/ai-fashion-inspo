@@ -140,6 +140,9 @@ async def import_bloggers_csv(db: AsyncSession, file: UploadFile) -> dict:
                     imported -= 1
                 updated += 1
             else:
+                # 该行已先计入 imported，但插入失败且重查不到 → 只计 failed，回退计数
+                if imported > 0:
+                    imported -= 1
                 errors.append(
                     {
                         "row": entry["row"],

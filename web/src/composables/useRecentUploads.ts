@@ -27,9 +27,13 @@ export function useRecentUploads() {
   ) {
     recentUploads.value = [
       { id, thumbnailPath, filePath, mediaType },
-      ...recentUploads.value.filter(r => r.id !== id),
+      ...recentUploads.value.filter((r) => r.id !== id),
     ].slice(0, 20)
-    sessionStorage.setItem('recent-uploads', JSON.stringify(recentUploads.value))
+    try {
+      sessionStorage.setItem('recent-uploads', JSON.stringify(recentUploads.value))
+    } catch {
+      // sessionStorage 写满 / 隐私模式禁用时静默忽略：内存列表已更新，页面照常展示
+    }
   }
 
   return { recentUploads, prependRecent }
