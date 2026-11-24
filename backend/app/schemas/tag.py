@@ -28,6 +28,7 @@ class TagOut(BaseModel):
     category: str
     source: str = "seed"
     pinned: bool = False
+    is_legacy: bool = False
     sort_order: int = 0
     description: str | None = None
     created_at: datetime | None = None

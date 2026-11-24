@@ -416,6 +416,14 @@ async def analyze_image_detail(
             tags_data = await maybe_verify_socks(
                 file_path, tags_data, model_cfg, used_model, inspiration_id
             )
+            # 高风险「双腿并拢」二次裁剪验证：普通站姿/腿不完整时删除该标签
+            from app.services.ai_service.leg_posture_verify import (
+                maybe_verify_leg_posture,
+            )
+
+            tags_data = await maybe_verify_leg_posture(
+                file_path, tags_data, model_cfg, used_model, inspiration_id
+            )
 
         # 解析分析结果并保存标签（tags_data 已预解析，二次验证结果在此生效）
         tags_data, extracted_tags, error_msg = await _parse_and_save_tags(

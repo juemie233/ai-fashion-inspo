@@ -59,7 +59,8 @@ def test_legacy_keys_keep_backward_compat():
     assert by_cat.get("body_part") == ["V领"]
     assert by_cat.get("atmosphere") == ["清新"]
     assert by_cat.get("expression") == ["微笑"]
-    assert by_cat.get("leg_posture") == ["交叉腿"]
+    # 2026-11-24：历史近义词归一到新词表，避免新标签体系继续沿用旧词
+    assert by_cat.get("leg_posture") == ["双腿交叉"]
 
 
 def test_default_prompt_contains_new_dimensions():
@@ -69,6 +70,10 @@ def test_default_prompt_contains_new_dimensions():
     assert '"design_detail"' in _DEFAULT_AI_ANALYSIS_PROMPT
     assert '"material"' in _DEFAULT_AI_ANALYSIS_PROMPT
     assert '"atmosphere"' in _DEFAULT_AI_ANALYSIS_PROMPT
+    # 2026-11-24：腿部姿态新词表与可见性门控
+    assert "双腿并拢" in _DEFAULT_AI_ANALYSIS_PROMPT
+    assert "二郎腿" in _DEFAULT_AI_ANALYSIS_PROMPT
+    assert "半身/七分取景" in _DEFAULT_AI_ANALYSIS_PROMPT
     # 颜色约束：新口径要求颜色写在 type 开头（替代旧"颜色一律写入 color 字段"）；
     # 保留原断言「color 字段也写主色」的兼容要求
     assert "颜色必须写在开头" in _DEFAULT_AI_ANALYSIS_PROMPT

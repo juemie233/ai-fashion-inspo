@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.tag import InspirationTag, Tag
 from app.services.ai_parser import extract_tag_names
 from app.services.tag_service import get_or_create_tag
+from app.utils.leg_posture import normalize_leg_posture
 from app.utils.tag_compliance import is_bare_garment_word
 from app.utils.tag_normalizer import is_similar_category_tag, normalize_tag_name
 import logging
@@ -111,8 +112,34 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
             if norm:
                 style_names.append(norm)
 
+    # 腿部姿态单独处理：先做可见性门控、同义归一和矛盾过滤，再落库。
+    # 历史 PascalCase 键与 snake_case 键共用同一套规则。
+    def _as_list(value) -> list:
+        if isinstance(value, list):
+            return value
+        return [value] if value else []
+
+    leg_values = _as_list(data.get("leg_posture")) + _as_list(data.get("Leg_Posture"))
+    leg_names: list[str] = []
+    for value in leg_values:
+        if isinstance(value, str):
+            leg_names.append(value)
+        else:
+            leg_names.extend(extract_tag_names(value))
+    attr_values = data.get("attributes") or []
+    if not isinstance(attr_values, list):
+        attr_values = [attr_values]
+    attr_names: set[str] = set()
+    for value in attr_values:
+        attr_names.update(normalize_tag_name(n) for n in extract_tag_names(value))
+    normalized_leg_tags = normalize_leg_posture(leg_names, attr_names)
+    for name in normalized_leg_tags:
+        yield name, "leg_posture", 0.8
+
     # 处理简单列表型标签（风格、版型等） — 兼容 null 值
     for key, category in category_map.items():
+        if category == "leg_posture":
+            continue
         values = data.get(key) or []
         if not isinstance(values, list):
             values = [values] if values else []

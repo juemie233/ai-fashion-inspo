@@ -14,6 +14,8 @@ export interface TagItem {
   category: string
   source: string // seed | ai_generated | manual
   pinned: boolean
+  /** 已废弃/待清理的旧标签：保留历史关联，但不再由新 AI 分析生成 */
+  is_legacy?: boolean
   sort_order: number
   description: string | null
   usage_count: number

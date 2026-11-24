@@ -23,6 +23,7 @@ class TagOut(BaseModel):
     id: int
     name: str
     category: str
+    is_legacy: bool = False
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}

@@ -7,6 +7,8 @@ export interface TagBrief {
   id: number
   name: string
   category: string
+  /** 已废弃/待清理的旧标签（如历史腿部并拢） */
+  is_legacy?: boolean
   usage_count: number
 }
 

@@ -24,6 +24,9 @@ class Tag(Base):
     pinned: Mapped[bool] = mapped_column(
         Boolean, default=False, index=True
     )  # 是否置顶（常用标签固定排前）
+    is_legacy: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", index=True
+    )  # 已废弃/待清理标签：不再由新 AI 分析生成，历史关联保留
     sort_order: Mapped[int] = mapped_column(
         Integer, default=0
     )  # 自定义排序权重（越小越靠前，仅在自定义排序模式生效）
