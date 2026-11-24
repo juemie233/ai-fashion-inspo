@@ -2,7 +2,7 @@
 
 import apiClient from './client'
 
-export type FolderTagMode = 'tag' | 'skip' | 'pending'
+type FolderTagMode = 'tag' | 'skip' | 'pending'
 
 export interface FolderTagMapping {
   folder_name: string
@@ -25,12 +25,12 @@ export interface FolderTagUpsertPayload {
   reuse_existing_category?: boolean
 }
 
-export interface FolderTagApplyResult {
+interface FolderTagApplyResult {
   applied: number
   folders: Array<Record<string, unknown>>
 }
 
-export interface FolderTagImpact {
+interface FolderTagImpact {
   tag_id: number
   name: string
   category: string

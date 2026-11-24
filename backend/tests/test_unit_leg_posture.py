@@ -66,3 +66,16 @@ def test_verify_parser_and_filter():
         {"legs_visible": "full", "leg_relation": "together", "is_default_standing": False},
     )
     assert filtered["leg_posture"] == ["双腿并拢", "二郎腿"]
+
+
+def test_filter_handles_both_leg_posture_keys():
+    """大小写两个键同时存在时必须都过滤，否则未处理的那个键会让标签复活。"""
+    data = {"leg_posture": [], "Leg_Posture": ["双腿并拢"]}
+    filtered = filter_leg_posture_by_verdict(
+        data,
+        {"legs_visible": "full", "leg_relation": "together", "is_default_standing": True},
+    )
+    assert filtered["leg_posture"] == []
+    assert filtered["Leg_Posture"] == []
+    # 落库前的统一抽取不应再有「双腿并拢」
+    assert _names(filtered) == []

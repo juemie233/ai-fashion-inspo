@@ -72,6 +72,17 @@ const PENDING = {
   local_item_count: 5,
 }
 
+const UNCONFIGURED = {
+  folder_name: '仅扫描到',
+  mode: 'pending',
+  needs_confirm: false,
+  tag_id: null,
+  tag_name: null,
+  tag_category: null,
+  local_collection_id: null,
+  local_item_count: null,
+}
+
 const SKIPPED = {
   folder_name: '不想要',
   mode: 'skip',
@@ -125,7 +136,7 @@ function clickModalOk(titleText: string): void {
 beforeEach(() => {
   vi.clearAllMocks()
   document.body.innerHTML = ''
-  mocks.fetchMappings.mockResolvedValue([MAPPED, PENDING, SKIPPED])
+  mocks.fetchMappings.mockResolvedValue([MAPPED, PENDING, SKIPPED, UNCONFIGURED])
   mocks.fetchTagsGrouped.mockResolvedValue([
     { category: 'outfit', tags: [{ id: 9, name: '极简', usage_count: 10 }] },
   ])
@@ -149,6 +160,7 @@ describe('FolderTagMappingPanel', () => {
     expect(text).toContain('已映射')
     expect(text).toContain('待确认')
     expect(text).toContain('已跳过')
+    expect(text).toContain('未配置') // 仅扫描到、未建映射的夹不算「待确认」
     expect(text).toContain('有 1 个收藏夹待确认')
     expect(text).toContain('42 个素材')
   })

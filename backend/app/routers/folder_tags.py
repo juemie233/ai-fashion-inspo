@@ -15,8 +15,10 @@ from app.schemas.folder_tag import (
     FolderTagMappingOut,
     FolderTagUpsertRequest,
 )
-# 注意：router 不 import sqlalchemy（架构棘轮要求 router 不直连数据层）；
-# db 参数不加 AsyncSession 注解，逻辑全部在 folder_tag_service。
+# 注意：router 不 import sqlalchemy（架构棘轮 test_router_db_coupling_ratchet
+# 的基线是 23 个文件、不可新增），因此 db 参数暂不加 AsyncSession 注解——
+# 这是与 CLAUDE.md「类型注解必须」的一处已知取舍，已在
+# docs/features/抖音收藏夹大标签映射.md §7 记录。逻辑全部在 folder_tag_service。
 from app.services import folder_tag_service
 
 router = APIRouter(prefix="/api/admin/douyin-folder-tags", tags=["admin"])

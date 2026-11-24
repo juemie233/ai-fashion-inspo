@@ -13,6 +13,7 @@ import { Message, Modal } from '@arco-design/web-vue'
 import {
   applyAllFolderTags,
   applyFolderTagMapping,
+  deleteFolderTagMapping,
   fetchFolderTagImpact,
   fetchFolderTagMappings,
   upsertFolderTagMapping,
@@ -28,10 +29,10 @@ const error = ref<string | null>(null)
 const applyingAll = ref(false)
 const applyingFolder = ref<string | null>(null)
 
-const pendingCount = computed(
-  () =>
-    rows.value.filter((row) => row.mode === 'pending' || (row.mode === 'tag' && row.needs_confirm))
-      .length,
+// 「待确认」只算首次同步自动建标签的项；「未配置」是还没建映射（仅扫描到/本地已有）
+const pendingCount = computed(() => rows.value.filter((row) => row.needs_confirm).length)
+const unconfiguredCount = computed(
+  () => rows.value.filter((row) => row.mode === 'pending' && !row.needs_confirm).length,
 )
 const mappedCount = computed(() => rows.value.filter((row) => row.mode === 'tag').length)
 
@@ -64,13 +65,15 @@ async function load(): Promise<void> {
 
 function statusText(row: FolderTagMapping): string {
   if (row.mode === 'skip') return '已跳过'
-  if (row.mode === 'pending' || row.needs_confirm) return '待确认'
+  if (row.needs_confirm) return '待确认'
+  if (row.mode === 'pending') return '未配置'
   return '已映射'
 }
 
 function statusType(row: FolderTagMapping): 'success' | 'warning' | 'default' {
   if (row.mode === 'skip') return 'default'
-  if (row.mode === 'pending' || row.needs_confirm) return 'warning'
+  if (row.needs_confirm) return 'warning'
+  if (row.mode === 'pending') return 'default'
   return 'success'
 }
 
@@ -171,6 +174,25 @@ async function skipRow(row: FolderTagMapping): Promise<void> {
   await saveWith({ folder_name: row.folder_name, mode: 'skip' })
 }
 
+/** 删除映射（回到未配置；已打的标签关联保留） */
+function clearRowMapping(row: FolderTagMapping): void {
+  Modal.confirm({
+    title: `清除「${row.folder_name}」的映射？`,
+    content: '已打上的标签关联会保留；该收藏夹回到「未配置」，可重新设置。',
+    okText: '清除',
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      try {
+        await deleteFolderTagMapping(row.folder_name)
+        Message.success('映射已清除')
+        await load()
+      } catch (e) {
+        Message.error(getApiErrorMessage(e, '清除映射失败'))
+      }
+    },
+  })
+}
+
 async function applyRow(row: FolderTagMapping): Promise<void> {
   applyingFolder.value = row.folder_name
   try {
@@ -269,6 +291,9 @@ onMounted(() => {
         <p v-if="pendingCount > 0" class="panel-pending">
           有 {{ pendingCount }} 个收藏夹待确认：首次同步已按同名自动建标签，可在此改名、改指或跳过。
         </p>
+        <p v-if="unconfiguredCount > 0" class="panel-hint">
+          另有 {{ unconfiguredCount }} 个收藏夹尚未配置（还没有对应标签），点「设置标签」即可。
+        </p>
       </div>
       <div class="panel-actions">
         <a-button size="small" :loading="loading" @click="() => void load()">刷新</a-button>
@@ -342,6 +367,15 @@ onMounted(() => {
             @click="() => void skipRow(row)"
           >
             跳过
+          </a-button>
+          <a-button
+            v-if="row.mode !== 'pending'"
+            size="mini"
+            type="text"
+            status="danger"
+            @click="clearRowMapping(row)"
+          >
+            清除映射
           </a-button>
         </div>
       </div>

@@ -24,6 +24,27 @@ from app.config import settings  # noqa: E402
 
 LEGACY_NAME = "并拢"
 
+# 与 apply_cleanup 的 DELETE 使用同一套条件：preview 的 cleanup_candidates 与
+# 实际删除必须同口径（此前 half + contradiction 相加会把同时命中两类的图计两次）
+_CLEANUP_CONDITION = """
+        tag_id=? AND source='ai_generated' AND (
+            (EXISTS (
+                SELECT 1 FROM inspiration_tags x JOIN tags t ON t.id=x.tag_id
+                 WHERE x.inspiration_id=inspiration_tags.inspiration_id
+                   AND t.category='attribute' AND t.name IN ('半身','七分')
+            ) AND NOT EXISTS (
+                SELECT 1 FROM inspiration_tags y JOIN tags t ON t.id=y.tag_id
+                 WHERE y.inspiration_id=inspiration_tags.inspiration_id AND t.name='全身'
+            ))
+            OR EXISTS (
+                SELECT 1 FROM inspiration_tags x JOIN tags t ON t.id=x.tag_id
+                 WHERE x.inspiration_id=inspiration_tags.inspiration_id
+                   AND t.category='leg_posture'
+                   AND t.name IN ('交叉腿','腿交叉','腿部交叉','跷腿','翘腿','分开','分腿','抬腿','弯曲')
+            )
+        )
+"""
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="旧腿部并拢标签定向清理（默认 dry-run）")
@@ -99,41 +120,69 @@ def build_preview(con: sqlite3.Connection) -> dict:
         "SELECT COUNT(DISTINCT inspiration_id) FROM inspiration_tags WHERE tag_id=? AND source='ai_generated'",
         (tid,),
     )
+    cleanup_candidates = _count(
+        con,
+        f"SELECT COUNT(DISTINCT inspiration_id) FROM inspiration_tags"
+        f" WHERE {_CLEANUP_CONDITION}",
+        (tid,),
+    )
     return {
         "tag": LEGACY_NAME,
         "tag_id": tid,
         "ai_linked_images": total,
         "half_visible": half,
         "contradiction": contradiction,
+        # 与 DELETE 同口径的去重计数（两类可能重叠）
+        "cleanup_candidates": cleanup_candidates,
         "full_default_keep": full_default,
-        "cleanup_candidates": half + contradiction,
     }
 
 
-def apply_cleanup(con: sqlite3.Connection, tag_id: int) -> int:
-    # 同一素材可能同时命中两类，用 DELETE 一次完成；只删 ai_generated，保留手动态。
+def apply_cleanup(
+    con: sqlite3.Connection, tag_id: int
+) -> tuple[int, list[str]]:
+    """执行定向删除，返回 (删除行数, 受影响素材 ID)。
+
+    受影响素材必须在删除前取出：标签变更会影响素材的文本向量，删完要登记回填，
+    否则语义检索仍会按旧标签召回它们（与其它标签增删路径保持一致）。
+    """
+    affected = [
+        row[0]
+        for row in con.execute(
+            f"SELECT DISTINCT inspiration_id FROM inspiration_tags"
+            f" WHERE {_CLEANUP_CONDITION}",
+            (tag_id,),
+        )
+    ]
+    # 同一素材可能同时命中两类，用一条 DELETE 一次完成；只删 ai_generated，保留手动态。
     cur = con.execute(
-        """
-        DELETE FROM inspiration_tags
-         WHERE tag_id=? AND source='ai_generated' AND (
-            EXISTS (
-                SELECT 1 FROM inspiration_tags x JOIN tags t ON t.id=x.tag_id
-                 WHERE x.inspiration_id=inspiration_tags.inspiration_id AND t.category='attribute'
-                   AND t.name IN ('半身','七分')
-            ) AND NOT EXISTS (
-                SELECT 1 FROM inspiration_tags y JOIN tags t ON t.id=y.tag_id
-                 WHERE y.inspiration_id=inspiration_tags.inspiration_id AND t.name='全身'
-            )
-            OR EXISTS (
-                SELECT 1 FROM inspiration_tags x JOIN tags t ON t.id=x.tag_id
-                 WHERE x.inspiration_id=inspiration_tags.inspiration_id AND t.category='leg_posture'
-                   AND t.name IN ('交叉腿','腿交叉','腿部交叉','跷腿','翘腿','分开','分腿','抬腿','弯曲')
-            )
-         )
-        """,
+        f"DELETE FROM inspiration_tags WHERE {_CLEANUP_CONDITION}",
         (tag_id,),
     )
-    return cur.rowcount or 0
+    return cur.rowcount or 0, affected
+
+
+def enqueue_text_vector_backfills(inspiration_ids: list[str]) -> int:
+    """登记文本向量回填（攒批队列），返回登记数；失败只告警不中断清理。"""
+    ids = sorted(set(inspiration_ids))
+    if not ids:
+        return 0
+    import asyncio
+
+    from app.database import async_session
+    from app.services.task_runners.vector_backfill import enqueue_vector_backfills
+
+    async def _run() -> None:
+        async with async_session() as db:
+            await enqueue_vector_backfills(db, ids)
+            await db.commit()
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001 —— 清理已完成，回填失败只提示后续重试
+        print(f"[warn] 登记文本向量回填失败：{exc}", file=sys.stderr)
+        return 0
+    return len(ids)
 
 
 def main() -> int:
@@ -145,8 +194,12 @@ def main() -> int:
         if args.apply and preview.get("tag_id"):
             con.execute("BEGIN IMMEDIATE")
             try:
-                result["deleted_rows"] = apply_cleanup(con, preview["tag_id"])
+                deleted, affected = apply_cleanup(con, preview["tag_id"])
                 con.commit()
+                result["deleted_rows"] = deleted
+                result["vector_backfill_enqueued"] = enqueue_text_vector_backfills(
+                    affected
+                )
             except Exception:
                 con.rollback()
                 raise

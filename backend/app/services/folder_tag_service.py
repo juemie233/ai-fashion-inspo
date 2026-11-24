@@ -208,10 +208,13 @@ async def _ensure_outfit_tag(
             "category": existing.category,
             "label": _category_label(existing.category),
         }
-    # 显式复用：把该标签改为穿搭大标签（会影响所有引用它的素材，前端已二次确认）
-    existing.category = OUTFIT_CATEGORY
-    await db.flush()
-    return existing, None
+    # 显式复用：把该标签改为穿搭大标签（会影响所有引用它的素材，前端已二次确认）。
+    # 必须走 tag_service.update_tag：它会写操作历史（可回滚）并做冲突检测，
+    # 直接改 tag.category 会让标签治理的「操作历史」查不到这次改动。
+    from app.services import tag_service
+
+    tag = await tag_service.update_tag(db, existing.id, category=OUTFIT_CATEGORY)
+    return tag, None
 
 
 def _conflict_detail(conflict: dict) -> str:
@@ -270,8 +273,11 @@ async def upsert_mapping(
                             }
                         ),
                     )
-                tag.category = OUTFIT_CATEGORY
-                await db.flush()
+                from app.services import tag_service
+
+                tag = await tag_service.update_tag(
+                    db, tag.id, category=OUTFIT_CATEGORY
+                )
         else:
             tag, conflict = await _ensure_outfit_tag(
                 db,
@@ -332,12 +338,14 @@ async def apply_folder_tags(
 ) -> dict:
     """给素材打上该收藏夹映射的大标签（幂等，只追加不覆盖）。"""
     row = await get_mapping(db, folder_name)
-    if row is None or row.mode != MODE_TAG or row.tag_id is None:
+    if row is None or row.mode != MODE_TAG:
         return {"applied": 0, "reason": "该收藏夹未配置大标签"}
-    tag = await db.get(Tag, row.tag_id)
+    # 标签被删时 FK 已把 tag_id 置空；必须先判 tag 再判 tag_id，否则会卡在
+    # 「已映射但未设置」且永远走不到降级分支
+    tag = await db.get(Tag, row.tag_id) if row.tag_id else None
     if tag is None:
-        # 标签被删：映射降级为待处理，等用户在管理页重选
         row.mode = MODE_PENDING
+        row.tag_id = None
         row.needs_confirm = True
         await db.commit()
         return {"applied": 0, "reason": "映射的标签已被删除，请重新选择"}
@@ -364,6 +372,7 @@ async def apply_on_sync(
     """
     if not inspiration_ids:
         return {"applied": 0}
+    folder_name = folder_name.strip()
     row = await get_mapping(db, folder_name)
     if row is not None and row.mode == MODE_SKIP:
         return {"applied": 0, "skipped": True}

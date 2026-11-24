@@ -258,3 +258,42 @@ async def test_tag_impact(client):
     assert body["usage_count"] >= 0
     # 该标签至少被刚建的映射引用（共享测试库下不强制列表长度）
     assert "影响面夹" in body["mapped_folders"]
+
+
+async def test_deleted_tag_degrades_mapping_to_pending(client, upload):
+    """映射的标签被删（FK 置空）后：重打要降级为待确认，而不是永远「未配置」。"""
+    root_id = await _create_raw_douyin_folder("抖音入库自动收藏")
+    folder_id = await _create_raw_douyin_folder("删标签夹", parent_id=root_id)
+    insp_id = upload().json()["id"]
+    await _add_member(folder_id, insp_id)
+
+    mapped = _upsert(client, folder_name="删标签夹", mode="tag").json()
+    assert mapped["tag_id"]
+
+    # 模拟"标签被删除"：外键 ondelete=SET NULL 把 tag_id 置空、mode 仍为 tag
+    async with async_session() as db:
+        row = (
+            await db.execute(
+                select(DouyinFolderTagMap).where(
+                    DouyinFolderTagMap.folder_name == "删标签夹"
+                )
+            )
+        ).scalar_one()
+        row.tag_id = None
+        await db.commit()
+
+    resp = client.post(f"/api/admin/douyin-folder-tags/{_path('删标签夹')}/apply")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["applied"] == 0
+
+    async with async_session() as db:
+        row = (
+            await db.execute(
+                select(DouyinFolderTagMap).where(
+                    DouyinFolderTagMap.folder_name == "删标签夹"
+                )
+            )
+        ).scalar_one()
+    assert row.mode == "pending"
+    assert row.needs_confirm is True
+    assert row.tag_id is None

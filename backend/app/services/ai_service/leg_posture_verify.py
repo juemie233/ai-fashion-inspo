@@ -96,12 +96,18 @@ def filter_leg_posture_by_verdict(tags_data: dict, verdict: dict) -> dict:
     )
     if keep:
         return tags_data
-    filtered = [v for v in values if LEG_POSTURE_TAG not in str(v)]
     result = dict(tags_data)
-    if "Leg_Posture" in result and "leg_posture" not in result:
-        result["Leg_Posture"] = filtered
-    else:
-        result["leg_posture"] = filtered
+    touched = False
+    # 两个键可能同时存在（大小写历史差异）：必须都过滤，否则未处理的那个键
+    # 仍带「双腿并拢」，拼接后标签又活过来
+    for key in ("leg_posture", "Leg_Posture"):
+        if key not in result:
+            continue
+        current = result[key] if isinstance(result[key], list) else [result[key]]
+        result[key] = [v for v in current if LEG_POSTURE_TAG not in str(v)]
+        touched = True
+    if not touched:
+        result["leg_posture"] = [v for v in values if LEG_POSTURE_TAG not in str(v)]
     return result
 
 
