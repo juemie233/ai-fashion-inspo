@@ -100,6 +100,20 @@ async def _aggregate_collect_stage(
                 db, child_id, ids, added_by="sync"
             )
             attributed.update(ids)
+            # 收藏夹 → 穿搭大标签映射：给该夹全部成员打标（失败不影响入库/归位）
+            tag_stats: dict = {}
+            if folder_name != UNCLASSIFIED_COLLECTION_NAME:
+                from app.services import folder_tag_service
+
+                try:
+                    tag_stats = await folder_tag_service.apply_on_sync(
+                        db, folder_name, ids
+                    )
+                except Exception as exc:  # noqa: BLE001 —— 打标是附加能力，不能拖垮同步
+                    logger.warning(
+                        "收藏夹大标签打标失败（忽略）：folder=%s err=%s", folder_name, exc
+                    )
+                    tag_stats = {"applied": 0, "error": str(exc)}
             folder_stats.append(
                 {
                     "id": child_id,
@@ -110,6 +124,7 @@ async def _aggregate_collect_stage(
                     # 该夹里「已在库、本次没重新入库但补进来」的条数（与一级同口径，
                     # 便于解释「本夹数量 > 本批新入库」）
                     "from_existing": sum(1 for i in ids if i not in imported_set),
+                    "tag": tag_stats,
                 }
             )
 

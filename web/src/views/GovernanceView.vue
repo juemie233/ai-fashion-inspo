@@ -22,13 +22,20 @@ import AdminProblemCards from '@/components/admin/AdminProblemCards.vue'
 import AdminIntegrityCheck from '@/components/admin/AdminIntegrityCheck.vue'
 import AdminDuplicates from '@/components/admin/AdminDuplicates.vue'
 import AdminNearDuplicates from '@/components/admin/AdminNearDuplicates.vue'
+import FolderTagMappingPanel from '@/components/admin/FolderTagMappingPanel.vue'
 
 const router = useRouter()
 const route = useRoute()
 
 // ── 子页面（小菜单）状态：URL 持久化，刷新后停留在原小页面 ──
-type GovernanceTab = 'cleanup' | 'integrity' | 'duplicates' | 'neardup'
-const GOVERNANCE_TABS: GovernanceTab[] = ['cleanup', 'integrity', 'duplicates', 'neardup']
+type GovernanceTab = 'cleanup' | 'integrity' | 'duplicates' | 'neardup' | 'folderTags'
+const GOVERNANCE_TABS: GovernanceTab[] = [
+  'cleanup',
+  'integrity',
+  'duplicates',
+  'neardup',
+  'folderTags',
+]
 
 function initialTab(): GovernanceTab {
   const t = route.query.tab
@@ -300,7 +307,7 @@ onUnmounted(() => {
     <admin-task-progress :task="adminTask" />
 
     <!-- ====== 子页面小菜单 ====== -->
-    <a-tabs v-model:active-key="activeTab" type="line">
+    <a-tabs v-model:active-key="activeTab" type="line" lazy-load>
       <!-- 批量清理 -->
       <a-tab-pane key="cleanup" title="批量清理">
         <admin-problem-cards
@@ -348,6 +355,11 @@ onUnmounted(() => {
           @delete-selected="handleNearDuplicateDelete"
           @task-started="handleTaskStarted"
         />
+      </a-tab-pane>
+
+      <!-- 抖音收藏夹 → 穿搭大标签映射 -->
+      <a-tab-pane key="folderTags" title="抖音收藏夹标签">
+        <folder-tag-mapping-panel />
       </a-tab-pane>
     </a-tabs>
   </div>

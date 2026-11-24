@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-24，共 25 个模块 / 348 个端点）。
+> **状态**：自动生成（2026-11-24，共 26 个模块 / 354 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -23,6 +23,7 @@
 | [face_scan](#face_scan) | `/api/face-match、/api/face-scan` | 15 |
 | [favorites](#favorites) | `/api/favorites` | 5 |
 | [files](#files) | `/api/files` | 2 |
+| [folder_tags](#folder_tags) | `/api/admin/douyin-folder-tags` | 6 |
 | [generate](#generate) | `/api/generate` | 17 |
 | [health](#health) | `/api/health` | 1 |
 | [inspirations](#inspirations) | `/api/inspirations` | 31 |
@@ -302,6 +303,19 @@
 | --- | --- | --- | --- |
 | `GET` | `/api/files/keyframes/{inspiration_id}` | `list_keyframes` | 返回视频素材的关键帧 URL 列表（按时间序）。 |
 | `GET` | `/api/files/{file_path:path}` | `serve_file` | 提供存储文件的访问。例如 /api/files/images/2026-08/abc123.jpg |
+
+## folder_tags
+
+前缀：`/api/admin/douyin-folder-tags`
+
+| 方法 | 路径 | 函数 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/douyin-folder-tags` | `list_folder_tag_mappings` | 映射总览：已有映射 + 本地抖音夹 + f2 已扫描到的夹名（可预配置）。 |
+| `POST` | `/api/admin/douyin-folder-tags` | `upsert_folder_tag_mapping` | 新建/更新映射；同名标签类别冲突返回 409（前端三选一）。 |
+| `DELETE` | `/api/admin/douyin-folder-tags/{folder_name}` | `delete_folder_tag_mapping` | 删除映射（回到待处理；已打的标签关联保留）。 |
+| `POST` | `/api/admin/douyin-folder-tags/apply-all` | `apply_all_folder_tags` | 按当前收藏夹成员全量重打（只处理已映射为 tag 的夹）。 |
+| `POST` | `/api/admin/douyin-folder-tags/{folder_name}/apply` | `apply_folder_tags` | 按当前成员重打单个收藏夹。 |
+| `GET` | `/api/admin/douyin-folder-tags/tag-impact/{tag_id}` | `folder_tag_impact` | 标签影响面：改名/改类别前告知会影响多少素材与哪些收藏夹。 |
 
 ## generate
 

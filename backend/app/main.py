@@ -44,6 +44,7 @@ from app.routers import (
     health,
     collections,
     exports,
+    folder_tags,
     favorites,
     pose_gallery,
 )
@@ -523,6 +524,7 @@ app.include_router(face_scan.match_router)
 app.include_router(generate.router)
 app.include_router(health.router)
 app.include_router(collections.router)
+app.include_router(folder_tags.router)
 app.include_router(exports.router)
 app.include_router(favorites.router)
 app.include_router(pose_gallery.router)

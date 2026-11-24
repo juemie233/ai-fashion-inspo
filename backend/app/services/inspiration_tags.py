@@ -17,8 +17,14 @@ async def batch_add_tags(
     category: str = "free",
     source: str = "manual",
     strict_category: bool = False,
+    link_source: str = "manual",
 ) -> dict:
     """批量给多个素材关联标签（按名称查找或创建，已关联的自动跳过）。
+
+    Args:
+        source: 标签**本身**的来源（新建标签时写入 ``tags.source``）。
+        link_source: 关联来源（写入 ``inspiration_tags.source``）。收藏夹自动打标用
+            ``"collection"``：重新分析只清 ``ai_generated`` 关联，不会误删它。
 
     仅对实际新增了标签的素材登记文本向量重建（攒批队列执行），避免无谓调用 Ollama。
     """
@@ -81,7 +87,7 @@ async def batch_add_tags(
                             "inspiration_id": inspiration_id,
                             "tag_id": tag_id,
                             "confidence": 1.0,
-                            "source": "manual",
+                            "source": link_source,
                         }
                         for inspiration_id, tag_id in chunk
                     ]
