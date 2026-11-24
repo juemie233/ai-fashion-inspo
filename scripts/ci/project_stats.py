@@ -10,7 +10,7 @@
 写死在 PowerShell 里、Windows 之外跑不了。排查「项目到底多大」时真正要一起看的是四件事
 ——**代码量、数据量（DB/存储）、仓库体积（提交数与跟踪文件）、测试与最大文件**，本脚本
 一次全给，并且可 ``--json`` 落盘做逐月趋势。行数口径与 ``count_lines.ps1`` 保持一致
-（按扩展名分块、跳过 node_modules/缓存/存储目录）。
+（按扩展名分块、跳过 node_modules/缓存/存储目录，已包含 Rust sidecar）。
 
 只读：只统计不修改任何文件、不连数据库以外的服务。
 """
@@ -25,8 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-"""参与统计的源码扩展名（与 count_lines.ps1 的第 1~6 节一致）。"""
-SOURCE_EXTS = (".py", ".ts", ".tsx", ".vue", ".css", ".js", ".sh", ".bat")
+"""参与统计的源码扩展名（与 count_lines.ps1 的第 1~7 节一致）。"""
+SOURCE_EXTS = (".py", ".ts", ".tsx", ".vue", ".css", ".js", ".sh", ".bat", ".rs")
 
 """统计时需要跳过的目录名（依赖/缓存/产物/数据）。"""
 SKIP_DIRS = {
@@ -44,6 +44,7 @@ SKIP_DIRS = {
     "backups",
     ".claude",
     ".expert-mode",
+    "target",  # Rust Cargo 构建产物
 }
 
 """锁文件不参与行数统计（自动生成，行数无信息量）。"""
@@ -54,6 +55,7 @@ CODE_AREAS = [
     ("后端业务代码 backend/app", "backend/app"),
     ("后端测试 backend/tests", "backend/tests"),
     ("后端脚本 backend/scripts", "backend/scripts"),
+    ("Rust sidecar backend/rust", "backend/rust"),
     ("数据库迁移 backend/alembic", "backend/alembic"),
     ("Web 页面 web/src/views", "web/src/views"),
     ("Web 组件 web/src/components", "web/src/components"),
