@@ -49,6 +49,11 @@ _CLEANUP_CONDITION = """
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="旧腿部并拢标签定向清理（默认 dry-run）")
     parser.add_argument("--apply", action="store_true", help="实际删除关联（默认只预览）")
+    parser.add_argument(
+        "--all-legacy",
+        action="store_true",
+        help="清空该 legacy 标签的全部 AI 关联（仍保留标签定义）",
+    )
     parser.add_argument("--json", type=Path, help="输出预览/结果 JSON")
     return parser.parse_args()
 
@@ -66,7 +71,7 @@ def _count(con: sqlite3.Connection, sql: str, params=()) -> int:
     return con.execute(sql, params).fetchone()[0]
 
 
-def build_preview(con: sqlite3.Connection) -> dict:
+def build_preview(con: sqlite3.Connection, all_legacy: bool = False) -> dict:
     tag_id = con.execute("SELECT id FROM tags WHERE name=? AND category='leg_posture'", (LEGACY_NAME,)).fetchone()
     if not tag_id:
         return {"tag": LEGACY_NAME, "tag_id": None, "half_visible": 0, "contradiction": 0, "full_default_keep": 0}
@@ -133,30 +138,35 @@ def build_preview(con: sqlite3.Connection) -> dict:
         "half_visible": half,
         "contradiction": contradiction,
         # 与 DELETE 同口径的去重计数（两类可能重叠）
-        "cleanup_candidates": cleanup_candidates,
+        "cleanup_candidates": total if all_legacy else cleanup_candidates,
         "full_default_keep": full_default,
+        "mode": "all_legacy" if all_legacy else "targeted",
     }
 
 
 def apply_cleanup(
-    con: sqlite3.Connection, tag_id: int
+    con: sqlite3.Connection, tag_id: int, all_legacy: bool = False
 ) -> tuple[int, list[str]]:
     """执行定向删除，返回 (删除行数, 受影响素材 ID)。
 
     受影响素材必须在删除前取出：标签变更会影响素材的文本向量，删完要登记回填，
     否则语义检索仍会按旧标签召回它们（与其它标签增删路径保持一致）。
     """
+    condition = (
+        "tag_id=? AND source='ai_generated'"
+        if all_legacy
+        else _CLEANUP_CONDITION
+    )
     affected = [
         row[0]
         for row in con.execute(
-            f"SELECT DISTINCT inspiration_id FROM inspiration_tags"
-            f" WHERE {_CLEANUP_CONDITION}",
+            f"SELECT DISTINCT inspiration_id FROM inspiration_tags WHERE {condition}",
             (tag_id,),
         )
     ]
     # 同一素材可能同时命中两类，用一条 DELETE 一次完成；只删 ai_generated，保留手动态。
     cur = con.execute(
-        f"DELETE FROM inspiration_tags WHERE {_CLEANUP_CONDITION}",
+        f"DELETE FROM inspiration_tags WHERE {condition}",
         (tag_id,),
     )
     return cur.rowcount or 0, affected
@@ -189,12 +199,14 @@ def main() -> int:
     args = parse_args()
     con = _connection(args.apply)
     try:
-        preview = build_preview(con)
+        preview = build_preview(con, args.all_legacy)
         result = {"dry_run": not args.apply, "preview": preview, "deleted_rows": 0}
         if args.apply and preview.get("tag_id"):
             con.execute("BEGIN IMMEDIATE")
             try:
-                deleted, affected = apply_cleanup(con, preview["tag_id"])
+                deleted, affected = apply_cleanup(
+                    con, preview["tag_id"], args.all_legacy
+                )
                 con.commit()
                 result["deleted_rows"] = deleted
                 result["vector_backfill_enqueued"] = enqueue_text_vector_backfills(
