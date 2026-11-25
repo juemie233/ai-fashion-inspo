@@ -74,6 +74,10 @@ from .import_f2_downloads import (  # noqa: E402
     scan_directory,
 )
 
+# 单一真源在 app 侧（scripts → app 单向依赖）；这里重新导出，
+# 历史调用点与本模块单测仍用 `rep.ensure_clone_f2_on_path`
+from app.services.f2.f2_path import ensure_clone_f2_on_path  # noqa: E402
+
 """发布模式的「无作品 ID」历史命名模板：对齐时按它重建预期文件名。
 
 不能用 :data:`POST_NAMING_TEMPLATE`——那是**新**模板（含 `{aweme_id}`），而这里
@@ -493,41 +497,6 @@ def render_report(report: dict, sample: int = 5) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 
-def ensure_clone_f2_on_path(f2_dir: Path) -> str:
-    """把 f2 工作目录插到 `sys.path` 最前，确保导入的是**项目实际在用的那份 f2**。
-
-    ⚠ 这一步不能省（2026-09 实测踩坑）：PyPI 上的 f2 最新只到 `0.0.1.7`
-    （2024-12-31 发布），其抖音签名已失效——用**旧版**调作品清单接口稳定返回
-    **HTTP 403**，即使带完全有效的登录态 Cookie。而 f2 工作目录是 git clone，
-    项目通过「`cwd=f2_dir` 跑 `python -m f2`」用的正是克隆里那一份。
-
-    本工具在**进程内** import f2（不像项目那样起子进程），若不明式插路径，拿到的是
-    site-packages 里的旧版 → 403。插路径后需清掉已导入的旧模块，否则不生效。
-
-    Args:
-        f2_dir: f2 工作目录（内含 `f2/` 包）。
-
-    Returns:
-        实际生效的 f2 包文件路径；该目录下没有 `f2/` 包时返回空串（回退 site-packages）。
-    """
-    root = str(f2_dir)
-    if not (f2_dir / "f2" / "__init__.py").is_file():
-        return ""
-
-    loaded = sys.modules.get("f2")
-    if loaded is not None and getattr(loaded, "__file__", "").startswith(root):
-        return loaded.__file__  # 已经是这一份，无需重导
-
-    if root in sys.path:
-        sys.path.remove(root)
-    sys.path.insert(0, root)
-    if loaded is not None:
-        for name in [m for m in list(sys.modules) if m == "f2" or m.startswith("f2.")]:
-            del sys.modules[name]
-
-    import f2  # noqa: PLC0415 —— 必须在插路径之后导入
-
-    return getattr(f2, "__file__", "")
 
 
 async def enumerate_author_works(

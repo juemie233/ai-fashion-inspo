@@ -38,6 +38,7 @@ from .common import (  # noqa: E402
     DEFAULT_F2_DIR,
     DEFAULT_F2_DOWNLOAD_ROOT,
 )
+from .f2_path import ensure_clone_f2_on_path  # noqa: E402
 from app.utils.time import utcnow  # noqa: E402
 
 """翻页间隔（秒）：收藏夹接口与作品列表接口都自带风控，别打太快。"""
@@ -179,8 +180,6 @@ def load_f2_runtime(f2_dir: Path | str | None = None) -> tuple[dict, str]:
     Raises:
         RuntimeError: 没找到 f2 或配置里没有 Cookie。
     """
-    from .report_f2_id_alignment import ensure_clone_f2_on_path
-
     root = Path(f2_dir or DEFAULT_F2_DIR)
     # ⚠ 必须在导入 f2 之前插路径：site-packages 那份是 2024-12-31 的旧版，
     # 抖音签名已失效（详见 ensure_clone_f2_on_path）

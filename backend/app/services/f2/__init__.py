@@ -41,6 +41,8 @@ from .common import (  # noqa: F401
     resolve_download_root,
     scan_directory,
 )
+from .f2_path import ensure_clone_f2_on_path  # noqa: F401
+
 from .hash_cache import (  # noqa: F401
     HASH_CACHE_DBNAME,
     HashCache,
@@ -224,4 +226,5 @@ __all__ = [
     "work_hash",
     "utcnow",
     "extract_video_thumbnail_sync",
+    "ensure_clone_f2_on_path",
 ]

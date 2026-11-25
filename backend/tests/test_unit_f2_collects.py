@@ -502,6 +502,34 @@ def test_collect_naming_matches_shared_template():
     assert f2_collects._collect_naming() == f2.COLLECT_NAMING_TEMPLATE
 
 
+def test_load_f2_runtime_dependency_is_importable():
+    """回归（2026-11-25）：collects 曾相对导入同包不存在的 `report_f2_id_alignment`，
+    点「读取收藏夹」就抛 ModuleNotFoundError——因为该模块其实在 scripts/ 下。
+
+    这里钉两件事：① 源码里不许再出现那个模块名；② `ensure_clone_f2_on_path` 的
+    单一真源在 app 侧，scripts 只是重新导出（依赖方向 scripts → app）。
+    """
+    import inspect
+
+    from app.services.f2 import ensure_clone_f2_on_path as from_pkg
+    from app.services.f2.f2_path import ensure_clone_f2_on_path
+    from scripts import report_f2_id_alignment as rep
+
+    assert "report_f2_id_alignment" not in inspect.getsource(f2_collects)
+    assert from_pkg is ensure_clone_f2_on_path
+    assert rep.ensure_clone_f2_on_path is ensure_clone_f2_on_path
+
+
+def test_load_f2_runtime_assembles_without_network(monkeypatch, tmp_path):
+    """装配路径走通（不联网）：克隆目录里没有 `f2/` 包时应回退空串、不炸。"""
+    monkeypatch.setattr(f2_collects, "DEFAULT_F2_DIR", tmp_path)
+    # 没有 f2/包 → ensure_clone_f2_on_path 返回空串，随后 import f2 会失败（环境无 f2）
+    # 只要不是 ModuleNotFoundError('app.services.f2.report_f2_id_alignment') 就说明导入链正常
+    from app.services.f2.f2_path import ensure_clone_f2_on_path
+
+    assert ensure_clone_f2_on_path(tmp_path) == ""
+
+
 def test_f2_classes_are_imported_after_clone_is_on_path():
     """结构守卫：f2 的类必须**在 load_f2_runtime 之后**才 import。
 
