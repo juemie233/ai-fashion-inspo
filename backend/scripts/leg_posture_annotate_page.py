@@ -170,7 +170,7 @@ HTML = r"""<!doctype html>
       <div class="stat"><span>其中“不是”</span><b id="noCount">0</b></div>
     </div>
     <div class="card">
-      <h2>快速原因（可多选）</h2>
+      <h2>快速原因（先选原因，再点 1/2/3）</h2>
       <div class="reason-grid">
         <button class="reason-btn" data-reason="多图拼贴">多图拼贴</button>
         <button class="reason-btn" data-reason="半身/七分">半身/七分</button>
@@ -258,11 +258,9 @@ let autoTimer = null;
 function setLabel(v){
   const r=current(); state.labels[r.no]=v; save(); render();
   if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
-  // 只有“确定并拢”自动下一张；不确定/不是需要先点原因，避免原因落到下一张
-  if (v === true && $("autoNext").checked) {
-    autoTimer = setTimeout(() => { autoTimer = null; nextUnlabeled(); }, 1200);
-  } else if (v !== true) {
-    toast("已记录，可点右侧原因，然后点“下一张”");
+  if ($("autoNext").checked) {
+    // 先选原因再点 1/2/3；点完自动下一张。留一点时间让界面记录原因。
+    autoTimer = setTimeout(() => { autoTimer = null; nextUnlabeled(); }, 350);
   }
 }
 $("yesBtn").onclick = () => setLabel(true);
@@ -270,7 +268,6 @@ $("maybeBtn").onclick = () => setLabel("uncertain");
 $("noBtn").onclick = () => setLabel(false);
 document.querySelectorAll(".reason-btn").forEach(btn => {
   btn.onclick = () => {
-    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
     const r = current();
     const picked = new Set(state.reasons[r.no] || []);
     if (picked.has(btn.dataset.reason)) picked.delete(btn.dataset.reason);
