@@ -6,8 +6,8 @@
 
 页面支持：
 - 单张大图
-- 是并拢 / 不是并拢
-- 键盘 1 / 0 / 左右方向键
+- 1 是确定 / 2 不确定 / 3 不是
+- 键盘 1 / 2 / 3 / 左右方向键
 - 自动跳到下一张未标注
 - 本地 localStorage 保存
 - 导出 CSV / JSON
@@ -113,8 +113,13 @@ HTML = r"""<!doctype html>
   button { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:9px; padding:9px 14px; font:inherit; cursor:pointer; }
   button:hover { background:#f3efe7; }
   button.primary { color:#fff; background:var(--green); border-color:var(--green); }
+  button.warn { color:#fff; background:#a5762c; border-color:#a5762c; }
   button.danger { color:#fff; background:var(--red); border-color:var(--red); }
   button.ghost { color:var(--muted); }
+  .reason-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .reason-btn { width:100%; font-size:13px; padding:8px 6px; background:#fbf8f1; }
+  .reason-btn.active { background:#2f6b4f; border-color:#2f6b4f; color:#fff; }
+  .pill.maybe { background:#f7ecd8; color:#8a5a1f; }
   button:disabled { opacity:.45; cursor:default; }
   .hint { color:var(--muted); font-size:12px; margin-left:auto; }
   aside { display:flex; flex-direction:column; gap:12px; }
@@ -148,8 +153,9 @@ HTML = r"""<!doctype html>
     </div>
     <div class="photo-wrap"><img id="photo" alt="待标注图片"></div>
     <div class="toolbar">
-      <button class="primary" id="yesBtn">✓ 是并拢 <span class="hint">1</span></button>
-      <button class="danger" id="noBtn">✗ 不是 <span class="hint">0</span></button>
+      <button class="primary" id="yesBtn">1 是确定</button>
+      <button class="warn" id="maybeBtn">2 不确定</button>
+      <button class="danger" id="noBtn">3 不是</button>
       <button class="ghost" id="prevBtn">← 上一张</button>
       <button class="ghost" id="nextBtn">下一张 →</button>
       <label class="hint"><input type="checkbox" id="autoNext" checked> 自动下一张</label>
@@ -159,13 +165,22 @@ HTML = r"""<!doctype html>
     <div class="card">
       <h2>标注进度</h2>
       <div class="stat"><span>已标注</span><b id="labeledCount">0</b></div>
-      <div class="stat"><span>其中“是”</span><b id="yesCount">0</b></div>
+      <div class="stat"><span>其中“确定”</span><b id="yesCount">0</b></div>
+      <div class="stat"><span>其中“不确定”</span><b id="maybeCount">0</b></div>
       <div class="stat"><span>其中“不是”</span><b id="noCount">0</b></div>
     </div>
     <div class="card">
-      <h2>备注（可选）</h2>
-      <textarea id="notes" placeholder="不确定/多图拼贴/特殊姿势等"></textarea>
-      <div class="hint" style="margin-top:6px">自动保存在浏览器本地</div>
+      <h2>快速原因（可多选）</h2>
+      <div class="reason-grid">
+        <button class="reason-btn" data-reason="多图拼贴">多图拼贴</button>
+        <button class="reason-btn" data-reason="半身/七分">半身/七分</button>
+        <button class="reason-btn" data-reason="看不到脚">看不到脚</button>
+        <button class="reason-btn" data-reason="交叉/抬腿">交叉/抬腿</button>
+        <button class="reason-btn" data-reason="姿势看不清">姿势看不清</button>
+        <button class="reason-btn" data-reason="普通站直">普通站直</button>
+      </div>
+      <div class="hint" id="reasonText" style="margin-top:8px">未选择</div>
+      <button id="clearReasons" class="ghost" style="margin-top:8px">清空原因</button>
     </div>
     <div class="card">
       <h2>数据</h2>
@@ -189,8 +204,12 @@ HTML = r"""<!doctype html>
 <script>
 const DATA = __DATA__;
 const KEY = "leg-posture-gold-20261124-v1";
-let state = {labels:{}, notes:{}};
-try { state = Object.assign({labels:{},notes:{}}, JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) {}
+const REASONS = ["多图拼贴","半身/七分","看不到脚","交叉/抬腿","姿势看不清","普通站直"];
+let state = {labels:{}, notes:{}, reasons:{}};
+try {
+  const saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+  state = {labels:saved.labels||{}, notes:saved.notes||{}, reasons:saved.reasons||{}};
+} catch (e) {}
 DATA.forEach(r => { if (r.initial !== null && state.labels[r.no] === undefined) state.labels[r.no] = r.initial; });
 let idx = Math.max(0, DATA.findIndex(r => state.labels[r.no] === undefined));
 const $ = id => document.getElementById(id);
@@ -205,13 +224,17 @@ function render(){
   const sheet = $("sheetLink"); sheet.innerHTML = "";
   const a = document.createElement("a"); a.href=r.sheet; a.textContent="查看联系人表 " + r.sheet_name; sheet.appendChild(a);
   const v = state.labels[r.no];
-  $("labelState").className = "pill " + (v === true ? "yes" : v === false ? "no" : "");
-  $("labelState").textContent = v === true ? "是并拢" : v === false ? "不是并拢" : "未标注";
-  $("notes").value = state.notes[r.no] || "";
-  $("notes").oninput = () => { state.notes[r.no] = $("notes").value; save(); };
+  $("labelState").className = "pill " + (v === true ? "yes" : v === false ? "no" : v === "uncertain" ? "maybe" : "");
+  $("labelState").textContent = v === true ? "确定并拢" : v === false ? "不是并拢" : v === "uncertain" ? "不确定" : "未标注";
+  const picked = state.reasons[r.no] || [];
+  document.querySelectorAll(".reason-btn").forEach(btn => {
+    btn.classList.toggle("active", picked.includes(btn.dataset.reason));
+  });
+  $("reasonText").textContent = picked.length ? "已选：" + picked.join("、") : "未选择";
   const labeled = DATA.filter(x => state.labels[x.no] !== undefined);
   $("labeledCount").textContent = labeled.length;
   $("yesCount").textContent = labeled.filter(x => state.labels[x.no] === true).length;
+  $("maybeCount").textContent = labeled.filter(x => state.labels[x.no] === "uncertain").length;
   $("noCount").textContent = labeled.filter(x => state.labels[x.no] === false).length;
   $("progressText").textContent = labeled.length + " / " + DATA.length;
   $("progressBar").style.width = (labeled.length / DATA.length * 100) + "%";
@@ -231,35 +254,65 @@ function nextUnlabeled(){
   }
   toast("全部已标注，可导出结果");
 }
+let autoTimer = null;
 function setLabel(v){
   const r=current(); state.labels[r.no]=v; save(); render();
-  if ($("autoNext").checked) setTimeout(nextUnlabeled, 180);
+  if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+  // 只有“确定并拢”自动下一张；不确定/不是需要先点原因，避免原因落到下一张
+  if (v === true && $("autoNext").checked) {
+    autoTimer = setTimeout(() => { autoTimer = null; nextUnlabeled(); }, 1200);
+  } else if (v !== true) {
+    toast("已记录，可点右侧原因，然后点“下一张”");
+  }
 }
 $("yesBtn").onclick = () => setLabel(true);
+$("maybeBtn").onclick = () => setLabel("uncertain");
 $("noBtn").onclick = () => setLabel(false);
+document.querySelectorAll(".reason-btn").forEach(btn => {
+  btn.onclick = () => {
+    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+    const r = current();
+    const picked = new Set(state.reasons[r.no] || []);
+    if (picked.has(btn.dataset.reason)) picked.delete(btn.dataset.reason);
+    else picked.add(btn.dataset.reason);
+    state.reasons[r.no] = [...picked];
+    save(); render();
+  };
+});
+$("clearReasons").onclick = () => { const r=current(); state.reasons[r.no]=[]; save(); render(); };
 $("prevBtn").onclick = () => go(-1);
 $("nextBtn").onclick = () => go(1);
 $("jumpUnlabeled").onclick = () => { idx=DATA.findIndex(r=>state.labels[r.no]===undefined); idx=Math.max(0,idx); render(); };
-$("reset").onclick = () => { if (confirm("清空浏览器本地标注？不会影响已导出的文件。")) { state={labels:{},notes:{}}; save(); idx=0; render(); } };
+$("reset").onclick = () => { if (confirm("清空浏览器本地标注？不会影响已导出的文件。")) { state={labels:{},notes:{},reasons:{}}; save(); idx=0; render(); } };
 function download(name, text){
   const blob=new Blob([text],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 $("exportCsv").onclick = () => {
   const lines=["gold_no,meaningful_together,notes"];
-  DATA.forEach(r=>{ const v=state.labels[r.no]; if(v===undefined) return; const n=(state.notes[r.no]||"").replace(/"/g,'""'); lines.push(`${r.no},${v},"${n}"`); });
+  DATA.forEach(r=>{
+    const v=state.labels[r.no]; if(v===undefined) return;
+    const reason=(state.reasons[r.no]||[]).join("、") || state.notes[r.no] || "";
+    const n=reason.replace(/"/g,'""');
+    lines.push(`${r.no},${v},"${n}"`);
+  });
   download("leg-together-labels-"+new Date().toISOString().slice(0,10)+".csv", lines.join("\n"));
   toast("已导出 CSV");
 };
 $("exportJson").onclick = () => {
-  const rows=DATA.map(r=>({gold_no:r.no,meaningful_together:state.labels[r.no]??null,notes:state.notes[r.no]||""}));
+  const rows=DATA.map(r=>({
+    gold_no:r.no,
+    meaningful_together:state.labels[r.no]??null,
+    notes:(state.reasons[r.no]||[]).join("、") || state.notes[r.no] || "",
+  }));
   download("leg-together-labels-"+new Date().toISOString().slice(0,10)+".json", JSON.stringify(rows,null,2));
   toast("已导出 JSON");
 };
 document.addEventListener("keydown", e=>{
   if (e.target && (e.target.tagName==="TEXTAREA"||e.target.tagName==="INPUT")) return;
   if (e.key==="1" || e.key.toLowerCase()==="y") setLabel(true);
-  else if (e.key==="0" || e.key.toLowerCase()==="n") setLabel(false);
+  else if (e.key==="2") setLabel("uncertain");
+  else if (e.key==="3" || e.key==="0" || e.key.toLowerCase()==="n") setLabel(false);
   else if (e.key==="ArrowLeft") go(-1);
   else if (e.key==="ArrowRight") go(1);
 });
