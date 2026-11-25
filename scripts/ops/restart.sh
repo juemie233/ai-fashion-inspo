@@ -1,11 +1,16 @@
 #!/bin/bash
 # AI 穿搭素材库 — 一键重启前后端 + worker + 人脸识别服务
-# 用法: bash scripts/ops/restart.sh
+# 用法: bash scripts/ops/restart.sh [--watch]
+#   --watch  开发热更：backend/app 下的 .py 或 backend/.env 一改，supervisor
+#            自动重启 backend/worker（默认关；不想改脚本时用
+#            SUPERVISOR_WATCH=1 bash scripts/ops/restart.sh 也能开）
 #
 # 说明：后端「不」使用 uvicorn --reload。
 #   Windows 下 --reload 走 multiprocessing.spawn，文件变更触发重载时会以
 #   OSError: [WinError 87] 参数错误 崩溃（后端挂掉）；且强杀时易残留 spawn
-#   worker 子进程占用端口。本脚本靠「先杀后启」拿到最新代码，无需 --reload。
+#   worker 子进程占用端口。本脚本靠「先杀后启」拿到最新代码，无需 --reload；
+#   开发期要「改完即生效」，用 --watch 让 supervisor 杀掉子进程再拉起
+#   （进程仍是干净的独立进程，不碰 --reload）。
 #
 # 自「服务守护」改造后，进程由 supervisor 统一管理：
 #   先停 supervisor（级联停三服务）→ 兜底杀残留进程 → 启动 supervisor
@@ -15,6 +20,14 @@
 # 本脚本可靠地终止所有相关进程（含孤儿 worker）后重启。
 
 cd "$(dirname "$0")/../.."
+
+# 可选参数：--watch 透传给 supervisor（开发热更）
+SUPERVISOR_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --watch) SUPERVISOR_ARGS+=("--watch") ;;
+  esac
+done
 
 # 端口以 backend/.env 为准，脚本不再写死（改 PORT 后仍能正确杀/探）
 _env_value() {
@@ -183,7 +196,11 @@ if [ ! -d web/node_modules ]; then
   echo "  ❌ 未检测到 web/node_modules，请先执行: cd web && npm install"
   exit 1
 fi
-nohup python scripts/ops/supervisor.py > "$LOG_DIR/supervisor-bootstrap.log" 2>&1 &
+if [ ${#SUPERVISOR_ARGS[@]} -gt 0 ]; then
+  nohup python scripts/ops/supervisor.py "${SUPERVISOR_ARGS[@]}" > "$LOG_DIR/supervisor-bootstrap.log" 2>&1 &
+else
+  nohup python scripts/ops/supervisor.py > "$LOG_DIR/supervisor-bootstrap.log" 2>&1 &
+fi
 echo "  supervisor PID: $! (日志: $LOG_DIR/supervisor.log)"
 
 # ── 验证（轮询，最多 60 秒）──

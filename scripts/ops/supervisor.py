@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import json
 import logging
@@ -86,6 +87,17 @@ LOG_MAX_BYTES = 10 * 1024 * 1024  # 单个服务日志轮转阈值（10 MB）
 LOG_BACKUP_COUNT = 5            # 日志轮转保留份数
 FAST_CRASH_SECONDS = 30.0       # 运行不足此时长即退出视为「快速崩溃」
 MAX_BACKOFF_SECONDS = 60.0      # 快速崩溃重启的最大退避延迟（秒）
+# ── 开发热更（可选，默认关闭）──
+# 为什么不直接给 uvicorn 加 --reload：restart.sh 头部有实测记录——Windows 下
+# --reload 走 multiprocessing.spawn，文件变更触发重载时会以 OSError [WinError 87]
+# 崩溃，且强杀时残留 spawn 子进程占端口。这里改用「杀掉子进程 → supervisor 下一轮
+# 自动拉起」：复用既有的崩溃恢复路径，进程始终是干净的独立进程。
+WATCH_ENV = "SUPERVISOR_WATCH"          # =1/true 等价于 --watch（restart.sh 透传环境变量即可）
+WATCH_DEFAULT_INTERVAL = 1.0            # 扫描间隔（秒）
+WATCH_DEBOUNCE_SECONDS = 1.0            # 变更后等这么久再重启，合并编辑器的多事件保存
+WATCH_SERVICES = ("backend", "worker")  # frontend 由 vite HMR 自理，不参与
+WATCH_MAX_LISTED_FILES = 3              # 日志里最多列几个变更文件
+
 DISK_ALERT_PERCENT = 90.0       # 磁盘使用率告警阈值（%）
 MEMORY_ALERT_PERCENT = 90.0     # 内存使用率告警阈值（%）
 
@@ -676,8 +688,168 @@ def _supervisor_logger() -> logging.Logger:
     return logger
 
 
-def run() -> None:
-    """supervisor 主流程：启动服务、循环健康检查与自动拉起。"""
+# ═══════════════════════════════════════════════════════════════
+#  开发热更（可选）
+# ═══════════════════════════════════════════════════════════════
+
+
+def watch_paths() -> list[Path]:
+    """热更监控的路径：后端应用代码目录 + .env（改配置也要重启才生效）。"""
+    paths = [BACKEND_DIR / "app"]
+    env_file = BACKEND_DIR / ".env"
+    if env_file.is_file():
+        paths.append(env_file)
+    return paths
+
+
+def watch_snapshot(paths: list[Path]) -> dict[str, tuple[int, int]]:
+    """采集监控文件的 ``(mtime_ns, size)`` 指纹。
+
+    只收 ``.py``（目录递归）与显式给出的文件；``__pycache__`` 不在目录递归里出现，
+    但即便出现也因后缀不是 ``.py`` 被忽略。读失败的文件跳过（编辑器保存瞬间可能
+    短暂不可读，下一轮会重新发现）。
+    """
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in paths:
+        try:
+            if path.is_dir():
+                files = sorted(path.rglob("*.py"))
+            elif path.is_file():
+                files = [path]
+            else:
+                continue
+        except OSError:
+            continue
+        for file in files:
+            if "__pycache__" in file.parts:
+                continue
+            try:
+                stat = file.stat()
+            except OSError:
+                continue
+            snapshot[str(file)] = (stat.st_mtime_ns, stat.st_size)
+    return snapshot
+
+
+def changed_paths(
+    old: dict[str, tuple[int, int]], new: dict[str, tuple[int, int]]
+) -> list[str]:
+    """两次指纹的差异（新增 / 修改 / 删除），按路径排序保证日志稳定。"""
+    changed = {p for p in new if old.get(p) != new[p]}
+    changed.update(p for p in old if p not in new)
+    return sorted(changed)
+
+
+def describe_changes(paths: list[str], limit: int = WATCH_MAX_LISTED_FILES) -> str:
+    """把变更文件列表压成一行日志（相对 backend 目录；超出上限写「等 N 个」）。"""
+    rel = []
+    for path in paths:
+        try:
+            rel.append(str(Path(path).relative_to(BACKEND_DIR)))
+        except ValueError:
+            rel.append(Path(path).name)
+    if len(rel) <= limit:
+        return "、".join(rel)
+    return f"{'、'.join(rel[:limit])} 等 {len(rel)} 个文件"
+
+
+class ReloadRegistry:
+    """待重启服务集合（watcher 线程写、主循环读，加锁）。
+
+    单独成类是为了能单测：主循环每轮 ``take()`` 一次，拿到就清空——
+    避免「重启后没清掉，下一轮又白重启一次」。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._services: set[str] = set()
+
+    def request(self, services: tuple[str, ...] | list[str]) -> None:
+        with self._lock:
+            self._services.update(services)
+
+    def take(self) -> set[str]:
+        with self._lock:
+            services, self._services = self._services, set()
+            return services
+
+    def pending(self) -> bool:
+        with self._lock:
+            return bool(self._services)
+
+
+def run_watch_loop(
+    watch_dirs: list[Path],
+    interval: float,
+    registry: ReloadRegistry,
+    wake: threading.Event,
+    stop: threading.Event,
+    log,
+) -> None:
+    """后台线程：轮询指纹，检测到变更就登记重启并唤醒主循环。
+
+    用轮询而不是 watchfiles：242 个 ``.py`` 的 ``stat`` 一轮约 1ms（实测本项目规模），
+    而事件库在 Windows 上要处理重复事件/临时文件，反而更难解释；轮询行为可预测、
+    可单测，也不新增依赖。
+    """
+    previous = watch_snapshot(watch_dirs)
+    log(f"[watch] 热更已开启：监控 {len(previous)} 个文件，间隔 {interval:g}s")
+    while not stop.wait(interval):
+        current = watch_snapshot(watch_dirs)
+        changed = changed_paths(previous, current)
+        if not changed:
+            continue
+        previous = current
+        log(
+            f"[watch] 检测到 {describe_changes(changed)} 变更，"
+            f"{WATCH_DEBOUNCE_SECONDS:g}s 后重启 {'/'.join(WATCH_SERVICES)}"
+        )
+        # 防抖：编辑器保存会连续触发多个事件，等一小段再统一重启
+        if stop.wait(WATCH_DEBOUNCE_SECONDS):
+            return
+        # 防抖期间可能又有新变更：重新取快照，避免把这一批漏掉
+        previous = watch_snapshot(watch_dirs)
+        registry.request(WATCH_SERVICES)
+        wake.set()
+
+
+def _env_flag(name: str) -> bool:
+    """读布尔型环境变量（1/true/yes/on 为真）。"""
+    raw = (os.environ.get(name) or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """命令行参数：不带参数时行为与改造前完全一致。"""
+    parser = argparse.ArgumentParser(
+        description="服务守护进程：管理后端 / 前端 / worker（可选的开发热更）",
+    )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "开发热更：backend/app 下 .py 或 backend/.env 变更后自动重启 backend/worker"
+            "（默认关闭；也可用环境变量 SUPERVISOR_WATCH=1）"
+        ),
+    )
+    parser.add_argument(
+        "--watch-interval",
+        type=float,
+        default=WATCH_DEFAULT_INTERVAL,
+        metavar="SECONDS",
+        help=f"热更扫描间隔（默认 {WATCH_DEFAULT_INTERVAL:g}s）",
+    )
+    return parser
+
+
+def watch_enabled(args: argparse.Namespace) -> bool:
+    """是否启用热更：命令行或环境变量任一开启即可（环境变量便于 restart.sh 透传）。"""
+    return bool(args.watch or _env_flag(WATCH_ENV))
+
+
+def run(argv: list[str] | None = None) -> None:
+    """supervisor 主流程：启动服务、循环健康检查与自动拉起（可选开发热更）。"""
+    args = build_arg_parser().parse_args(argv)
     logger = _supervisor_logger()
 
     def _on_stop(signum, _frame) -> None:
@@ -700,6 +872,23 @@ def run() -> None:
         for name, cfg in SERVICE_DEFS.items()
     }
 
+    # 开发热更（可选）：变更 → 唤醒主循环 → 重启 backend/worker
+    reload_registry = ReloadRegistry()
+    wake = threading.Event()
+    watch_stop = threading.Event()
+    if watch_enabled(args):
+        watch_interval = args.watch_interval if args.watch_interval > 0 else WATCH_DEFAULT_INTERVAL
+        threading.Thread(
+            target=run_watch_loop,
+            args=(watch_paths(), watch_interval, reload_registry, wake, watch_stop, logger.info),
+            name="dev-watch",
+            daemon=True,
+        ).start()
+    else:
+        logger.info(
+            "开发热更未开启（改后端代码需重启；要热更加 --watch 或 SUPERVISOR_WATCH=1）"
+        )
+
     logger.info("supervisor 启动，开始守护 backend / frontend / worker ...")
     logger.info(f"后端监听 {BACKEND_HOST}:{BACKEND_PORT}")
     for warning in _CONFIG_WARNINGS:
@@ -720,7 +909,24 @@ def run() -> None:
 
     try:
         while True:
-            time.sleep(CHECK_INTERVAL)
+            # 热更开启时用可打断的等待：watcher 一变即醒，最多 CHECK_INTERVAL 一轮
+            wake.wait(CHECK_INTERVAL)
+            wake.clear()
+
+            # 先处理热更重启请求：stop() 后把 restart_at 置为「现在」，
+            # 下面的「进程未运行」分支会立刻 start()，复用崩溃拉起路径
+            for name in sorted(reload_registry.take()):
+                svc = services.get(name)
+                if svc is None or svc.proc is None:
+                    continue
+                logger.warning("[热更] 检测到后端代码/配置变更，重启 %s", name)
+                svc.log.write("[supervisor] 后端代码/配置变更（开发热更），快速重启\n")
+                svc.stop()
+                svc.restart_count += 1
+                svc.last_exit_reason = "开发热更"
+                svc.fail_streak = 0
+                svc.crash_streak = 0
+                svc.restart_at = time.time()
 
             for svc in services.values():
                 if svc.proc is not None and svc.proc.poll() is None:
@@ -771,6 +977,7 @@ def run() -> None:
             _write_pid_heartbeat()
             write_status_file(services, resource_alerts)
     finally:
+        watch_stop.set()
         logger.info("supervisor 停止，终止所有子服务 ...")
         for svc in services.values():
             svc.stop()
