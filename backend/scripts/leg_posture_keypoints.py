@@ -50,7 +50,13 @@ def parse_args() -> argparse.Namespace:
         default=Path(settings.storage_root) / "audit" / "leg-posture-gold-20261124-205716",
     )
     parser.add_argument("--json", type=Path, required=True)
-    parser.add_argument("--limit", type=int, default=40)
+    parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument(
+        "--labels-file",
+        type=Path,
+        default=None,
+        help="人工标签文件（默认 pilot-labels-40.json）",
+    )
     return parser.parse_args()
 
 
@@ -139,7 +145,8 @@ def _extract(landmarker: PoseLandmarker, path: Path) -> dict | None:
 def main() -> int:
     args = parse_args()
     gold = json.loads((args.gold_dir / "gold-set.json").read_text(encoding="utf-8"))
-    labels = json.loads((args.gold_dir / "pilot-labels-40.json").read_text(encoding="utf-8"))
+    labels_path = args.labels_file or (args.gold_dir / "pilot-labels-40.json")
+    labels = json.loads(labels_path.read_text(encoding="utf-8"))
     label_by_no = {row["gold_no"]: row for row in labels["rows"]}
     records = [r for r in gold["records"] if r["gold_no"] in label_by_no][: args.limit]
     if not MODEL_PATH.is_file():
