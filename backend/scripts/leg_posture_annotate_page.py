@@ -43,15 +43,23 @@ def parse_args() -> argparse.Namespace:
 
 
 def _existing_labels(gold_dir: Path) -> dict[int, bool]:
-    xlsx = gold_dir / "annotations-simple.xlsx"
-    if not xlsx.is_file():
-        return {}
-    sheet = load_workbook(xlsx, data_only=True).active
+    """合并 xlsx 和人工标签 JSON；JSON 优先于 xlsx。"""
     labels: dict[int, bool] = {}
-    for row in sheet.iter_rows(min_row=2, values_only=True):
-        if row[0] is None or row[5] is None:
-            continue
-        labels[int(row[0])] = bool(row[5])
+    xlsx = gold_dir / "annotations-simple.xlsx"
+    if xlsx.is_file():
+        sheet = load_workbook(xlsx, data_only=True).active
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if row[0] is None or row[5] is None:
+                continue
+            labels[int(row[0])] = bool(row[5])
+    labels_json = gold_dir / "human-labels-200.json"
+    if labels_json.is_file():
+        data = json.loads(labels_json.read_text(encoding="utf-8"))
+        for row in data.get("rows", []):
+            # 兼容 human_meaningful / meaningful_together
+            value = row.get("human_meaningful", row.get("meaningful_together"))
+            if value is not None:
+                labels[int(row["gold_no"])] = bool(value)
     return labels
 
 
@@ -61,7 +69,11 @@ def _records(gold_dir: Path, labels: dict[int, bool]) -> list[dict]:
     out = []
     for record in data["records"]:
         no = int(record["gold_no"])
-        image_path = (root / record["file_path"]).as_posix()
+        media = str(record["file_path"])
+        # 视频页无法直接作为 <img>，使用缩略图；普通图片用原图以保留腿部细节
+        if Path(media).suffix.lower() in {".mp4", ".mov", ".webm", ".mkv", ".avi"}:
+            media = record.get("thumbnail_path") or media
+        image_path = (root / media).as_posix()
         sheet = (no - 1) // 20 + 1
         out.append(
             {
