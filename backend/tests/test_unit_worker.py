@@ -38,7 +38,7 @@ from app.worker import (
     _run_task,
     _run_task_safe,
     _worker_loop,
-    _write_heartbeat,
+    _write_heartbeat_sync,
 )
 from sqlalchemy.exc import OperationalError
 
@@ -422,10 +422,17 @@ async def test_reset_stale_cleans_zombie_worker_heartbeats():
 # ── 心跳 ──
 
 
-async def test_write_heartbeat_upserts_and_refreshes_claimed_tasks():
-    tid = await _task(status="running", claimed_by="w1", heartbeat_at=None)
+async def test_write_heartbeat_sync_upserts_and_refreshes_claimed_tasks():
+    import sqlite3
 
-    await _write_heartbeat("w1")
+    from app.config import settings
+
+    tid = await _task(status="running", claimed_by="w1", heartbeat_at=None)
+    conn = sqlite3.connect(str(settings.db_file_path))
+    try:
+        _write_heartbeat_sync("w1", conn)
+    finally:
+        conn.close()
 
     async with async_session() as db:
         hb = await db.get(ServiceHeartbeat, "w1")
@@ -434,10 +441,17 @@ async def test_write_heartbeat_upserts_and_refreshes_claimed_tasks():
     assert (await _get(tid)).heartbeat_at is not None
 
 
-async def test_write_heartbeat_leaves_other_workers_tasks_alone():
-    tid = await _task(status="running", claimed_by="other", heartbeat_at=None)
+async def test_write_heartbeat_sync_leaves_other_workers_tasks_alone():
+    import sqlite3
 
-    await _write_heartbeat("w1")
+    from app.config import settings
+
+    tid = await _task(status="running", claimed_by="other", heartbeat_at=None)
+    conn = sqlite3.connect(str(settings.db_file_path))
+    try:
+        _write_heartbeat_sync("w1", conn)
+    finally:
+        conn.close()
 
     assert (await _get(tid)).heartbeat_at is None
 
@@ -564,35 +578,6 @@ async def test_run_task_skips_terminal_write_when_task_vanished(handlers, monkey
 
     monkeypatch.setattr(w, "_reload_for_failure", _gone)
     await _run_task(tid)  # 不应抛错
-
-
-async def test_heartbeat_loop_writes_then_sleeps(monkeypatch):
-    """心跳循环：写一次心跳后 sleep；写失败只告警不退出（否则 worker 失去租约）。"""
-    import app.worker as w
-
-    calls = {"writes": 0, "fail_first": True}
-
-    async def _write(worker_id):
-        calls["writes"] += 1
-        if calls["writes"] == 1 and calls["fail_first"]:
-            raise RuntimeError("写心跳失败")
-
-    real_sleep = asyncio.sleep
-
-    async def _fast_sleep(_s):
-        if calls["writes"] >= 2:
-            raise asyncio.CancelledError()
-        await real_sleep(0)
-
-    monkeypatch.setattr(w, "_write_heartbeat", _write)
-    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
-    try:
-        with pytest.raises(asyncio.CancelledError):
-            await w._heartbeat_loop("w1")
-    finally:
-        monkeypatch.setattr(asyncio, "sleep", real_sleep)
-
-    assert calls["writes"] >= 2  # 失败后被吞掉并继续下一轮
 
 
 async def test_flush_pending_backfills_on_startup_enqueues(monkeypatch):
@@ -733,7 +718,16 @@ async def test_shutdown_release_tasks_does_not_consume_retry():
     task_id = await _task(
         status="running", claimed_by="w-shutdown", retry_count=1, heartbeat_at=utcnow()
     )
-    await _write_heartbeat("w-shutdown")
+    async with async_session() as db:
+        db.add(
+            ServiceHeartbeat(
+                service_id="w-shutdown",
+                service_type="worker",
+                started_at=utcnow(),
+                last_heartbeat_at=utcnow(),
+            )
+        )
+        await db.commit()
 
     await _shutdown_release_tasks("w-shutdown")
 

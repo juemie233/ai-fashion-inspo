@@ -21,7 +21,9 @@ Python 线程模型限制，不是任务状态机可以完全消除的竞态。
 import asyncio
 import logging
 import os
+import sqlite3
 import subprocess
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -602,7 +604,7 @@ async def _stalled_task_ids(worker_id: str, stall_seconds: int) -> list[int]:
     """找出本 worker 认领、但超过 ``stall_seconds`` 没有进度更新的 running 任务。
 
     进度证据是 ``task_queue.updated_at``：执行器写进度/结果/状态时 ORM 会刷新它；
-    **心跳只写 ``heartbeat_at``，并显式保留 ``updated_at``（见 ``_write_heartbeat``）**，
+    **心跳只写 ``heartbeat_at``，并显式保留 ``updated_at``（见 ``_heartbeat_thread_worker``）**，
     所以这个列代表「执行器自己有没有动」，不会被执行器存活的证据（心跳）掩盖。
     这是 2026-11-03 评审 P0-1 的修复：此前心跳 UPDATE 触发 ``onupdate=utcnow``，
     把 ``updated_at`` 每 10 秒刷新一次，看门狗永远看不到卡死。
@@ -749,45 +751,73 @@ async def _reset_stale_tasks(exclude_worker: str | None = None) -> None:
         await db.commit()
 
 
-async def _write_heartbeat(worker_id: str) -> None:
-    """写入本 worker 的服务心跳，并刷新其认领的 running 任务心跳时间。
+def _write_heartbeat_sync(worker_id: str, conn: sqlite3.Connection) -> None:
+    """同步写一次服务心跳与 running 任务心跳。
 
-    一次心跳同时完成两件事：
-    - UPSERT service_heartbeats 行（供健康检查端点判断 worker 存活）
-    - 更新 claimed_by = worker_id 的 running 任务 heartbeat_at（供 stale 判定）
+    由独立线程调用；不回滚/提交错误由线程循环处理。``updated_at`` 显式保留原值，
+    避免心跳掩盖执行器进度（看门狗依赖它判断卡死）。
     """
     now = utcnow()
-    async with async_session() as db:
-        hb = await db.get(ServiceHeartbeat, worker_id)
-        if hb is None:
-            hb = ServiceHeartbeat(
-                service_id=worker_id,
-                service_type="worker",
-                pid=os.getpid(),
-                started_at=now,
-            )
-            db.add(hb)
-        hb.last_heartbeat_at = now
-        await db.execute(
-            update(TaskQueue)
-            .where(TaskQueue.status == "running", TaskQueue.claimed_by == worker_id)
-            # P0-1/P2-4：显式把 updated_at 赋回原列表达式，阻止 onupdate=utcnow
-            # 把「执行器进度时间」也刷新成心跳时间——否则看门狗永远看不到卡死。
-            .values(heartbeat_at=now, updated_at=TaskQueue.updated_at)
-        )
-        await db.commit()
+    stamp = now.strftime("%Y-%m-%d %H:%M:%S.%f")
+    conn.execute(
+        """
+        INSERT INTO service_heartbeats
+            (service_id, service_type, pid, started_at, last_heartbeat_at)
+        VALUES (?, 'worker', ?, ?, ?)
+        ON CONFLICT(service_id) DO UPDATE SET
+            last_heartbeat_at = excluded.last_heartbeat_at,
+            pid = excluded.pid
+        """,
+        (worker_id, os.getpid(), stamp, stamp),
+    )
+    conn.execute(
+        "UPDATE task_queue SET heartbeat_at = ?, updated_at = updated_at "
+        "WHERE status = 'running' AND claimed_by = ?",
+        (stamp, worker_id),
+    )
+    conn.commit()
+
+
+def _heartbeat_thread_worker(worker_id: str, stop_event: threading.Event) -> None:
+    """独立线程的心跳循环：不依赖 worker 主事件循环是否被 GPU 任务阻塞。"""
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(settings.db_file_path), timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
+        while not stop_event.is_set():
+            try:
+                _write_heartbeat_sync(worker_id, conn)
+            except Exception as exc:  # noqa: BLE001 —— 单次失败不能杀死心跳线程
+                logger.warning("worker 心跳写入失败: %s", exc)
+                try:
+                    conn.rollback()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("心跳写失败后 rollback 也失败（忽略）：%s", exc)
+            if stop_event.wait(_HEARTBEAT_INTERVAL):
+                break
+    except Exception:  # noqa: BLE001 —— 线程退出只记录，不影响主进程
+        logger.exception("worker 心跳线程异常退出")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 async def _heartbeat_loop(worker_id: str) -> None:
-    """worker 心跳循环：独立 asyncio 任务，按固定间隔写心跳。"""
-    while True:
-        try:
-            await _write_heartbeat(worker_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"worker 心跳写入失败: {e}")
-        await asyncio.sleep(_HEARTBEAT_INTERVAL)
+    """心跳生命周期协程：启动独立线程，取消时停止并回收线程。"""
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_heartbeat_thread_worker,
+        args=(worker_id, stop_event),
+        name=f"worker-heartbeat-{worker_id}",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        stop_event.set()
+        await asyncio.to_thread(thread.join, 5.0)
 
 
 async def _shutdown_release_tasks(worker_id: str) -> None:
@@ -825,7 +855,6 @@ async def _shutdown_release_tasks(worker_id: str) -> None:
                 )
     except Exception:  # noqa: BLE001 —— 退出路径不能把进程卡死
         logger.exception("worker 退出时释放任务失败（交给下次启动的租约清扫）")
-    # 旧台账不能继续显示进行中；任务已变 pending/不存在，可安全收尾
     await _finalize_orphan_run_logs()
 
 
@@ -1096,6 +1125,10 @@ async def main() -> None:
         await _worker_loop(worker_id)
     finally:
         heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            logger.debug("worker 心跳任务已取消")
         await _shutdown_worker(worker_id)
 
 

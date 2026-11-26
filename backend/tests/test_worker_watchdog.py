@@ -68,7 +68,15 @@ async def test_心跳不刷新updated_at_看门狗仍能识别卡死():
     async with async_session() as db:
         before = (await db.get(TaskQueue, task_id)).updated_at
 
-    await worker._write_heartbeat("w-beat")
+    import sqlite3
+
+    from app.config import settings
+
+    conn = sqlite3.connect(str(settings.db_file_path))
+    try:
+        worker._write_heartbeat_sync("w-beat", conn)
+    finally:
+        conn.close()
 
     async with async_session() as db:
         task = await db.get(TaskQueue, task_id)
