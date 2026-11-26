@@ -6,17 +6,12 @@ from pathlib import Path
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import (
-    AIAnalysisLog,
-    Inspiration,
-    analysis_log_filter,
-    latest_analysis_log_subquery,
-)
+from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import InspirationListOut, inspiration_to_out
 from app.schemas.search import (
@@ -36,7 +31,7 @@ from app.services.embedding_service import (
 from app.services import file_service
 from app.services.inspiration_query import (
     RATING_SORTS,
-    inclusive_date_upper_bound,
+    build_inspiration_filters,
     inspiration_load_options,
     load_live_inspiration,
     load_live_inspirations,
@@ -100,136 +95,33 @@ async def search_inspirations(
         if exclude_tags else []
     )
 
-    # 基础查询（预加载标签与博主/模特关联链，排除垃圾桶中已软删除的素材）。
-    # 注意：inspiration_to_out 会访问 bloggers/models 的内层实体（t.blogger/t.model），
-    # 必须链式 selectinload，否则 async 下触发懒加载抛 MissingGreenlet（500）
+    conditions = build_inspiration_filters(
+        source_type=source_type,
+        media_type=media_type,
+        is_favorite=is_favorite,
+        analysis_status=analysis_status,
+        tag_status=tag_status,
+        include_tags=include_list,
+        exclude_tags=exclude_list,
+        tag_mode=combine,
+        keyword=keyword,
+        dominant_color=dominant_color,
+        date_from=date_from,
+        date_to=date_to,
+        rating_min=rating_min,
+    )
     base_query = select(Inspiration).options(
         *inspiration_load_options(),
-    ).where(Inspiration.deleted_at.is_(None))
+    ).where(*conditions)
 
-    # 收集筛选条件
-    conditions = []
-
-    if source_type:
-        conditions.append(Inspiration.source_type == source_type)
-    if media_type:
-        conditions.append(Inspiration.media_type == media_type)
-    if is_favorite is not None:
-        conditions.append(Inspiration.is_favorite == is_favorite)
-    if date_from:
-        conditions.append(Inspiration.created_at >= date_from)
-    if date_to:
-        conditions.append(
-            Inspiration.created_at < inclusive_date_upper_bound(date_to)
-        )
-    if dominant_color:
-        color_needle = f'"{dominant_color.lower()}"'
-        conditions.append(
-            func.lower(Inspiration.dominant_colors).contains(
-                color_needle, autoescape=True
-            )
-        )
-
-    # 关键词搜索：标签名、作者名、文件名
-    if keyword:
-        matching_tag_ids = select(InspirationTag.inspiration_id).join(
-            Tag, InspirationTag.tag_id == Tag.id
-        ).where(Tag.name.contains(keyword, autoescape=True))
-        kw_conds = [
-            Inspiration.source_author.contains(keyword, autoescape=True),
-            Inspiration.file_path.contains(keyword, autoescape=True),
-            Inspiration.id.in_(matching_tag_ids),
-        ]
-        conditions.append(or_(*kw_conds))
-
-    # 分析状态（done/error 基于「最新一条」标签分析日志，与卡片状态一致）
-    if analysis_status in ("done", "error"):
-        latest = latest_analysis_log_subquery()
-        if analysis_status == "error":
-            error_cond = (AIAnalysisLog.error.isnot(None)) & (
-                AIAnalysisLog.error != ""
-            )
-        else:
-            # 与 list_inspirations 一致：空字符串错误也属于 done
-            error_cond = or_(
-                AIAnalysisLog.error.is_(None), AIAnalysisLog.error == ""
-            )
-        conditions.append(
-            Inspiration.id.in_(
-                select(AIAnalysisLog.inspiration_id)
-                .join(
-                    latest,
-                    (AIAnalysisLog.inspiration_id == latest.c.inspiration_id)
-                    & (AIAnalysisLog.id == latest.c.max_id),
-                )
-                .where(error_cond)
-                .distinct()
-            )
-        )
-    elif analysis_status == "pending":
-        conditions.append(
-            Inspiration.id.notin_(
-                select(AIAnalysisLog.inspiration_id)
-                .where(analysis_log_filter())
-                .distinct()
-            )
-        )
-
-    # 标签状态
-    if tag_status == "tagged":
-        conditions.append(
-            Inspiration.id.in_(select(InspirationTag.inspiration_id).distinct())
-        )
-    elif tag_status == "untagged":
-        conditions.append(
-            Inspiration.id.notin_(select(InspirationTag.inspiration_id).distinct())
-        )
-
-    # 评分筛选（rating >= 指定值）
-    if rating_min is not None:
-        conditions.append(Inspiration.rating >= rating_min)
-
-    if conditions:
-        base_query = base_query.where(and_(*conditions))
-
-    # 应用标签筛选
+    # match_score 排序需要 include_ids；筛选条件本身由共享 builder 负责
     include_ids: list[int] = []
     if include_list:
-        include_tag_ids = select(Tag.id).where(Tag.name.in_(include_list))
-        tag_result = await db.execute(include_tag_ids)
+        tag_result = await db.execute(
+            select(Tag.id).where(Tag.name.in_(include_list))
+        )
         include_ids = [row[0] for row in tag_result.all()]
 
-        if not include_ids:
-            return InspirationListOut(items=[], total=0, page=page, size=size)
-
-        if combine.upper() == "OR":
-            base_query = base_query.where(
-                Inspiration.id.in_(
-                    select(InspirationTag.inspiration_id).where(
-                        InspirationTag.tag_id.in_(include_ids)
-                    )
-                )
-            )
-        else:  # AND：按名称逐个建子查询，不存在/同名多类型都不会被静默放宽
-            for name in include_list:
-                base_query = base_query.where(
-                    Inspiration.id.in_(
-                        select(InspirationTag.inspiration_id)
-                        .join(Tag, InspirationTag.tag_id == Tag.id)
-                        .where(Tag.name == name)
-                    )
-                )
-
-    if exclude_list:
-        base_query = base_query.where(
-            ~Inspiration.id.in_(
-                select(InspirationTag.inspiration_id)
-                .join(Tag, InspirationTag.tag_id == Tag.id)
-                .where(Tag.name.in_(exclude_list))
-            )
-        )
-
-    # 评分排序口径：rating_asc 只排已评分；其余评分排序包含未评分。
     if sort == "rating_asc":
         filter_clause = rating_sort_filter(sort)
         if filter_clause is not None:

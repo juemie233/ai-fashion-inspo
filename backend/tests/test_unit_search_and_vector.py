@@ -21,6 +21,7 @@ from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.models.tag import InspirationTag, Tag
 from app.routers import search as search_router
 from app.services import file_service, vector_store
+from app.services.inspiration_query import list_inspirations
 
 
 async def _insp(**fields) -> str:
@@ -99,7 +100,59 @@ def _ids(out) -> set[str]:
     return {item.id for item in out.items}
 
 
+async def _compare_list_and_search(**params) -> None:
+    """同一组筛选参数下，list_inspirations 与 /api/search 必须返回同一批 ID。"""
+    list_params = dict(params)
+    search_params = dict(params)
+    tags = params.get("include_tags")
+    if tags is not None:
+        search_params["include_tags"] = ",".join(tags)
+    if "sort" in list_params:
+        search_params["sort"] = list_params["sort"]
+    async with async_session() as db:
+        list_rows, _ = await list_inspirations(db, size=200, **list_params)
+        list_ids = {row.id for row in list_rows}
+    defaults = {
+        "include_tags": None,
+        "exclude_tags": None,
+        "keyword": None,
+        "dominant_color": None,
+        "source_type": None,
+        "media_type": None,
+        "is_favorite": None,
+        "analysis_status": None,
+        "tag_status": None,
+        "date_from": None,
+        "date_to": None,
+        "rating_min": None,
+        "sort": "newest",
+        "combine": "AND",
+        "page": 1,
+        "size": 200,
+    }
+    defaults.update(search_params)
+    async with async_session() as db:
+        search_out = await search_router.search_inspirations(db=db, **defaults)
+        search_ids = {row.id for row in search_out.items}
+    assert list_ids == search_ids
+
+
 class TestSearchFilters:
+    async def test_shared_filter_builder_keeps_list_and_search_consistent(self, client):
+        """共享 builder 的契约：两个入口对同一组条件结果一致。"""
+        await _insp(media_type="video", source_type="douyin", is_favorite=True, rating=5)
+        await _insp(source_type="xiaohongshu", rating=2)
+        tagged = await _insp()
+        await _link(tagged, await _tag("共享筛选标签"))
+
+        await _compare_list_and_search()
+        await _compare_list_and_search(source_type="douyin")
+        await _compare_list_and_search(media_type="video")
+        await _compare_list_and_search(is_favorite=True)
+        await _compare_list_and_search(rating_min=4)
+        await _compare_list_and_search(include_tags=["共享筛选标签"])
+        await _compare_list_and_search(date_to="2026-12-31")
+
     async def test_media_and_favorite(self, client):
         image = await _insp(media_type="image")
         video = await _insp(media_type="video", file_path="videos/a.mp4")
