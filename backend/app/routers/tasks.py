@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.task import TaskQueue
 from app.models.task_run_log import TaskRunLog
@@ -19,9 +20,8 @@ from app.schemas.task import (
     TaskResultOut,
     TaskRunOut,
 )
-from app.services.task_runner import _broadcast_task_event
+from app.services.task_runners.common import _broadcast_task_event
 from app.utils.time import utcnow
-from app.worker import _STALE_HEARTBEAT_THRESHOLD
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -37,6 +37,14 @@ logger = logging.getLogger(__name__)
 （2026-11-03 评审 P1-2）。完整 result 仍由详情接口 ``GET /api/tasks/{id}`` 提供。
 """
 RESULT_PREVIEW_CHARS = 8192
+
+# 列表/详情共用的轻量列集合：排除大 JSON（result）和仅恢复用的 stage_state。
+# 详情轮询也必须走这里，否则 db.get 仍会把 2.9MB 的 result 读出来。
+_LIGHT_COLUMNS = [
+    column
+    for column in TaskQueue.__table__.columns
+    if column.key not in ("result", "stage_state")
+]
 
 
 def _parse_result_preview(prefix: str | None) -> dict | None:
@@ -136,15 +144,9 @@ async def list_tasks(
         await db.execute(select(func.count()).select_from(TaskQueue).where(*conditions))
     ).scalar() or 0
 
-    columns = [
-        column
-        for column in TaskQueue.__table__.columns
-        # 大 JSON 列不进列表：result 读摘要列，stage_state 只有详情/恢复用
-        if column.key not in ("result", "stage_state")
-    ]
     page_rows = (
         await db.execute(
-            select(*columns)
+            select(*_LIGHT_COLUMNS)
             .where(*conditions)
             .order_by(
                 case((TaskQueue.status == "paused", 0), else_=1),
@@ -157,7 +159,21 @@ async def list_tasks(
 
     # 正常情况直接读 result_summary；只有历史行摘要为空（启动回填尚未跑完/失败）
     # 才退回旧的前缀解析——避免 147 条大结果行摘要整条为空的老问题。
-    missing_ids = [row.id for row in page_rows if row._mapping["result_summary"] is None]
+    missing_ids = [
+        row.id
+        for row in page_rows
+        if row._mapping["result_summary"] is None
+    ]
+    if missing_ids:
+        # 只有 result 非空的历史行才需要前缀回退；pending/running 本来就没有结果
+        with_result = (
+            await db.execute(
+                select(TaskQueue.id).where(
+                    TaskQueue.id.in_(missing_ids), TaskQueue.result.isnot(None)
+                )
+            )
+        ).scalars().all()
+        missing_ids = list(with_result)
     fallback: dict[int, dict | None] = {}
     if missing_ids:
         preview_rows = await db.execute(
@@ -192,10 +208,14 @@ async def get_task_result(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """返回任务完整 result（大字段按需加载；列表/详情默认不再返回）。"""
-    task = await db.get(TaskQueue, task_id)
-    if not task:
+    row = (
+        await db.execute(
+            select(TaskQueue.id, TaskQueue.result).where(TaskQueue.id == task_id)
+        )
+    ).first()
+    if not row:
         raise HTTPException(status_code=404, detail="任务未找到")
-    return {"id": task.id, "result": task.result}
+    return {"id": row[0], "result": row[1]}
 
 
 @router.get("/{task_id}", response_model=TaskOut)
@@ -205,18 +225,19 @@ async def get_task(
 ) -> TaskOut:
     """查询单个任务状态（供前端轮询进度）。
 
-    大结果（>8KB）默认返回 ``result_summary``；完整结果走
-    ``GET /api/tasks/{id}/result``，避免单次轮询拉 2.9MB JSON（2026-11-06 P1-2）。
+    只读取轻量列 + result_summary，不读 result / stage_state；完整结果走
+    ``GET /api/tasks/{id}/result``，避免轮询时反复读取 2.9MB JSON。
     """
-    task = await db.get(TaskQueue, task_id)
-    if not task:
+    row = (
+        await db.execute(
+            select(*_LIGHT_COLUMNS).where(TaskQueue.id == task_id)
+        )
+    ).first()
+    if not row:
         raise HTTPException(status_code=404, detail="任务未找到")
-    out = TaskOut.model_validate(task)
-    # 详情默认只回摘要：小结果摘要与完整 result 等价，大结果避免轮询/详情拉 2.9MB；
-    # 完整结果走显式 GET /api/tasks/{id}/result。
-    if task.result_summary is not None:
-        out.result = task.result_summary
-    return out
+    payload = dict(row._mapping)
+    payload["result"] = payload.get("result_summary")
+    return TaskOut.model_validate(payload)
 
 
 @router.get("/{task_id}/runs", response_model=list[TaskRunOut])
@@ -230,18 +251,21 @@ async def list_task_runs(
     对应 ``task_run_logs`` 表（worker 写入，worker 启动时按保留期清理）。
     此前只有表、没有读接口，排障只能手写 SQL；任务详情页「运行记录」用它。
     """
-    task = await db.get(TaskQueue, task_id)
-    if not task:
+    exists = (
+        await db.execute(select(TaskQueue.id).where(TaskQueue.id == task_id))
+    ).scalar_one_or_none()
+    if exists is None:
         raise HTTPException(status_code=404, detail="任务未找到")
+    # 先取最近 N 条，再翻转为升序返回：重试很多的任务不能只看到最早几次
     rows = (
         await db.execute(
             select(TaskRunLog)
             .where(TaskRunLog.task_id == task_id)
-            .order_by(TaskRunLog.id.asc())
+            .order_by(TaskRunLog.id.desc())
             .limit(limit)
         )
     ).scalars().all()
-    return list(rows)
+    return list(reversed(rows))
 
 
 @router.post("/{task_id}/cancel", response_model=TaskCancelOut)
@@ -276,11 +300,14 @@ async def cancel_task(
         result = await db.execute(
             delete(TaskQueue).where(TaskQueue.id == task_id, TaskQueue.status == "pending")
         )
+        if result.rowcount:
+            # TaskRunLog 没有 DB 级 ON DELETE CASCADE；手动清理，避免孤儿台账
+            await db.execute(delete(TaskRunLog).where(TaskRunLog.task_id == task_id))
         await db.commit()
         if result.rowcount == 0:
             # 竞态：读取 pending 后任务已被 worker 认领为 running（或已被并发删除），
             # 按非 pending 处理，绝不误删正在执行的任务
-            current = await db.get(TaskQueue, task_id)
+            current = await db.get(TaskQueue, task_id, populate_existing=True)
             state = current.status if current else "已删除"
             raise HTTPException(
                 status_code=400,
@@ -317,6 +344,8 @@ async def cancel_task(
                 status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法取消"
             )
         # 取消达到终态：广播 cancelled 事件（安全入口，失败静默降级为轮询）
+        task.status = "cancelled"
+        task.error = "用户手动取消"
         await _broadcast_task_event(task, "cancelled", error="用户手动取消")
         return {"message": "任务已取消", "task_id": task_id}
     raise HTTPException(
@@ -365,6 +394,9 @@ async def pause_task(
         raise HTTPException(
             status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法暂停"
         )
+    task.status = "paused"
+    task.paused_at = utcnow()
+    await _broadcast_task_event(task, "paused")
     return {"message": "任务已暂停", "task_id": task_id}
 
 
@@ -427,6 +459,9 @@ async def resume_task(
         raise HTTPException(
             status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法恢复"
         )
+    task.status = values["status"]
+    task.paused_at = None
+    await _broadcast_task_event(task, values["status"])
     return {"message": "任务已恢复", "task_id": task_id}
 
 
@@ -453,7 +488,9 @@ async def delete_task(
             status_code=400,
             detail="任务状态为 pending，不能删除（如需移除请使用取消操作）",
         )
-    stale_before = utcnow() - timedelta(seconds=_STALE_HEARTBEAT_THRESHOLD)
+    stale_before = utcnow() - timedelta(
+        seconds=settings.worker_stale_heartbeat_threshold_seconds
+    )
     if task.status == "running":
         # 心跳判定与 worker 启动时的僵尸重置（_reset_stale_tasks）一致
         zombie = task.heartbeat_at is None or task.heartbeat_at < stale_before
@@ -479,9 +516,11 @@ async def delete_task(
             ),
         )
     )
+    if result.rowcount:
+        await db.execute(delete(TaskRunLog).where(TaskRunLog.task_id == task_id))
     await db.commit()
     if result.rowcount == 0:
-        current = await db.get(TaskQueue, task_id)
+        current = await db.get(TaskQueue, task_id, populate_existing=True)
         state = current.status if current else "已删除"
         raise HTTPException(
             status_code=400,
