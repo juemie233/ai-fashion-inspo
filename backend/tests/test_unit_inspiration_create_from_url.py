@@ -18,6 +18,8 @@
 
 from io import BytesIO
 
+from sqlalchemy import select
+
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -225,6 +227,22 @@ async def test_import_video_prewarms_keyframes(serve, monkeypatch):
 
 
 # ── 内容重复：必须清理已落盘文件 ──
+
+
+async def test_import_dedupes_blank_and_duplicate_tag_names(serve):
+    """重复/空白标签归一后只建一条关联，不能撞联合唯一约束。"""
+    serve(_FakeResp(_jpeg_bytes((4, 5, 6))))
+    insp = await _import(tag_names=["通勤", " 通勤 ", "", None, "   "])
+
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                select(InspirationTag).where(
+                    InspirationTag.inspiration_id == insp.id
+                )
+            )
+        ).scalars().all()
+    assert len(rows) == 1
 
 
 async def test_import_duplicate_content_cleans_up_files(serve):

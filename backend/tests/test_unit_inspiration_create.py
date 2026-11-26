@@ -47,6 +47,8 @@ def _upload_file(color: tuple[int, int, int] = (12, 34, 56)) -> UploadFile:
         ("http://10.1.2.3/a.jpg", "内网"),  # 私网
         ("http://169.254.169.254/latest/meta-data/", "内网"),  # 云元数据（典型 SSRF 目标）
         ("http://[::1]/a.jpg", "内网"),  # IPv6 回环
+        ("http://100.100.100.200/latest/meta-data/", "内网"),  # CGNAT 云元数据
+        ("http://[::ffff:127.0.0.1]/a.jpg", "内网"),  # IPv4-mapped IPv6
     ],
 )
 def test_validate_download_url_blocks_internal_targets(url: str, expect: str):
@@ -65,6 +67,55 @@ def test_validate_download_url_rejects_invalid_and_unresolvable():
     with pytest.raises(ValidationException) as bad_domain:
         inspiration_create._validate_download_url("https://no-such-host.invalid/a.jpg")
     assert "无法解析" in str(bad_domain.value)
+
+
+
+def test_validate_download_url_rejects_non_http_schemes():
+    with pytest.raises(ValidationException) as exc:
+        inspiration_create._validate_download_url("ftp://example.com/a.jpg")
+    assert "http/https" in str(exc.value)
+
+
+async def test_open_checked_validates_redirect_target(monkeypatch):
+    """重定向目标必须再校验；不能只校验初始公网 URL。"""
+    from types import SimpleNamespace
+
+    from app.exceptions import ValidationException
+
+    class _Resp:
+        is_redirect = True
+        next_request = SimpleNamespace(url="http://169.254.169.254/latest/meta-data/")
+
+        async def aclose(self):
+            return None
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Client:
+        def stream(self, *_args, **_kwargs):
+            return _Ctx()
+
+    seen: list[str] = []
+
+    def _validate(url: str) -> None:
+        seen.append(url)
+        if "169.254" in url:
+            raise ValidationException("url", "内网")
+
+    monkeypatch.setattr(inspiration_create, "_validate_download_url", _validate)
+    with pytest.raises(ValidationException):
+        await inspiration_create._open_checked(
+            _Client(), "https://public.example.com/a.jpg"
+        )
+    assert seen == [
+        "https://public.example.com/a.jpg",
+        "http://169.254.169.254/latest/meta-data/",
+    ]
 
 
 # ── 上传入库的查重分支 ──
