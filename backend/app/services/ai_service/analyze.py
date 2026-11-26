@@ -1,10 +1,12 @@
-"""穿搭分析编排：调用视觉模型分析单张图片并保存提取的标签。
+"""穿搭分析编排：图片单帧 / 视频多帧分析，并保存标签、日志与向量。
 
-analyze_image 原为 227 行的巨型函数，现按阶段拆分为：
+按阶段拆分：
 - _call_ollama_vision：调用 + 截断/上下文窗口重试
 - _parse_and_save_tags：解析响应并保存标签
 - _update_dominant_colors：主色调字段清洗与写回
 - _write_analysis_log：分析日志与标签快照落库
+- analyze_image_detail / analyze_video_detail：对外编排入口
+- analyze_image / analyze_video：保留布尔契约的兼容包装
 主函数只保留编排与向量重建。
 """
 
@@ -90,7 +92,13 @@ async def write_unavailable_log(inspiration_id: str, error: str) -> None:
 
 
 def _prompt_version(prompt: str) -> str:
-    """计算 Prompt 的内容版本（SHA-256 前 8 位），用于追溯分析所用 Prompt。"""
+    """计算 Prompt 的内容版本（SHA-256 前 8 位），用于追溯分析所用 Prompt。
+
+    prompt 为空时返回空串，不能写 sha256("") 的假版本；否则质量看板会把
+    「还没拿到 prompt 就失败」的日志聚成一个独立版本。
+    """
+    if not prompt:
+        return ""
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:8]
 
 
@@ -117,6 +125,7 @@ async def _call_ollama_vision(
     # 上下文窗口：视觉模型对高分辨率图片编码消耗大量 token（实测约 4000），
     # 若沿用 Ollama 默认 4096，输出会被硬性截断（done_reason=length）
     num_ctx = model_cfg["num_ctx"]
+    num_predict_attempt = num_predict
 
     async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
         raw_response = ""
@@ -150,7 +159,7 @@ async def _call_ollama_vision(
                                 "temperature": model_cfg["temperature"],
                                 "top_p": model_cfg["top_p"],
                                 "top_k": model_cfg["top_k"],
-                                "num_predict": num_predict,
+                                "num_predict": num_predict_attempt,
                                 "num_ctx": num_ctx_attempt,
                             },
                         },
@@ -164,15 +173,15 @@ async def _call_ollama_vision(
                         detail = e.response.json().get("error", "")
                     except Exception as exc:
                         logger.debug("_call_ollama_vision: 忽略异常（预期降级）：%s", exc)
-                        pass
                     # 400 + 上下文相关错误：图片 token 超过当前窗口，若还有更大窗口则继续重试
                     if status == 400 and (
                         "context" in detail.lower() or "window" in detail.lower()
                     ):
                         ctx_too_small = True
                         logger.warning(
-                            f"图片超出上下文窗口 (num_ctx={num_ctx_attempt})，"
-                            f"加倍窗口重试: {inspiration_id}"
+                            "图片超出上下文窗口 (num_ctx=%s)，加倍窗口重试: %s",
+                            num_ctx_attempt,
+                            inspiration_id,
                         )
                         break
                     raise RuntimeError(
@@ -180,13 +189,18 @@ async def _call_ollama_vision(
                     ) from e
                 except httpx.TimeoutException:
                     raise RuntimeError(
-                        f"AI 模型响应超时 ({settings.ai_analysis_timeout} 秒)，"
-                        "请检查 Ollama 是否正常运行或尝试增大超时时间"
+                        f"AI 模型响应超时 ({model_cfg['timeout']} 秒，模型 {model_name})，"
+                        "请检查 Ollama 是否正常运行或尝试增大该模型超时时间"
                     ) from None
                 except httpx.ConnectError:
                     raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动") from None
+                except (httpx.ReadError, httpx.RemoteProtocolError) as exc:
+                    raise RuntimeError(f"读取 Ollama 响应失败: {exc}") from None
 
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError as exc:
+                    raise RuntimeError("Ollama 返回了非 JSON 响应") from exc
                 if not isinstance(result, dict) or "message" not in result:
                     raise RuntimeError("Ollama 返回格式异常，缺少 message 字段")
                 raw_response = result["message"].get("content") or ""
@@ -194,16 +208,21 @@ async def _call_ollama_vision(
                     got_complete = True
                     break
                 if raw_response and result.get("done_reason") == "length":
-                    # token 预算耗尽导致的截断：丢弃残缺输出，用更大的上下文窗口重试
+                    # token 预算耗尽：同时提高 num_ctx 与 num_predict；只加倍窗口、
+                    # 输出预算不变时大概率再次截断，白花一轮视觉推理。
                     truncated = True
                     raw_response = ""
+                    num_predict_attempt = min(max(num_predict_attempt * 2, 1024), 8192)
                     logger.warning(
-                        f"输出被 token 预算截断 (done_reason=length, num_ctx={num_ctx_attempt})，"
-                        f"加倍上下文窗口重试: {inspiration_id}"
+                        "输出被 token 预算截断 (done_reason=length, num_ctx=%s, "
+                        "num_predict=%s)，加倍窗口/输出预算重试: %s",
+                        num_ctx_attempt,
+                        num_predict_attempt,
+                        inspiration_id,
                     )
                     break
                 if think:
-                    logger.warning(f"思考模型返回空内容，改用非思考模式重试: {inspiration_id}")
+                    logger.warning("思考模型返回空内容，改用非思考模式重试: %s", inspiration_id)
             if got_complete:
                 break
 
@@ -277,25 +296,34 @@ async def _parse_and_save_tags(
     return tags_data, extracted_tags, error_msg
 
 
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
 async def _update_dominant_colors(
     db: AsyncSession, inspiration_id: str, tags_data: dict
 ) -> None:
-    """更新素材的主色调字段（清理注释后缀与括号描述）。"""
+    """更新素材的主色调字段（只接受 #RRGGBB，清理注释与括号描述）。
+
+    不能把模型输出的 "N/A"、"米白色" 等任意字符串写进 dominant_colors：
+    上传链路用 image_utils 生成的是 hex，混合格式会让主色调筛选和统计失效。
+    """
     if not isinstance(tags_data.get("dominant_colors"), list):
         return
-    clean_colors = []
+    clean_colors: list[str] = []
     for c in tags_data["dominant_colors"]:
-        if isinstance(c, str):
-            # 去除 // 注释和括号描述
-            c = c.split("//")[0].strip()
-            c = re.sub(r"[（(][^)）]*[)）]", "", c).strip()
-            if c:
-                clean_colors.append(c)
+        if not isinstance(c, str):
+            continue
+        # 去除 // 注释和括号描述
+        c = c.split("//")[0].strip()
+        c = re.sub(r"[（(][^)）]*[)）]", "", c).strip()
+        if _HEX_COLOR_RE.match(c) and c.upper() not in clean_colors:
+            clean_colors.append(c.upper())
     if not clean_colors:
         return
     insp = await db.get(Inspiration, inspiration_id)
     if insp:
-        insp.dominant_colors = json.dumps(clean_colors)
+        # 模型要求 2~3 个主色；超过 3 个截断，避免字段无限膨胀
+        insp.dominant_colors = json.dumps(clean_colors[:3], ensure_ascii=False)
         await db.flush()
 
 
@@ -309,7 +337,7 @@ async def _write_analysis_log(
     extracted_tags: list[tuple[str, str, float]],
     model_name: str | None = None,
 ) -> None:
-    """记录分析日志与标签快照（独立事务，即使主流程失败也能写入）。
+    """记录分析日志与标签快照（同一会话写入，失败时回滚，避免脏会话）。
 
     参数:
         model_name: 本次分析所用模型名，缺省回退到全局默认视觉模型
@@ -319,7 +347,7 @@ async def _write_analysis_log(
         log_entry = AIAnalysisLog(
             inspiration_id=inspiration_id,
             model_name=used_model,
-            prompt_version=_prompt_version(prompt),
+            prompt_version=_prompt_version(prompt) if prompt else "",
             model_version=used_model,
             raw_response=raw_response,
             processing_time_ms=processing_time,
@@ -331,16 +359,25 @@ async def _write_analysis_log(
         # 结构化快照：记录「本次分析提取了哪些标签」（仅成功路径），
         # 支撑多版本对比与追溯；快照只引用已有标签，不创建新标签。
         if not error_msg and extracted_tags:
+            # get_or_create_tag 会做 DB 别名归并，提取名可能不是最终 Tag.name；
+            # 快照按最终名反查，避免别名标签在快照里静默缺失。
+            from app.utils.tag_normalizer import normalize_tag_name_async
+
+            name_map: dict[str, str] = {}
+            conf_map: dict[str, float] = {}
+            for name, _category, conf in extracted_tags:
+                actual_name = await normalize_tag_name_async(db, name)
+                name_map[name] = actual_name
+                conf_map[actual_name] = max(conf_map.get(actual_name, 0.0), conf)
             tag_ids = await resolve_tag_ids(
-                db, list(dict.fromkeys(name for name, _, _ in extracted_tags))
+                db, list(dict.fromkeys(name_map.values()))
             )
-            conf_map = {name: conf for name, _, conf in extracted_tags}
-            for name, tag_id in tag_ids.items():
+            for actual_name, tag_id in tag_ids.items():
                 db.add(
                     AIAnalysisTag(
                         log_id=log_entry.id,
                         tag_id=tag_id,
-                        confidence=conf_map.get(name, 0.8),
+                        confidence=conf_map.get(actual_name, 0.8),
                     )
                 )
         await db.commit()
@@ -362,7 +399,7 @@ async def analyze_image_detail(
     model_name: str | None = None,
     prompt: str | None = None,
     apply_tags: bool = True,
-) -> bool:
+) -> AnalysisOutcome:
     """分析单张图片：调用视觉模型并保存提取的标签。
 
     参数:
@@ -389,15 +426,16 @@ async def analyze_image_detail(
     empty_payload = False
 
     try:
+        # 先取配置与 Prompt，再读图：读图失败时日志也能记录真实 prompt_version，
+        # 不再写入 sha256("") 的假版本。
+        model_cfg = get_model_config(used_model)
+        used_prompt = prompt or get_model_prompt(used_model)
+
         image_data, file_size_mb = await _read_image_base64(file_path)
 
         # 图片体积检查 (>5MB 可能导致 Ollama 400)
         if file_size_mb > 5:
             logger.warning(f"图片较大 ({file_size_mb:.1f}MB)，可能导致分析失败: {file_path}")
-
-        # 按当前模型读取独立配置（隔离每个模型的超时与采样参数）
-        model_cfg = get_model_config(used_model)
-        used_prompt = prompt or get_model_prompt(used_model)
 
         # 调用 Ollama 视觉 API（含截断/上下文窗口自动重试）
         raw_response = await _call_ollama_vision(
@@ -408,33 +446,52 @@ async def analyze_image_detail(
         # 与第一轮结论不一致时改写 items（如「黑色过膝袜」验证为连裤袜）。
         # 日志 raw_response 保留模型原始输出以便追溯；验证失败静默按原结果保存。
         tags_data = parse_analysis_response(raw_response)
-        # 「合法但全空」要区分于「解析失败」：前者是模型说「没有穿搭内容」
-        empty_payload = is_empty_tag_payload(tags_data)
+        # 「合法但全空」必须建立在解析成功（非空 dict）上；解析失败不是
+        # 「模型判定没有穿搭内容」，否则下游会物理删除图片。
+        empty_payload = bool(tags_data) and is_empty_tag_payload(tags_data)
         if tags_data:
-            from app.services.ai_service.sock_verify import maybe_verify_socks
+            # 二次验证是增强项：任何未预期异常都只记录并沿用第一轮结果，
+            # 不能让一个验证器把整张图的分析打断。
+            try:
+                from app.services.ai_service.sock_verify import maybe_verify_socks
 
-            tags_data = await maybe_verify_socks(
-                file_path, tags_data, model_cfg, used_model, inspiration_id
-            )
-            # 高风险「双腿并拢」二次裁剪验证：普通站姿/腿不完整时删除该标签
-            from app.services.ai_service.leg_posture_verify import (
-                maybe_verify_leg_posture,
-            )
+                tags_data = await maybe_verify_socks(
+                    file_path, tags_data, model_cfg, used_model, inspiration_id
+                )
+            except Exception as verify_err:
+                logger.exception(
+                    "袜类二次验证异常，沿用第一轮结果 %s: %s",
+                    inspiration_id,
+                    verify_err,
+                )
 
-            tags_data = await maybe_verify_leg_posture(
-                file_path, tags_data, model_cfg, used_model, inspiration_id
-            )
+            try:
+                from app.services.ai_service.leg_posture_verify import (
+                    maybe_verify_leg_posture,
+                )
+
+                tags_data = await maybe_verify_leg_posture(
+                    file_path, tags_data, model_cfg, used_model, inspiration_id
+                )
+            except Exception as verify_err:
+                logger.exception(
+                    "腿部姿态二次验证异常，沿用第一轮结果 %s: %s",
+                    inspiration_id,
+                    verify_err,
+                )
 
         # 解析分析结果并保存标签（tags_data 已预解析，二次验证结果在此生效）
         tags_data, extracted_tags, error_msg = await _parse_and_save_tags(
             db, inspiration_id, raw_response, apply_tags=apply_tags, tags_data=tags_data
         )
-        if apply_tags:
-            # 主色调属于素材字段的写入，与标签合并同受 apply_tags 控制
-            await _update_dominant_colors(db, inspiration_id, tags_data)
-
-        # 提交所有变更
-        await db.commit()
+        if error_msg:
+            # 有错误时不提交半成品：save_tags 可能已清旧标签，rollback 把它恢复。
+            await db.rollback()
+        else:
+            if apply_tags:
+                # 主色调属于素材字段的写入，与标签合并同受 apply_tags 控制
+                await _update_dominant_colors(db, inspiration_id, tags_data)
+            await db.commit()
         success = error_msg is None
 
         # AI 分析完成（单条分析与批量分析共用本函数，均运行于后台任务）：
@@ -452,17 +509,27 @@ async def analyze_image_detail(
                     f"分析完成后重建向量失败（忽略，不影响分析结果）"
                     f"{inspiration_id}: {vec_err}"
                 )
+                # 主事务已提交；此处回滚只清理向量重建留下的脏会话状态，
+                # 否则 finally 里写分析日志会撞 PendingRollbackError。
+                try:
+                    await db.rollback()
+                except Exception as rollback_err:
+                    logger.debug(
+                        "analyze_image_detail 向量失败后回滚异常（预期降级）：%s",
+                        rollback_err,
+                    )
 
     except Exception as e:
         error_msg = str(e)
         success = False
+        # 异常路径不能把「空 payload」传给下游，否则会触发物理删除
+        empty_payload = False
         logger.exception(f"AI 分析失败 {inspiration_id}: {e}")
         # 发生异常时回滚当前事务，确保日志记录不受脏事务影响
         try:
             await db.rollback()
         except Exception as exc:
             logger.debug("analyze_image_detail: 忽略异常（预期降级）：%s", exc)
-            pass
 
     finally:
         processing_time = int((time.time() - start_time) * 1000)
@@ -479,7 +546,12 @@ async def analyze_image_detail(
 
     # 注意：return 必须放在 finally 之外。放在 finally 里会**吞掉** try 块的异常
     # （Python 语义：finally 中的 return 会取代正在传播的异常），导致失败被伪装成正常返回。
-    return AnalysisOutcome(success=success, empty_payload=empty_payload, error=error_msg)
+    return AnalysisOutcome(
+        success=success,
+        # apply_tags=False 的对比分析不修改素材，更不能触发图片物理删除
+        empty_payload=empty_payload and success and apply_tags,
+        error=error_msg,
+    )
 
 
 async def analyze_image(
@@ -513,7 +585,7 @@ async def analyze_video_detail(
     model_name: str | None = None,
     prompt: str | None = None,
     apply_tags: bool = True,
-) -> bool:
+) -> AnalysisOutcome:
     """多帧融合分析视频素材：逐帧调用视觉模型，标签按帧融合后一次性落库。
 
     融合语义（与单图分析「先清后写」语义对齐）：
@@ -537,8 +609,10 @@ async def analyze_video_detail(
         帧都解析成功但一条标签都没得到（无穿搭内容）。视频不做自动删除（仅图片删）。
     """
     if not frame_paths:
-        logger.warning(f"视频分析无可用关键帧: {inspiration_id}")
-        return False
+        message = "视频无可用关键帧"
+        logger.warning("视频分析无可用关键帧: %s", inspiration_id)
+        await write_unavailable_log(inspiration_id, message)
+        return AnalysisOutcome(success=False, error=message)
 
     used_model = model_name or settings.ollama_vision_model
     start_time = time.time()
@@ -581,20 +655,34 @@ async def analyze_video_detail(
     empty_payload = ok_frames > 0 and not fused
     if ok_frames == 0:
         error_msg = "视频全部关键帧分析失败：" + ("；".join(frame_errors[:3]) or "未知错误")
+        empty_payload = False
     elif empty_payload:
-        logger.info(f"视频分析结果无穿搭内容（{ok_frames} 帧均无标签）: {inspiration_id}")
+        # 和图片路径对齐：只有所有帧都是「合法但全空」才算无穿搭内容；
+        # 帧有标签但全部被规则过滤掉，是失败，不能静默离开未分析队列。
+        has_raw_content = any(not is_empty_tag_payload(data) for data in tags_data_list)
+        if has_raw_content:
+            error_msg = "视频关键帧未提取到任何有效标签"
+            empty_payload = False
+        else:
+            logger.info(f"视频分析结果无穿搭内容（{ok_frames} 帧均无标签）: {inspiration_id}")
 
     success = error_msg is None
 
     try:
-        if success and apply_tags:
-            # 先清后写一次（与 save_tags 的「重新分析」语义一致），同名标签
-            # 已按帧融合去重，link_tag 内部还会处理并发与置信度更新
-            await clear_ai_tags(db, inspiration_id)
-            for name, (category, confidence) in fused.items():
-                tag = await get_or_create_tag(db, name, category, "ai_generated")
-                await link_tag(db, inspiration_id, tag.id, confidence=confidence)
-            # 主色调：取首个产出了主色调的帧
+        if success:
+            if apply_tags:
+                # 先清后写一次（与 save_tags 的「重新分析」语义一致），同名标签
+                # 已按帧融合去重，link_tag 内部还会处理并发与置信度更新
+                await clear_ai_tags(db, inspiration_id)
+                for name, (category, confidence) in fused.items():
+                    tag = await get_or_create_tag(db, name, category, "ai_generated")
+                    await link_tag(db, inspiration_id, tag.id, confidence=confidence)
+            else:
+                # 不应用模式也要确保标签存在于 tags 表，否则快照 resolve_tag_ids
+                # 查不到新标签，组合分析的视频快照会静默缺失。
+                for name, (category, _confidence) in fused.items():
+                    await get_or_create_tag(db, name, category, "ai_generated")
+            # 主色调：取首个产出了合法 hex 的帧
             for tags_data in tags_data_list:
                 if isinstance(tags_data.get("dominant_colors"), list) and tags_data["dominant_colors"]:
                     await _update_dominant_colors(db, inspiration_id, tags_data)
@@ -609,15 +697,22 @@ async def analyze_video_detail(
                 await rebuild_inspiration_vectors(db, inspiration_id)
             except Exception as vec_err:
                 logger.warning(f"视频分析完成后重建向量失败（忽略）{inspiration_id}: {vec_err}")
+                try:
+                    await db.rollback()
+                except Exception as rollback_err:
+                    logger.debug(
+                        "analyze_video_detail 向量失败后回滚异常（预期降级）：%s",
+                        rollback_err,
+                    )
     except Exception as e:
         error_msg = error_msg or str(e)
         success = False
+        empty_payload = False
         logger.exception(f"视频分析落库失败 {inspiration_id}: {e}")
         try:
             await db.rollback()
         except Exception as exc:
             logger.debug("analyze_video_detail: 忽略异常（预期降级）：%s", exc)
-            pass
 
     processing_time = int((time.time() - start_time) * 1000)
     extracted = [(name, cat, conf) for name, (cat, conf) in fused.items()]
@@ -635,7 +730,11 @@ async def analyze_video_detail(
         f"视频多帧分析完成 {inspiration_id}: {ok_frames}/{len(frame_paths)} 帧有效，"
         f"融合标签 {len(extracted)} 个，成功={success}"
     )
-    return AnalysisOutcome(success=success, empty_payload=empty_payload, error=error_msg)
+    return AnalysisOutcome(
+        success=success,
+        empty_payload=empty_payload and success,
+        error=error_msg,
+    )
 
 
 async def analyze_video(

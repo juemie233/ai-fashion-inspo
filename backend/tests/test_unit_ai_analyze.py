@@ -18,7 +18,9 @@ import pytest
 
 from app.database import async_session
 from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.tag import InspirationTag
 from app.services.ai_service import analyze as az
+from app.services.ai_tag_saver import save_tags
 
 
 # ── 假 Ollama 客户端 ──
@@ -114,6 +116,7 @@ def test_prompt_version_is_short_hex_hash():
     assert len(v) == 8 and all(c in "0123456789abcdef" for c in v)
     assert v == az._prompt_version("同样的提示词")  # 稳定，可用于版本追溯
     assert v != az._prompt_version("不同的提示词")
+    assert az._prompt_version("") == ""
 
 
 @pytest.mark.parametrize(
@@ -198,6 +201,7 @@ async def test_call_retries_when_output_truncated(_fake_http):
 
     assert out == '{"items": [{"type": "针织开衫"}]}'
     assert _fake_http["client"].calls == 2
+    assert _fake_http["client"].requests[1]["options"]["num_predict"] == 1024
 
 
 async def test_call_raises_truncated_error_when_always_incomplete(_fake_http):
@@ -326,7 +330,7 @@ async def test_analyze_image_success_writes_log_and_tags(_fake_http):
     async with async_session() as db:
         insp = await db.get(Inspiration, "ai1")
     # 主色调清洗：去掉 // 注释与括号描述，空值丢弃
-    assert json.loads(insp.dominant_colors) == ["#ffffff"]
+    assert json.loads(insp.dominant_colors) == ["#FFFFFF"]
 
 
 async def test_analyze_image_apply_tags_false_keeps_material_tags(_fake_http):
@@ -402,9 +406,94 @@ async def test_analyze_image_vector_rebuild_failure_is_swallowed(_fake_http, mon
 # ── analyze_video：多帧融合 ──
 
 
+async def test_zero_valid_tags_reanalysis_keeps_old_ai_tags(_fake_http):
+    """本次标签全被过滤掉时，不能把上一次 AI 标签清空。"""
+    await _insp("ai-zero")
+    async with async_session() as db:
+        await save_tags(db, "ai-zero", {"style": ["极简"]})
+        await db.commit()
+
+    _fake_http["client"] = _FakeOllama([
+        _Resp({"message": {"content": json.dumps({"items": [{"type": "丝袜"}]}, ensure_ascii=False)}})
+    ])
+    async with async_session() as db:
+        outcome = await az.analyze_image_detail(db, "ai-zero", "images/x/ai-zero.jpg")
+
+    assert outcome.success is False
+    assert outcome.empty_payload is False
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                __import__("sqlalchemy").select(InspirationTag).where(
+                    InspirationTag.inspiration_id == "ai-zero"
+                )
+            )
+        ).scalars().all()
+    assert len(rows) == 1
+
+
+async def test_empty_dict_is_not_empty_payload(_fake_http):
+    """{} 是解析失败，不是“无穿搭内容”；不能触发图片物理删除。"""
+    await _insp("ai-empty")
+    _fake_http["client"] = _FakeOllama([_Resp({"message": {"content": "{}"}})])
+    async with async_session() as db:
+        outcome = await az.analyze_image_detail(db, "ai-empty", "images/x/ai-empty.jpg")
+    assert outcome.success is False
+    assert outcome.empty_payload is False
+
+
+async def test_apply_tags_false_never_reports_empty_payload(_fake_http):
+    await _insp("ai-noapply-empty")
+    _fake_http["client"] = _FakeOllama([_Resp({"message": {"content": "{}"}})])
+    async with async_session() as db:
+        outcome = await az.analyze_image_detail(
+            db, "ai-noapply-empty", "images/x/ai-noapply-empty.jpg", apply_tags=False
+        )
+    assert outcome.success is False
+    assert outcome.empty_payload is False
+
+
+async def test_video_apply_tags_false_writes_snapshot(_fake_http):
+    """组合分析视频：不写素材关联，但新标签必须能在快照里解析到。"""
+    await _insp("v10", media_type="video")
+    _fake_http["client"] = _FakeOllama([
+        _Resp({"message": {"content": json.dumps({"items": [{"type": "阔腿裤"}]}, ensure_ascii=False)}})
+    ])
+    async with async_session() as db:
+        outcome = await az.analyze_video_detail(db, "v10", ["kf/1.jpg"], apply_tags=False)
+    assert outcome.success is True
+    async with async_session() as db:
+        logs = (
+            await db.execute(
+                __import__("sqlalchemy").select(AIAnalysisLog).where(
+                    AIAnalysisLog.inspiration_id == "v10"
+                )
+            )
+        ).scalars().all()
+        snapshot = (
+            await db.execute(
+                __import__("sqlalchemy").select(__import__("app.models.inspiration", fromlist=["AIAnalysisTag"]).AIAnalysisTag).where(
+                    __import__("app.models.inspiration", fromlist=["AIAnalysisTag"]).AIAnalysisTag.log_id == logs[0].id
+                )
+            )
+        ).scalars().all()
+    assert snapshot
+
+
 async def test_analyze_video_without_frames_returns_false():
     async with async_session() as db:
         assert await az.analyze_video(db, "v0", []) is False
+
+
+async def test_analyze_video_detail_without_frames_returns_outcome(client):
+    await _insp("v0d", media_type="video")
+    async with async_session() as db:
+        outcome = await az.analyze_video_detail(db, "v0d", [])
+    assert outcome.success is False
+    assert outcome.empty_payload is False
+    assert "无可用关键帧" in (outcome.error or "")
+    logs = await _logs("v0d")
+    assert logs and "无可用关键帧" in (logs[-1].error or "")
 
 
 async def test_analyze_video_fuses_tags_by_max_confidence(_fake_http):
