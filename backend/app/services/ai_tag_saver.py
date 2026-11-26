@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.tag import InspirationTag, Tag
 from app.services.ai_parser import extract_tag_names
 from app.services.tag_service import get_or_create_tag
-from app.utils.leg_posture import normalize_leg_posture
+from app.utils.leg_posture import LEG_POSTURE_CATEGORY, normalize_leg_posture
 from app.utils.tag_compliance import is_bare_garment_word
 from app.utils.tag_normalizer import is_similar_category_tag, normalize_tag_name
 
@@ -127,10 +127,10 @@ def _iter_extracted_tags_raw(data: dict) -> Iterator[tuple[str, str, float]]:
         # 同样兼容历史日志，统一归入新 snake_case 类别
         "atmosphere": "atmosphere",
         "expression": "expression",
-        "leg_posture": "leg_posture",
+        "leg_posture": LEG_POSTURE_CATEGORY,
         "Atmosphere": "atmosphere",
         "Expression": "expression",
-        "Leg_Posture": "leg_posture",
+        "Leg_Posture": LEG_POSTURE_CATEGORY,
     }
 
     # 预先提取风格大类标签名：氛围标签若与风格标签近似（如「甜美」vs「甜美风」），
@@ -162,11 +162,11 @@ def _iter_extracted_tags_raw(data: dict) -> Iterator[tuple[str, str, float]]:
         )
     normalized_leg_tags = normalize_leg_posture(leg_names, attr_names)
     for name in normalized_leg_tags:
-        yield name, "leg_posture", 0.8
+        yield name, LEG_POSTURE_CATEGORY, 0.8
 
     # 处理简单列表型标签（风格、版型等） — 兼容 null 值
     for key, category in category_map.items():
-        if category == "leg_posture":
+        if category == LEG_POSTURE_CATEGORY:
             continue
         values = _as_list(data.get(key))
         for value in values:

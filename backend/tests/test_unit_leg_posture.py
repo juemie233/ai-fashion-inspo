@@ -44,6 +44,38 @@ def test_together_requires_full_body():
     assert _names(data) == []
 
 
+def test_attribute_aliases_and_full_body_whitelist():
+    assert normalize_leg_posture(["双腿并拢"], ["全身照"]) == ["双腿并拢"]
+    assert normalize_leg_posture(["双腿并拢"], ["半身照"]) == []
+    assert normalize_leg_posture(["踮脚"], []) == []
+    assert normalize_leg_posture(["踮脚"], ["全身"]) == ["踮脚"]
+    assert normalize_leg_posture(["单腿抬起"], ["半身照"]) == []
+    assert normalize_leg_posture(["脚踝交叉"], ["七分身"]) == []
+    assert normalize_leg_posture(["屈膝"], []) == ["屈膝"]
+
+
+def test_string_and_whitespace_inputs_are_safe():
+    assert normalize_leg_posture("并拢", " 全身 ") == ["双腿并拢"]
+    assert normalize_leg_posture(" 并拢 ", None) == []
+    assert normalize_leg_posture(["  "], ["全身"]) == []
+    assert normalize_leg_posture([None, 1, "并拢"], ["全身"]) == ["双腿并拢"]
+
+
+def test_new_aliases_and_identity_removed():
+    assert normalize_leg_posture(["翘二郎腿"], ["全身"]) == ["二郎腿"]
+    assert normalize_leg_posture(["双脚交叉"], ["全身"]) == ["脚踝交叉"]
+    assert normalize_leg_posture(["脚尖点地"], ["全身"]) == ["踮脚"]
+    assert normalize_leg_posture(["岔开腿"], ["全身"]) == ["双腿分开"]
+    # 单腿伸展语义不明确，不再错误归一成单腿抬起
+    assert normalize_leg_posture(["单腿伸展"], ["全身"]) == []
+
+
+def test_multiple_relations_and_conflict_are_conservative():
+    assert normalize_leg_posture(["并拢", "屈膝"], ["全身"]) == ["屈膝"]
+    assert normalize_leg_posture(["二郎腿", "双腿交叉"], ["全身"]) == []
+    assert normalize_leg_posture(["跷腿", "二郎腿"], ["全身"]) == ["二郎腿"]
+
+
 def test_verify_parser_and_filter():
     assert _parse_verdict(
         '{"legs_visible":"full","leg_relation":"together","is_default_standing":false}'
