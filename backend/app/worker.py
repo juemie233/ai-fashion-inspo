@@ -11,6 +11,11 @@ worker 与 API 之间通过 task_queue 表解耦。
 人脸扫描与匹配）全局串行。注意：默认 ``worker_concurrency=1`` 时重负载任务会占满
 唯一槽位，轻量任务也要排队；只有并发 >= 2 或多 worker 进程时，“轻量任务不受影响”
 才成立。见 GPU_EXCLUSIVE_TASK_TYPES 的说明。
+
+边界：``asyncio.to_thread`` 里的阻塞调用无法被 ``task.cancel()`` 中断；取消
+任务是协作式的，执行器必须在批次/检查点读取 status 才会停。线程已进入 GPU
+推理时，即使任务被取消/标记 failed，该线程仍可能继续跑完当前调用。这是
+Python 线程模型限制，不是任务状态机可以完全消除的竞态。
 """
 
 import asyncio
@@ -76,6 +81,9 @@ _WATCHDOG_CANCELLED: set[int] = set()
 
 # task_id -> 本次执行台账行 id（看门狗收尾时补 finished_at 用；_run_task_safe 兜底清理）
 _RUN_LOG_IDS: dict[int, int] = {}
+
+# 当前 worker 派生的执行协程：关闭时先取消它们，再把仍 running 的任务放回 pending。
+_ACTIVE_TASKS: dict[asyncio.Task, int] = {}
 
 # 僵尸任务清扫间隔（秒）：worker 运行期周期性执行 _reset_stale_tasks。
 # 仅靠启动时的一次清扫有漏洞：关闭服务后 90s 内快速重启（restart.sh 常见
@@ -206,6 +214,31 @@ def _gpu_model() -> str | None:
     return None
 
 
+async def _commit_with_retry(
+    db: AsyncSession,
+    *,
+    attempts: int = 3,
+    base_delay: float = 0.1,
+) -> None:
+    """提交终态/台账，遇到 SQLite database is locked 短暂退避重试。
+
+    终态写入是任务状态机的最后一步：一次瞬时锁失败不能让任务停在不一致状态。
+    只重试 locked；其它 DB 错误原样抛出，由调用方决定回滚/降级。
+    """
+    last_exc: OperationalError | None = None
+    for attempt in range(attempts):
+        try:
+            await db.commit()
+            return
+        except OperationalError as exc:
+            if "database is locked" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            last_exc = exc
+            await asyncio.sleep(base_delay * (2 ** attempt))
+    if last_exc is not None:  # pragma: no cover - 循环逻辑保证到达时已抛出
+        raise last_exc
+
+
 async def _start_run_log(db: AsyncSession | None, task: TaskQueue) -> int | None:
     """任务开始：写一条运行台账（started_at + GPU + attempt）。
 
@@ -225,7 +258,7 @@ async def _start_run_log(db: AsyncSession | None, task: TaskQueue) -> int | None
                 gpu_model=await asyncio.to_thread(_gpu_model),
             )
             log_db.add(row)
-            await log_db.commit()
+            await _commit_with_retry(log_db)
             await log_db.refresh(row)
             # 本次执行的账本行 id：日志格式里的 run= 字段据此与 task_run_logs 对齐
             run_id_var.set(str(row.id))
@@ -268,7 +301,7 @@ async def _finish_run_log(
             row.status = status
             row.item_count = int(item_count or 0)
             row.error = (error or "")[:2000] or None
-            await log_db.commit()
+            await _commit_with_retry(log_db)
             seconds = (
                 (row.finished_at - row.started_at).total_seconds()
                 if row.started_at and row.finished_at
@@ -402,7 +435,7 @@ async def _run_task(task_id: int, worker_id: str | None = None) -> None:
             task.progress = 100
             task.error = None
             task.next_retry_at = None
-            await db.commit()
+            await _commit_with_retry(db)
             await _finish_run_log(
                 db, run_log_id, status="success", item_count=task.done
             )
@@ -423,7 +456,7 @@ async def _run_task(task_id: int, worker_id: str | None = None) -> None:
                 )
                 return
             await _schedule_retry(db, task, str(e))
-            await db.commit()
+            await _commit_with_retry(db)
             await _finish_run_log(
                 db, run_log_id, status="retry", item_count=task.done, error=str(e)
             )
@@ -444,7 +477,7 @@ async def _run_task(task_id: int, worker_id: str | None = None) -> None:
             task.error = str(e)
             task.next_retry_at = None
             logger.exception(f"任务失败（永久错误，不重试）: #{task.id} ({task.type}): {e}")
-            await db.commit()
+            await _commit_with_retry(db)
             await _finish_run_log(
                 db, run_log_id, status="failed", item_count=task.done, error=str(e)
             )
@@ -470,7 +503,7 @@ async def _run_task(task_id: int, worker_id: str | None = None) -> None:
                 task.error = msg
                 task.next_retry_at = None
                 logger.exception(f"任务失败: #{task.id} ({task.type}): {msg}")
-            await db.commit()
+            await _commit_with_retry(db)
             await _finish_run_log(
                 db,
                 run_log_id,
@@ -578,7 +611,7 @@ async def _fail_stalled_task(task_id: int, reason: str | None = None) -> bool:
             task.error = message
             task.next_retry_at = None
             task.updated_at = utcnow()
-            await db.commit()
+            await _commit_with_retry(db)
             finished = await _finish_run_log(
                 db,
                 _RUN_LOG_IDS.get(task_id),
@@ -721,6 +754,45 @@ async def _heartbeat_loop(worker_id: str) -> None:
         await asyncio.sleep(_HEARTBEAT_INTERVAL)
 
 
+async def _shutdown_release_tasks(worker_id: str) -> None:
+    """进程正常退出：把本 worker 仍 running 的任务放回 pending，且不加重试次数。
+
+    仅在执行协程已被取消后调用；数据库提交失败只记日志（下次启动的
+    _reset_stale_tasks 仍会按心跳超时兜底）。同时删除本 worker 的心跳行。
+    """
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                update(TaskQueue)
+                .where(
+                    TaskQueue.status == "running",
+                    TaskQueue.claimed_by == worker_id,
+                )
+                .values(
+                    status="pending",
+                    error="worker 正常退出，任务已释放待重新认领",
+                    claimed_by=None,
+                    heartbeat_at=None,
+                    updated_at=utcnow(),
+                )
+            )
+            await db.execute(
+                delete(ServiceHeartbeat).where(
+                    ServiceHeartbeat.service_id == worker_id
+                )
+            )
+            await _commit_with_retry(db)
+            if result.rowcount:
+                logger.warning(
+                    "worker 正常退出：已释放 %s 个 running 任务为 pending（不计重试次数）",
+                    result.rowcount,
+                )
+    except Exception:  # noqa: BLE001 —— 退出路径不能把进程卡死
+        logger.exception("worker 退出时释放任务失败（交给下次启动的租约清扫）")
+    # 旧台账不能继续显示进行中；任务已变 pending/不存在，可安全收尾
+    await _finalize_orphan_run_logs()
+
+
 async def _worker_loop(worker_id: str) -> None:
     """worker 主循环：按 worker_concurrency 并发认领并执行任务。
 
@@ -770,6 +842,9 @@ async def _worker_loop(worker_id: str) -> None:
             running = {
                 task: task_id for task, task_id in running.items() if not task.done()
             }
+            for task in list(_ACTIVE_TASKS):
+                if task.done():
+                    _ACTIVE_TASKS.pop(task, None)
             # P1-4：看门狗收尾失败的任务标记不会丢；协程已结束后在这里重试写终态，
             # 避免 DB 瞬时锁导致任务永久停在 running。
             await _retry_pending_watchdog_finalize(set(running.values()))
@@ -778,7 +853,9 @@ async def _worker_loop(worker_id: str) -> None:
                 task_id = await _claim_next_task(worker_id)
                 if task_id is None:
                     break
-                running[asyncio.create_task(_run_task_safe(task_id, worker_id))] = task_id
+                child = asyncio.create_task(_run_task_safe(task_id, worker_id))
+                running[child] = task_id
+                _ACTIVE_TASKS[child] = task_id
             await asyncio.sleep(_POLL_INTERVAL)
         except asyncio.CancelledError:
             raise
@@ -947,6 +1024,17 @@ def _setup_logging() -> None:
     )
 
 
+async def _shutdown_worker(worker_id: str) -> None:
+    """正常关闭：取消本 worker 的执行协程，再释放 running 任务（不加重试次数）。"""
+    active = [task for task in _ACTIVE_TASKS if not task.done()]
+    for task in active:
+        task.cancel()
+    if active:
+        await asyncio.gather(*active, return_exceptions=True)
+    _ACTIVE_TASKS.clear()
+    await _shutdown_release_tasks(worker_id)
+
+
 async def main() -> None:
     """worker 入口：确保表结构、重置遗留任务后启动主循环与心跳循环。"""
     _setup_logging()
@@ -972,6 +1060,7 @@ async def main() -> None:
         await _worker_loop(worker_id)
     finally:
         heartbeat_task.cancel()
+        await _shutdown_worker(worker_id)
 
 
 if __name__ == "__main__":

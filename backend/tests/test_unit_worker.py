@@ -31,6 +31,8 @@ from app.models.task import TaskQueue
 from app.services.task_runners.common import PermanentTaskError, RecoverableTaskError
 from app.worker import (
     _claim_next_task,
+    _commit_with_retry,
+    _shutdown_release_tasks,
     _reload_for_failure,
     _reset_stale_tasks,
     _run_task,
@@ -38,6 +40,8 @@ from app.worker import (
     _worker_loop,
     _write_heartbeat,
 )
+from sqlalchemy.exc import OperationalError
+
 from app.utils.time import utcnow
 
 
@@ -707,4 +711,39 @@ async def test_reset_stale_excludes_current_worker():
 
     await _reset_stale_tasks()
     assert (await _get(tid)).status == "pending"
+
+async def test_commit_with_retry_retries_database_locked():
+    """终态 commit 遇到瞬时 database is locked 要退避重试。"""
+    class _DB:
+        def __init__(self):
+            self.calls = 0
+
+        async def commit(self):
+            self.calls += 1
+            if self.calls < 3:
+                raise OperationalError("UPDATE", {}, Exception("database is locked"))
+
+    db = _DB()
+    await _commit_with_retry(db, base_delay=0)
+    assert db.calls == 3
+
+
+async def test_shutdown_release_tasks_does_not_consume_retry():
+    """正常退出释放 running 任务时不增加 retry_count，并清掉本 worker 心跳。"""
+    task_id = await _task(
+        status="running", claimed_by="w-shutdown", retry_count=1, heartbeat_at=utcnow()
+    )
+    await _write_heartbeat("w-shutdown")
+
+    await _shutdown_release_tasks("w-shutdown")
+
+    row = await _get(task_id)
+    assert row is not None
+    assert row.status == "pending"
+    assert row.retry_count == 1
+    assert row.claimed_by is None
+    assert row.heartbeat_at is None
+    async with async_session() as db:
+        hb = await db.get(ServiceHeartbeat, "w-shutdown")
+        assert hb is None
 

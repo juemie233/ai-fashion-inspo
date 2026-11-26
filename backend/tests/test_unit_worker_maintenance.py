@@ -371,6 +371,8 @@ class TestWorkerMain:
             "finalize_orphans",
             "flush_backfills",
             "worker_loop",
+            # main finally 的优雅退出会再收尾一次孤儿台账
+            "finalize_orphans",
         ]
         # 主循环退出（含取消）时心跳必须被取消，否则进程无法退出。
         # 刚 cancel 时状态是 cancelling（main 不 await 它），因此断言 cancelling()。
