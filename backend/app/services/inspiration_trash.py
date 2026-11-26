@@ -5,6 +5,7 @@
 成功后再移动或删除磁盘文件，避免「文件已动但事务回滚」产生悬空记录。
 """
 
+import asyncio
 import logging
 from datetime import timedelta
 
@@ -76,14 +77,16 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
         paths_changed = False
         for insp in trashed_items:
             try:
-                new_file = move_to_trash(insp.file_path, insp.id)
+                new_file = await asyncio.to_thread(move_to_trash, insp.file_path, insp.id)
                 if new_file:
                     insp.file_path = new_file
                     paths_changed = True
             except OSError as e:
                 logger.warning(f"移动主文件到垃圾桶失败 {insp.id}: {e}")
             try:
-                new_thumb = move_to_trash(insp.thumbnail_path, insp.id, suffix="_thumb")
+                new_thumb = await asyncio.to_thread(
+                    move_to_trash, insp.thumbnail_path, insp.id, suffix="_thumb"
+                )
                 if new_thumb:
                     insp.thumbnail_path = new_thumb
                     paths_changed = True
@@ -129,10 +132,16 @@ async def batch_trash_inspirations(
     if not ordered_ids:
         return {"trashed": 0, "skipped": 0}
 
-    rows = (
-        await db.execute(select(Inspiration).where(Inspiration.id.in_(ordered_ids)))
-    ).scalars().all()
-    by_id = {insp.id: insp for insp in rows}
+    # SQLite 变量上限（旧版 999）：任意长度 ID 列表必须分块查询
+    by_id: dict[str, Inspiration] = {}
+    for start in range(0, len(ordered_ids), 500):
+        chunk = ordered_ids[start:start + 500]
+        rows = (
+            await db.execute(
+                select(Inspiration).where(Inspiration.id.in_(chunk))
+            )
+        ).scalars().all()
+        by_id.update({insp.id: insp for insp in rows})
 
     trashed_items: list[Inspiration] = []
     skipped = 0
@@ -155,15 +164,17 @@ async def batch_trash_inspirations(
     paths_changed = False
     for inspiration in trashed_items:
         try:
-            new_file = move_to_trash(inspiration.file_path, inspiration.id)
+            new_file = await asyncio.to_thread(
+                move_to_trash, inspiration.file_path, inspiration.id
+            )
             if new_file:
                 inspiration.file_path = new_file
                 paths_changed = True
         except OSError as e:
             logger.warning(f"移动主文件到垃圾桶失败 {inspiration.id}: {e}")
         try:
-            new_thumb = move_to_trash(
-                inspiration.thumbnail_path, inspiration.id, suffix="_thumb"
+            new_thumb = await asyncio.to_thread(
+                move_to_trash, inspiration.thumbnail_path, inspiration.id, suffix="_thumb"
             )
             if new_thumb:
                 inspiration.thumbnail_path = new_thumb
@@ -190,16 +201,17 @@ async def _purge_inspiration(
     *,
     action: str,
     detail: str,
+    require_trashed: bool = True,
 ) -> None:
-    """物理删除一个素材：写墓碑 → 删库提交 → 删向量/文件/关键帧 → 写审计。
+    """物理删除一个素材：条件删库 → 提交 → 删文件 → 尽力清向量/关键帧 → 审计。
 
-    顺序与 ``delete_inspiration`` 历史实现一致：**先 DB 落库成功再删磁盘/向量**，
-    避免「文件已删但事务提交失败」产生指向不存在文件的悬空记录。属性在提交前
-    先取出来（``expire_on_commit=False`` 之外再加一层保险）。
+    删除使用带 ``deleted_at IS NOT NULL`` 条件的 DELETE + RETURNING，避免
+    「SELECT 时还在垃圾桶、DELETE 前被恢复」的竞态把活跃素材永久删掉。
 
     Args:
         action: 审计动作名（``delete`` 手动彻底删除 / ``auto_delete_no_content`` 自动清理）。
         detail: 审计详情文案。
+        require_trashed: 是否要求素材仍处于垃圾桶；无内容自动清理传 False。
     """
     from app.services import vector_store
 
@@ -207,26 +219,48 @@ async def _purge_inspiration(
     file_path = inspiration.file_path
     thumbnail_path = inspiration.thumbnail_path
 
-    # 写入墓碑表（防止重复采集：否则删掉的无穿搭素材会被采集器再抓回来）
-    await seal_urls(db, [inspiration.source_url])
+    stmt = delete(Inspiration).where(Inspiration.id == inspiration_id)
+    if require_trashed:
+        stmt = stmt.where(Inspiration.deleted_at.isnot(None))
+    result = await db.execute(stmt.returning(Inspiration.id))
+    deleted_id = result.scalar_one_or_none()
+    if deleted_id is None:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="素材状态已变化（可能已恢复），请刷新后重试",
+        )
 
-    await db.delete(inspiration)
+    # 删除与墓碑同一事务：避免「库删了但 URL 没封」，重新采集回来
+    await seal_urls(db, [inspiration.source_url])
     await db.commit()
 
-    # 记录审计：物理删除不可恢复，必须留痕（写入在主事务提交后）
-    await record_audit_log(action=action, count=1, detail=detail)
+    # 先删本地文件：这一步最便宜、也最需要保证。DB 已提交，后续任何一步失败
+    # 都不能再让文件永久残留。
+    try:
+        await asyncio.to_thread(delete_files, file_path, thumbnail_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("物理删除素材文件失败（忽略） %s: %s", inspiration_id, exc)
 
-    # 提交成功后同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
+    # 向量/关键帧是尽力清理，不能阻断审计；失败只记日志
     if vector_store.is_lancedb_available():
-        await vector_store.delete_inspiration_vectors(inspiration_id)
+        try:
+            await vector_store.delete_inspiration_vectors(inspiration_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("物理删除素材向量失败（忽略） %s: %s", inspiration_id, exc)
 
-    # 物理删除文件（删除失败仅记日志，不抛异常）
-    delete_files(file_path, thumbnail_path)
+    try:
+        from app.services.video_service import cleanup_keyframes
 
-    # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
-    from app.services.video_service import cleanup_keyframes
+        await cleanup_keyframes(inspiration_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("物理删除素材关键帧失败（忽略） %s: %s", inspiration_id, exc)
 
-    await cleanup_keyframes(inspiration_id)
+    # 审计最后写：即使前面清理失败，也要留下「谁在什么时候删的」
+    try:
+        await record_audit_log(action=action, count=1, detail=detail)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("物理删除素材审计失败（忽略） %s: %s", inspiration_id, exc)
 
 
 async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
@@ -282,6 +316,7 @@ async def hard_delete_no_content(db: AsyncSession, inspiration_id: str) -> bool:
         inspiration,
         action="auto_delete_no_content",
         detail=f"AI 判定无穿搭内容（全空标签），自动物理删除 {inspiration_id}",
+        require_trashed=False,
     )
     return True
 
@@ -324,14 +359,18 @@ async def trash_inspiration(
     # 形成自愈。文件缺失时 move_to_trash 返回 None，同样保留原路径。
     paths_changed = False
     try:
-        new_file = move_to_trash(inspiration.file_path, inspiration.id)
+        new_file = await asyncio.to_thread(
+                move_to_trash, inspiration.file_path, inspiration.id
+            )
         if new_file:
             inspiration.file_path = new_file
             paths_changed = True
     except OSError as e:
         logger.warning(f"移动主文件到垃圾桶失败 {inspiration.id}: {e}")
     try:
-        new_thumb = move_to_trash(inspiration.thumbnail_path, inspiration.id, suffix="_thumb")
+        new_thumb = await asyncio.to_thread(
+            move_to_trash, inspiration.thumbnail_path, inspiration.id, suffix="_thumb"
+        )
         if new_thumb:
             inspiration.thumbnail_path = new_thumb
             paths_changed = True
@@ -399,17 +438,30 @@ async def restore_inspiration(
     if inspiration.source_url:
         from app.models.scraper import ScraperSeenURL
 
-        await db.execute(
-            delete(ScraperSeenURL).where(
-                ScraperSeenURL.source_url == inspiration.source_url
+        # 同一来源页可能有多张图：还有其它图在垃圾桶时不能解除墓碑，
+        # 否则采集器会把仍在垃圾桶的图重新抓回来。永久删除留下的墓碑
+        # 无法与临时墓碑区分，这里只做能确认的部分。
+        others = await db.scalar(
+            select(func.count())
+            .select_from(Inspiration)
+            .where(
+                Inspiration.source_url == inspiration.source_url,
+                Inspiration.id != inspiration.id,
+                Inspiration.deleted_at.isnot(None),
             )
         )
+        if not others:
+            await db.execute(
+                delete(ScraperSeenURL).where(
+                    ScraperSeenURL.source_url == inspiration.source_url
+                )
+            )
     try:
         await db.commit()
     except IntegrityError:
         # 并发竞态：恢复期间同平台 ID 被新素材抢先入库，撞部分唯一索引。
-        # 恢复标记随事务回滚（素材仍在垃圾桶），转 409 提示用户重试
-        # （from None：原始 IntegrityError 是内部实现细节，对用户没有意义）
+        # 先回滚，避免 session 卡在 pending-rollback 状态；恢复标记随事务回滚。
+        await db.rollback()
         raise HTTPException(
             status_code=409,
             detail="恢复失败：该平台 ID 已被其它素材占用（并发冲突），请刷新后重试",
@@ -417,14 +469,18 @@ async def restore_inspiration(
 
     paths_changed = False
     try:
-        new_file = restore_from_trash(inspiration.file_path)
+        new_file = await asyncio.to_thread(
+            restore_from_trash, inspiration.file_path, inspiration.id, ""
+        )
         if new_file:
             inspiration.file_path = new_file
             paths_changed = True
     except OSError as e:
         logger.warning(f"恢复主文件失败 {inspiration.id}: {e}")
     try:
-        new_thumb = restore_from_trash(inspiration.thumbnail_path)
+        new_thumb = await asyncio.to_thread(
+            restore_from_trash, inspiration.thumbnail_path, inspiration.id, "_thumb"
+        )
         if new_thumb:
             inspiration.thumbnail_path = new_thumb
             paths_changed = True
@@ -467,7 +523,9 @@ async def list_trash(
         await db.execute(select(func.count()).select_from(query.subquery()))
     ).scalar() or 0
 
-    query = query.order_by(Inspiration.deleted_at.desc()).offset((page - 1) * size).limit(size)
+    query = query.order_by(
+        Inspiration.deleted_at.desc(), Inspiration.id.desc()
+    ).offset((page - 1) * size).limit(size)
     result = await db.execute(query)
     return result.unique().scalars().all(), total
 
@@ -493,28 +551,43 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
         conds.append(Inspiration.deleted_at < cutoff)
 
     result = await db.execute(select(Inspiration).where(*conds))
-    items = result.scalars().all()
-    if not items:
+    candidates = result.scalars().all()
+    if not candidates:
         return {"deleted": 0, "freed_bytes": 0, "message": "垃圾桶已空"}
 
-    deleted_ids = [insp.id for insp in items]
-    urls_to_seal = [insp.source_url for insp in items if insp.source_url]
+    candidate_ids = [insp.id for insp in candidates]
+    # 条件 DELETE + RETURNING：只清理真正仍处于垃圾桶的 id，避免 SELECT 与
+    # DELETE 之间被恢复的素材被误物理删除。
+    delete_result = await db.execute(
+        delete(Inspiration)
+        .where(
+            Inspiration.id.in_(candidate_ids),
+            Inspiration.deleted_at.isnot(None),
+        )
+        .returning(Inspiration.id)
+    )
+    purged_ids = set(delete_result.scalars().all())
+    items = [insp for insp in candidates if insp.id in purged_ids]
+    if not items:
+        await db.rollback()
+        return {"deleted": 0, "freed_bytes": 0, "message": "垃圾桶已变化，未删除任何素材"}
 
-    # 先删数据库记录并写墓碑（同一事务），提交成功后再物理删除文件
-    for insp in items:
-        await db.delete(insp)
+    urls_to_seal = [insp.source_url for insp in items if insp.source_url]
     await seal_urls(db, urls_to_seal)
     await db.commit()
 
     freed_bytes = 0
     for insp in items:
-        freed_bytes += delete_files_counting(insp.file_path, insp.thumbnail_path)
+        freed_bytes += await asyncio.to_thread(
+            delete_files_counting, insp.file_path, insp.thumbnail_path
+        )
 
     # 后面两步是「尽力清理」，不能阻断审计：DB 记录已经删了，清理失败最多留孤儿
     # 文件/向量；若异常冒泡跳过审计，就成了「清空了垃圾桶但没人知道」（审查发现）。
     try:
         # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
-        await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+        if vector_store.is_lancedb_available():
+            await vector_store.delete_inspiration_vectors_batch(list(purged_ids))
     except Exception as e:  # noqa: BLE001 —— 审计优先
         logger.warning(f"清空垃圾桶时删除向量失败（忽略，不影响审计）: {e}")
 
@@ -522,7 +595,7 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
         # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
         from app.services.video_service import cleanup_keyframes_batch
 
-        await cleanup_keyframes_batch(deleted_ids)
+        await cleanup_keyframes_batch(list(purged_ids))
     except Exception as e:  # noqa: BLE001 —— 同上
         logger.warning(f"清空垃圾桶时清理关键帧失败（忽略，不影响审计）: {e}")
 

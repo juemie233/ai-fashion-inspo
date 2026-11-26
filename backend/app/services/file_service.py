@@ -322,7 +322,9 @@ def move_to_trash(rel_path: str, inspiration_id: str, suffix: str = "") -> str |
     return dst.relative_to(settings.storage_root).as_posix()
 
 
-def restore_from_trash(rel_path: str) -> str | None:
+def restore_from_trash(
+    rel_path: str, inspiration_id: str | None = None, suffix: str = ""
+) -> str | None:
     """将垃圾桶目录中的文件移回对应媒体目录，返回新的相对路径。
 
     根据文件名后缀与扩展名推断目标目录：
@@ -331,10 +333,19 @@ def restore_from_trash(rel_path: str) -> str | None:
     - 其余（图片） → ``images/{月份}/``
 
     文件不存在时返回 None（调用方据此容错，不阻断恢复流程）。
+    传入 ``inspiration_id`` 时，若 DB 路径失效（文件已移到 trash/ 但第二次
+    commit 失败），按 ``trash/{id}{suffix}*`` 反查，修复路径不一致窗口。
     """
     if not rel_path:
         return None
     src = settings.storage_root / rel_path
+    if not src.exists() and inspiration_id:
+        matches = sorted(settings.trash_dir.glob(f"{inspiration_id}{suffix}*.*"))
+        if suffix == "":
+            # 主文件兜底不能抢缩略图（{id}_thumb.*）
+            matches = [m for m in matches if "_thumb" not in m.stem]
+        if matches:
+            src = matches[0]
     if not src.exists():
         return None
 
