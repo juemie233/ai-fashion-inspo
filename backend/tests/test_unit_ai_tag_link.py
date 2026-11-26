@@ -18,12 +18,11 @@
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from app.database import async_session
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
-from app.services.ai_tag_saver import guess_color_from_hex, link_tag, normalize_color
+from app.services.ai_tag_saver import guess_color_from_hex, link_tag
 
 
 async def _insp(insp_id: str = "link-1") -> str:
@@ -206,6 +205,8 @@ def test_guess_color_from_hex_supports_short_form():
     [
         ("", ""),
         ("黑色", "黑色"),
+        ("黑", "黑色"),  # 单字颜色也要归一
+        ("纯黑", "黑色"),  # 同义词归一
         ("#黑色", "黑色"),  # 中文但带 #
         ("BLACK", "黑色"),
         ("#black", "黑色"),
@@ -213,9 +214,12 @@ def test_guess_color_from_hex_supports_short_form():
         ("#FFFFFF", "白色"),
         ("#808080", "灰色"),
         ("#8B4513", "棕色"),  # 精确命中颜色表
-        ("#000039", "深蓝色"),  # 前缀模糊匹配：按颜色表顺序取首个命中
-        ("C8C832", "橙色"),  # 不带 # 前缀（模型输出常见）也要能认
-        ("#C832C8", ""),  # 红蓝并列且绿很低：无法归类 → 空串
+        ("#000039", "深蓝色"),  # 精确命中深蓝表
+        ("#f1a0d6", "粉色"),  # 小写 hex 也必须命中
+        ("#FFFAF0", "白色"),  # 不再被 3 位前缀误判为黄色
+        ("#FF8FA3", "粉色"),  # 不再被 3 位前缀误判为橙色
+        ("C8C832", "黄色"),  # HSV：黄绿色相
+        ("#C832C8", "品红"),  # HSV：品红色相
     ],
 )
 def test_normalize_color_formats(raw, expect):

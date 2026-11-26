@@ -1,6 +1,11 @@
 """ai_tag_saver 纯函数单测：标签提取迭代、跨大类近似去重。"""
 
-from app.services.ai_tag_saver import iter_extracted_tags
+from sqlalchemy import select
+
+from app.database import async_session
+from app.models.inspiration import Inspiration
+from app.models.tag import InspirationTag
+from app.services.ai_tag_saver import iter_extracted_tags, save_tags
 
 
 def _names_by_category(data: dict) -> dict[str, list[str]]:
@@ -199,8 +204,8 @@ def test_bare_shoe_word_dropped_from_type():
     by_cat = _names_by_category(data)
     # 裸鞋词丢弃；带颜色/款式修饰的保留；同单品 color 照常产出
     assert by_cat.get("item_type") == ["黑色乐福鞋", "尖头细跟高跟凉鞋"]
-    # 乐福鞋(裸type被丢但color保留) + 黑色乐福鞋 各带一个「黑色」
-    assert by_cat.get("color") == ["黑色", "黑色"]
+    # 同一颜色被两个单品重复输出时只保留一次（snapshot 唯一约束需要）
+    assert by_cat.get("color") == ["黑色"]
 
 
 def test_bare_shoe_word_dropped_from_design_detail_and_material():
@@ -214,6 +219,74 @@ def test_bare_shoe_word_dropped_from_design_detail_and_material():
     assert by_cat.get("design_detail") == ["尖头"]
     assert by_cat.get("material") == ["皮革"]
     assert by_cat.get("item_type") == ["黑色高跟鞋"]
+
+
+def test_null_type_and_features_do_not_crash_or_emit_none():
+    """type/color/features 为 null 时不能崩溃，也不能写出名为 "None" 的标签。"""
+    data = {
+        "items": [
+            {"type": None, "color": None, "features": None},
+            {"type": "黑色过膝袜", "color": "黑色", "features": "纯色、长筒"},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    assert "None" not in by_cat.get("item_type", [])
+    assert by_cat.get("item_type") == ["黑色过膝袜"]
+    assert by_cat.get("color") == ["黑色"]
+    assert by_cat.get("body_part") == ["纯色", "长筒"]
+
+
+def test_items_string_list_treated_as_item_type():
+    data = {"items": ["针织开衫", "半身裙"]}
+    by_cat = _names_by_category(data)
+    assert by_cat.get("item_type") == ["针织开衫", "半身裙"]
+
+
+def test_duplicate_tags_are_deduped_across_items():
+    data = {
+        "items": [
+            {"type": "黑色乐福鞋", "color": "黑色"},
+            {"type": "黑色乐福鞋", "color": "黑色"},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    assert by_cat.get("item_type") == ["黑色乐福鞋"]
+    assert by_cat.get("color") == ["黑色"]
+
+
+def test_non_dict_input_is_safe():
+    assert list(iter_extracted_tags(None)) == []
+    assert list(iter_extracted_tags("bad")) == []
+
+
+async def test_save_tags_empty_does_not_clear_previous_ai_tags(client):
+    """解析失败/空结果不能清掉上一次 AI 标签。"""
+    async with async_session() as db:
+        db.add(
+            Inspiration(
+                id="saver-empty",
+                source_type="douyin",
+                file_path="images/2026-11/saver-empty.jpg",
+                media_type="image",
+            )
+        )
+        await db.commit()
+        await save_tags(db, "saver-empty", {"style": ["法式"]})
+        await db.commit()
+
+    async with async_session() as db:
+        assert await save_tags(db, "saver-empty", None) == 0
+        await db.commit()
+
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                select(InspirationTag).where(
+                    InspirationTag.inspiration_id == "saver-empty"
+                )
+            )
+        ).scalars().all()
+    assert len(rows) == 1
 
 
 def test_bare_hosiery_kept_when_has_color():
