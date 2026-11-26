@@ -1,6 +1,8 @@
 """灵感素材查询：列表分页筛选、详情、主色调统计。"""
 
 import asyncio
+import json
+import logging
 import re
 from datetime import date, timedelta
 from typing import Any
@@ -20,12 +22,11 @@ from app.models.inspiration import (
 )
 from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
-import logging
 
 logger = logging.getLogger(__name__)
 
 
-_ISO_DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def inclusive_date_upper_bound(value: str) -> str:
@@ -39,7 +40,7 @@ def inclusive_date_upper_bound(value: str) -> str:
     走这里，别各页面自己加一天——加在前端会漏掉其它客户端，也让已保存的
     智能合集条件继续少一天。
     """
-    if not _ISO_DATE_ONLY.match(value):
+    if not _ISO_DATE_ONLY.fullmatch(value):
         return value
     try:
         return (date.fromisoformat(value) + timedelta(days=1)).isoformat()
@@ -132,8 +133,18 @@ def rating_sort_clauses(sort: str) -> list[ColumnElement]:
     if sort == "rating_asc":
         return [Inspiration.rating.asc(), *tie_breakers]
     if sort == "unrated_first":
+        # 历史数据 rating 可能为 NULL，不能只把 0 当未评分
         return [
-            case((Inspiration.rating == 0, 0), else_=1).asc(),
+            case(
+                (
+                    or_(
+                        Inspiration.rating.is_(None),
+                        Inspiration.rating == 0,
+                    ),
+                    0,
+                ),
+                else_=1,
+            ).asc(),
             *tie_breakers,
         ]
     return []
@@ -203,14 +214,22 @@ async def list_inspirations(
             Inspiration.source_type != "generated",
         )
         query = query.where(cond if ai_suspected else not_(cond))
-    if rating_min is not None:
-        # 评分筛选：rating >= rating_min；rating_min=0 时所有未删除素材（含未评分 0）都通过
+    if rating_min is not None and rating_min > 0:
+        # rating_min<=0 时所有未删除素材都通过；NULL >= 0 为 NULL，不能把
+        # 历史未评分数据误排除。
         query = query.where(Inspiration.rating >= rating_min)
     if unrated:
         # 随机评分页优先取未评分素材；历史数据里 rating 可能是 NULL，不能只判 == 0
         query = query.where(or_(Inspiration.rating.is_(None), Inspiration.rating == 0))
     if dominant_color:
-        query = query.where(Inspiration.dominant_colors.contains(dominant_color))
+        # 存的是 JSON 数组字符串，匹配带引号的完整颜色值；否则 "#fff" 会命中
+        # "#fff000"。历史值大小写不统一，统一按小写比较。
+        color_needle = f'"{dominant_color.lower()}"'
+        query = query.where(
+            func.lower(Inspiration.dominant_colors).contains(
+                color_needle, autoescape=True
+            )
+        )
     if date_from:
         query = query.where(Inspiration.created_at >= date_from)
     if date_to:
@@ -234,11 +253,15 @@ async def list_inspirations(
     # 分析状态筛选（done/error 基于「最新一条」标签分析日志，与卡片状态一致）
     if analysis_status in ("done", "error"):
         latest = latest_analysis_log_subquery()
-        error_cond = (
-            (AIAnalysisLog.error.isnot(None)) & (AIAnalysisLog.error != "")
-            if analysis_status == "error"
-            else AIAnalysisLog.error.is_(None)
-        )
+        if analysis_status == "error":
+            error_cond = (AIAnalysisLog.error.isnot(None)) & (
+                AIAnalysisLog.error != ""
+            )
+        else:
+            # done 与 error 必须互补：空字符串错误也算成功，否则两边都查不到
+            error_cond = or_(
+                AIAnalysisLog.error.is_(None), AIAnalysisLog.error == ""
+            )
         query = query.where(
             Inspiration.id.in_(
                 select(AIAnalysisLog.inspiration_id)
@@ -279,12 +302,20 @@ async def list_inspirations(
         if rated_filter is not None:
             query = query.where(rated_filter)
 
+    # 先统计总数，再做 ORDER BY/JOIN：count 子查询里不应白算排序、tag_count
+    # 聚合或 random()。
+    if sort != "largest":
+        total = (
+            await db.execute(select(func.count()).select_from(query.subquery()))
+        ).scalar() or 0
+
     # 排序
     sort_map = {
-        "newest": Inspiration.created_at.desc(),
-        "oldest": Inspiration.created_at.asc(),
-        "updated": Inspiration.updated_at.desc(),
-        "random": func.random(),  # 随机洗牌：每次请求重新随机
+        "newest": (Inspiration.created_at.desc(), Inspiration.id.desc()),
+        "oldest": (Inspiration.created_at.asc(), Inspiration.id.asc()),
+        "updated": (Inspiration.updated_at.desc(), Inspiration.id.desc()),
+        # 随机洗牌：每次请求重新随机；调用方不能把 random 当可稳定翻页的列表
+        "random": (func.random(),),
     }
 
     # largest 排序：SQLite 无法按磁盘文件大小排序，改为取全量 (id, file_path)
@@ -298,7 +329,9 @@ async def list_inspirations(
         # 复用与主查询完全一致的筛选条件（含 NOT_DELETED 与用户筛选），
         # 否则取出的 size_rows 与筛选结果错位，导致翻页错乱/空页
         where_clause = query.whereclause
-        size_query = select(Inspiration.id, Inspiration.file_path)
+        size_query = select(Inspiration.id, Inspiration.file_path).order_by(
+            Inspiration.id
+        )
         if where_clause is not None:
             size_query = size_query.where(where_clause)
         size_rows = (await db.execute(size_query)).all()
@@ -308,15 +341,20 @@ async def list_inspirations(
             if not row[1]:
                 return 0
             try:
-                p = settings.storage_root / row[1]
-                return p.stat().st_size if p.exists() else 0
+                return (settings.storage_root / row[1]).stat().st_size
             except OSError as exc:
+                # 文件缺失/无权限按 0；stat 本身已包含存在性判断，不再 exists()
                 logger.debug("_file_size: 忽略异常（预期降级）：%s", exc)
                 return 0
 
         def _sort_by_size() -> list[str]:
             """按文件实际大小降序取页内 ID（同步 stat 为阻塞 I/O，线程池执行）。"""
-            ordered = sorted(size_rows, key=_file_size, reverse=True)
+            ordered = sorted(
+                size_rows,
+                # 同大小（尤缺失文件都为 0）按 id 倒序，保证翻页稳定
+                key=lambda r: (_file_size(r), r[0]),
+                reverse=True,
+            )
             return [r[0] for r in ordered[(page - 1) * size : page * size]]
 
         page_ids = await asyncio.to_thread(_sort_by_size)
@@ -346,6 +384,7 @@ async def list_inspirations(
         ).order_by(
             func.coalesce(tag_count_sub.c.cnt, 0).desc(),
             Inspiration.created_at.desc(),
+            Inspiration.id.desc(),
         )
     elif sort == "favorite_time":
         # 收藏时间倒序（最近收藏在前；未收藏 / 历史无收藏时间的排最后）。
@@ -358,12 +397,9 @@ async def list_inspirations(
     elif sort in RATING_SORTS:
         query = query.order_by(*rating_sort_clauses(sort))
     else:
-        query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
-
-    # 统计总数
-    count_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
+        query = query.order_by(
+            *sort_map.get(sort, sort_map["newest"])
+        )
 
     # 分页
     query = query.offset((page - 1) * size).limit(size)
@@ -394,19 +430,22 @@ def build_filters_from_query_json(query_json: dict) -> list[ColumnElement[bool]]
         keyword = keyword.strip()
         matching_tag_ids = select(InspirationTag.inspiration_id).join(
             Tag, InspirationTag.tag_id == Tag.id
-        ).where(Tag.name.contains(keyword))
+        ).where(Tag.name.contains(keyword, autoescape=True))
         conditions.append(
             or_(
-                Inspiration.source_author.contains(keyword),
-                Inspiration.file_path.contains(keyword),
+                Inspiration.source_author.contains(keyword, autoescape=True),
+                Inspiration.file_path.contains(keyword, autoescape=True),
                 Inspiration.id.in_(matching_tag_ids),
             )
         )
 
     # 标签：tag_id 存储，AND/OR 两种组合语义（AND：须同时包含所有标签）
-    tag_ids = query_json.get("tag_ids")
-    if isinstance(tag_ids, list) and tag_ids:
-        tag_ids = [t for t in tag_ids if isinstance(t, int)]
+    raw_tag_ids = query_json.get("tag_ids")
+    tag_ids = (
+        [t for t in raw_tag_ids if isinstance(t, int) and not isinstance(t, bool)]
+        if isinstance(raw_tag_ids, list)
+        else []
+    )
     if tag_ids:
         tag_mode = query_json.get("tag_mode")
         if tag_mode not in ("and", "or"):
@@ -471,8 +510,6 @@ async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
     从 dominant_colors 的 JSON 数组字符串解析去重计数，仅统计未删除素材；
     返回按出现次数降序的颜色列表，避免前端硬编码可能不存在的色板。
     """
-    import json
-
     result = await db.execute(
         select(Inspiration.dominant_colors).where(
             NOT_DELETED, Inspiration.dominant_colors.isnot(None)
@@ -488,7 +525,8 @@ async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
         if isinstance(colors, list):
             for c in colors:
                 if isinstance(c, str) and c:
-                    counter[c] = counter.get(c, 0) + 1
+                    normalized = c.lower()
+                    counter[normalized] = counter.get(normalized, 0) + 1
 
     top = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
     return [{"color": c, "count": n} for c, n in top]

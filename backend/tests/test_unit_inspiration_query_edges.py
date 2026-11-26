@@ -126,6 +126,8 @@ def test_inclusive_date_upper_bound_passthrough_for_datetime_and_invalid():
     # 非法日期（正则匹配但 date.fromisoformat 失败）原样返回：空结果好过 500
     assert inclusive_date_upper_bound("2026-13-40") == "2026-13-40"
     assert inclusive_date_upper_bound("") == ""
+    # fullmatch：末尾带换行不能被当成纯日期
+    assert inclusive_date_upper_bound("2026-01-15\n") == "2026-01-15\n"
 
 
 # ── 评分排序子句 ──
@@ -189,7 +191,7 @@ async def test_list_dominant_colors_counts_and_skips_invalid(client):
 
     assert colors == [
         {"color": "#000000", "count": 2},
-        {"color": "#FFFFFF", "count": 1},  # 垃圾桶素材不计
+        {"color": "#ffffff", "count": 1},  # 垃圾桶素材不计
     ]
 
     async with async_session() as db:
@@ -270,6 +272,11 @@ async def test_build_filters_tag_and_or_semantics(client):
     # 非法 tag_mode 回退 AND；非 int 元素被过滤
     assert await _match({"tag_ids": [commute, casual], "tag_mode": "xor"}) == set()
     assert await _match({"tag_ids": [commute, "x"]}) == {"f-a"}
+    # 非 list 容器/布尔值必须忽略，不能进入 for 循环抛 TypeError
+    assert await _match({"tag_ids": 5}) == {"f-a", "f-b", "f-c"}
+    assert await _match({"tag_ids": "abc"}) == {"f-a", "f-b", "f-c"}
+    assert await _match({"tag_ids": {"x": 1}}) == {"f-a", "f-b", "f-c"}
+    assert await _match({"tag_ids": [True, commute]}) == {"f-a"}
 
 
 async def test_build_filters_source_media_favorite_rating(client):
@@ -438,13 +445,28 @@ async def test_list_inspirations_analysis_status_uses_latest_log(client):
     await _log("an-ok", error="旧失败")
     await _log("an-ok", error=None)
     await _log("an-error", error="模型超时")
+    await _insp("an-empty-error", created=datetime(2026, 1, 4))
+    await _log("an-empty-error", error="")
 
     done, done_total = await _list_ids(analysis_status="done")
-    assert set(done) == {"an-ok"}
-    assert done_total == 1
+    assert set(done) == {"an-ok", "an-empty-error"}
+    assert done_total == 2
     assert set((await _list_ids(analysis_status="error"))[0]) == {"an-error"}
     pending = set((await _list_ids(analysis_status="pending"))[0])
     assert pending == {"an-pending"}
+
+
+async def test_rating_null_is_unrated_and_passes_rating_min_zero(client):
+    """历史 NULL 评分必须按未评分处理；rating_min=0 不能把 NULL 排除。"""
+    await _insp("n-null", created=datetime(2026, 1, 1), rating=None)
+    await _insp("n-zero", created=datetime(2026, 1, 2), rating=0)
+    await _insp("n-five", created=datetime(2026, 1, 3), rating=5)
+
+    ids, _ = await _list_ids(sort="unrated_first")
+    assert set(ids[:2]) == {"n-null", "n-zero"}
+
+    ids, _ = await _list_ids(rating_min=0)
+    assert "n-null" in ids
 
 
 async def test_analysis_log_filter_excludes_quality_check_logs(client):
