@@ -70,8 +70,9 @@ def test_default_prompt_contains_new_dimensions():
     assert '"design_detail"' in _DEFAULT_AI_ANALYSIS_PROMPT
     assert '"material"' in _DEFAULT_AI_ANALYSIS_PROMPT
     assert '"atmosphere"' in _DEFAULT_AI_ANALYSIS_PROMPT
-    # 2026-11-24：腿部姿态新词表与可见性门控
-    assert "双腿并拢" in _DEFAULT_AI_ANALYSIS_PROMPT
+    # 2026-11-26：500 张标注后 `双腿并拢` 改为仅人工维护，不再允许 AI 输出
+    assert "- 双腿并拢：" not in _DEFAULT_AI_ANALYSIS_PROMPT
+    assert "禁止输出“并拢”/“双腿并拢”" in _DEFAULT_AI_ANALYSIS_PROMPT
     assert "二郎腿" in _DEFAULT_AI_ANALYSIS_PROMPT
     assert "半身/七分取景" in _DEFAULT_AI_ANALYSIS_PROMPT
     # 颜色约束：新口径要求颜色写在 type 开头（替代旧"颜色一律写入 color 字段"）；
