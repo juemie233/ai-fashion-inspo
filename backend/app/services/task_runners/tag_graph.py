@@ -4,8 +4,9 @@
 任务 result：analyze_tag_network 的返回结构（节点含社区/中心度/桥接标记 + 边 + 社区摘要）。
 
 暂停/恢复机制：
-- 执行期间每阶段检查 task.status，若为 paused 则保存中间状态并返回；
-- 恢复时从 last_stage + stage_state 续算，不重复已完成部分。
+- 暂停会把任务标为 paused，执行器在批次边界停止（当前网络图分析没有可靠的
+  阶段快照写入，恢复后由 worker 重新认领并幂等重跑）；
+- 若未来写入 stage_state，执行器会优先使用它续算。
 """
 
 import logging
@@ -54,8 +55,8 @@ async def execute_tag_network_analyze(db: AsyncSession, task: TaskQueue) -> None
     """执行网络图分析（由 worker 调用），结果写入任务 result。
 
     支持暂停/恢复：
-    - 若任务状态为 paused（从 resume 接口触发），从 stage_state 续算；
-    - 执行期间若被外部标记为 cancelled/paused，保存状态并返回。
+    - 恢复统一由 worker 重新认领 pending；
+    - 仅当存在 stage_state 时续算，否则从头幂等重跑。
     """
     from app.services.tag_graph import analyze_tag_network
 
@@ -65,14 +66,11 @@ async def execute_tag_network_analyze(db: AsyncSession, task: TaskQueue) -> None
     await db.commit()
 
     params = task.result or {}
-    resume_state = None
-    if task.status == "paused":
-        # 恢复模式：从暂停状态续算
-        resume_state = task.stage_state
-        if resume_state:
-            logger.info(f"恢复网络图分析任务: #{task.id}，阶段 {task.last_stage}")
-        else:
-            logger.info(f"恢复网络图分析任务: #{task.id}，无保存状态，从头开始")
+    resume_state = task.stage_state
+    if resume_state:
+        logger.info("恢复网络图分析任务: #%s，阶段 %s", task.id, task.last_stage)
+    else:
+        logger.info("网络图分析任务从头开始: #%s", task.id)
 
     result = await analyze_tag_network(
         db,

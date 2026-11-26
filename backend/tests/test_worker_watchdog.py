@@ -225,28 +225,18 @@ async def test_finalize_orphan_run_logs_只收尾非running任务的台账():
             started_at=utcnow() - timedelta(hours=5),
             status="running",
         )
-        missing_log = TaskRunLog(
-            task_id=999_999,
-            task_type="batch_analyze",
-            attempt=0,
-            started_at=utcnow() - timedelta(hours=5),
-            status="running",
-        )
-        db.add_all([running_log, done_log, missing_log])
+        db.add_all([running_log, done_log])
         await db.commit()
         await db.refresh(running_log)
         await db.refresh(done_log)
-        await db.refresh(missing_log)
-        log_ids = (running_log.id, done_log.id, missing_log.id)
+        log_ids = (running_log.id, done_log.id)
 
     await worker._finalize_orphan_run_logs()
 
     async with async_session() as db:
         running_row = await db.get(TaskRunLog, log_ids[0])
         done_row = await db.get(TaskRunLog, log_ids[1])
-        missing_row = await db.get(TaskRunLog, log_ids[2])
         assert running_row is not None and running_row.status == "running"
         assert done_row is not None and done_row.status == "failed"
         assert done_row.finished_at is not None
         assert "台账未收尾" in (done_row.error or "")
-        assert missing_row is not None and missing_row.status == "failed"

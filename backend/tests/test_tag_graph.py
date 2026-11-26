@@ -268,8 +268,11 @@ async def test_network_analyze_pause_resume(client, upload):
 
         async with async_session() as db3:
             task = await db3.get(TaskQueue, task_id)
-            assert task.status == "running"
+            assert task.status == "pending"
             assert task.paused_at is None
+            # 模拟 worker 认领后执行
+            task.status = "running"
+            await db3.commit()
 
         # 执行完成
         await execute_tag_network_analyze(db3, task)

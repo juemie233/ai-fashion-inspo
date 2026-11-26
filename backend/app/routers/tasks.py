@@ -408,8 +408,9 @@ async def resume_task(
     """恢复任务（tag_network_analyze / batch_analyze / multi_analyze / quality_check /
     f2_import / vector_backfill 支持）：
 
-    - ``tag_network_analyze``（网络图分析，断点续算）：恢复为 ``running``，
-      保留 last_stage 与 stage_state，由执行器从中续算；
+    - 所有可暂停类型（含 ``tag_network_analyze``）恢复为 ``pending``，由 worker
+      重新认领执行；``tag_network_analyze`` 目前没有可靠的阶段快照，按幂等重跑处理，
+      不再置成没有执行者的 ``running``；
     - ``batch_analyze`` / ``multi_analyze``（批量/组合分析）：恢复为 ``pending``
       并清空认领信息，由 worker 重新认领执行；执行器按「已有成功分析日志的
       素材跳过」幂等续算，进度不丢失。
@@ -434,20 +435,16 @@ async def resume_task(
             ),
         )
 
-    if task.type == "tag_network_analyze":
-        # 恢复为 running，保留 last_stage 和 stage_state
-        values = {"status": "running", "paused_at": None, "updated_at": utcnow()}
-    else:
-        # 批量/组合分析：放回 pending 由 worker 重新认领（幂等续算），
-        # 清空认领/心跳/暂停标记；next_retry_at 保持 None 立即可认领
-        values = {
-            "status": "pending",
-            "claimed_by": None,
-            "heartbeat_at": None,
-            "paused_at": None,
-            "next_retry_at": None,
-            "updated_at": utcnow(),
-        }
+    # 所有可暂停类型统一放回 pending：worker 只认领 pending；置 running 会
+    # 形成无人执行的僵尸（tag_network 没有可靠阶段快照，按幂等重跑）。
+    values = {
+        "status": "pending",
+        "claimed_by": None,
+        "heartbeat_at": None,
+        "paused_at": None,
+        "next_retry_at": None,
+        "updated_at": utcnow(),
+    }
     result = await db.execute(
         update(TaskQueue)
         .where(TaskQueue.id == task_id, TaskQueue.status == "paused")

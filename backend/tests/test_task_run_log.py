@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, text
 
 from app.database import async_session
 from app.models.task import TaskQueue
@@ -141,3 +141,42 @@ async def test_task_runs_api_返回台账(client):
 
     # 不存在的任务返回 404（与 /api/tasks/{id} 口径一致）
     assert client.get("/api/tasks/99999999/runs").status_code == 404
+
+
+async def test_task_run_log_cascades_when_task_deleted(client):
+    """台账外键 ON DELETE CASCADE：直接删任务也不能留下孤儿台账。"""
+    from app.utils.time import utcnow
+
+    async with async_session() as db:
+        task = TaskQueue(type="batch_analyze", status="failed", total=1, done=0, result={})
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        task_id = task.id
+        db.add(
+            TaskRunLog(
+                task_id=task_id,
+                task_type="batch_analyze",
+                attempt=0,
+                started_at=utcnow(),
+                status="failed",
+            )
+        )
+        await db.commit()
+
+        fk_rows = (
+            await db.execute(text("PRAGMA foreign_key_list(task_run_logs)"))
+        ).all()
+        assert any(
+            row[2] == "task_queue" and (row[6] or "").upper() == "CASCADE"
+            for row in fk_rows
+        ), fk_rows
+
+        await db.execute(delete(TaskQueue).where(TaskQueue.id == task_id))
+        await db.commit()
+        left = (
+            await db.execute(
+                select(TaskRunLog).where(TaskRunLog.task_id == task_id)
+            )
+        ).scalars().all()
+        assert left == []

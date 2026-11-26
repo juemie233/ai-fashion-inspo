@@ -126,9 +126,12 @@ class TestCleanupOldAnalyzeLogs:
 class TestCleanupOldRunLogs:
     async def test_disabled_keeps_rows(self, client, monkeypatch):
         async with async_session() as db:
+            task = TaskQueue(type="batch_analyze", status="success", total=1, done=1)
+            db.add(task)
+            await db.flush()
             db.add(
                 TaskRunLog(
-                    task_id=1,
+                    task_id=task.id,
                     task_type="batch_analyze",
                     started_at=utcnow() - timedelta(days=500),
                     status="success",
@@ -145,16 +148,20 @@ class TestCleanupOldRunLogs:
     async def test_deletes_only_expired_rows(self, client, monkeypatch, logs):
         monkeypatch.setattr(wk.settings, "task_run_log_retention_days", 90)
         async with async_session() as db:
+            t1 = TaskQueue(type="batch_analyze", status="success", total=1, done=1)
+            t2 = TaskQueue(type="batch_analyze", status="running", total=1, done=0)
+            db.add_all([t1, t2])
+            await db.flush()
             db.add_all(
                 [
                     TaskRunLog(
-                        task_id=1,
+                        task_id=t1.id,
                         task_type="batch_analyze",
                         started_at=utcnow() - timedelta(days=200),
                         status="success",
                     ),
                     TaskRunLog(
-                        task_id=2,
+                        task_id=t2.id,
                         task_type="batch_analyze",
                         started_at=utcnow() - timedelta(days=1),
                         status="running",
@@ -162,6 +169,7 @@ class TestCleanupOldRunLogs:
                 ]
             )
             await db.commit()
+            kept_task_id = t2.id
 
         await wk._cleanup_old_run_logs()
 
@@ -169,7 +177,7 @@ class TestCleanupOldRunLogs:
 
         async with async_session() as db:
             rows = (await db.execute(select(TaskRunLog.task_id))).scalars().all()
-        assert rows == [2]  # 只删超过 90 天的
+        assert rows == [kept_task_id]  # 只删超过 90 天的
         assert any("删除 1 条" in line for line in logs.infos)
 
     async def test_failure_is_logged_not_raised(self, monkeypatch, logs):
@@ -209,12 +217,6 @@ class TestFinalizeOrphanRunLogs:
                     status="running",
                 ),
                 TaskRunLog(
-                    task_id=999999,  # 任务行不存在（历史遗留孤儿）
-                    task_type="batch_analyze",
-                    started_at=utcnow(),
-                    status="running",
-                ),
-                TaskRunLog(
                     task_id=done_task.id,
                     task_type="batch_analyze",
                     started_at=utcnow() - timedelta(days=3),
@@ -229,7 +231,7 @@ class TestFinalizeOrphanRunLogs:
             return [log.id for log in logs]
 
     async def test_only_orphans_and_finished_tasks_are_finalized(self, client, logs):
-        running_id, finished_id, orphan_id, already_done_id = await self._seed()
+        running_id, finished_id, already_done_id = await self._seed()
 
         await wk._finalize_orphan_run_logs()
 
@@ -244,7 +246,6 @@ class TestFinalizeOrphanRunLogs:
         assert rows[running_id].status == "running"  # 任务还在跑：不能动
         assert rows[finished_id].status == "failed"  # 任务已结束：台账收尾
         assert rows[finished_id].finished_at is not None
-        assert rows[orphan_id].status == "failed"  # 任务行不存在：孤儿收尾
         assert rows[already_done_id].status == "success"  # 已是终态：不动
         assert any("台账收尾" in line for line in logs.warnings)
 

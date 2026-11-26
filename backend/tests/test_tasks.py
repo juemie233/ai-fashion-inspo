@@ -449,13 +449,13 @@ async def test_resume_multi_analyze_requeues_pending(client):
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "pending"
 
 
-async def test_resume_tag_network_keeps_running(client):
-    """恢复标签网络分析：维持既有语义（恢复为 running 断点续算），不受批量改动影响。"""
+async def test_resume_tag_network_requeues_pending(client):
+    """恢复标签网络分析：统一回 pending，由 worker 重新认领；不能置成无人执行的 running。"""
     tid = await _add_task(status="paused", type_="tag_network_analyze")
 
     r = client.post(f"/api/tasks/{tid}/resume")
     assert r.status_code == 200, r.text
-    assert client.get(f"/api/tasks/{tid}").json()["status"] == "running"
+    assert client.get(f"/api/tasks/{tid}").json()["status"] == "pending"
 
 
 async def test_resume_non_paused_rejected(client):

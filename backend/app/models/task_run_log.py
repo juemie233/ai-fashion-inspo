@@ -3,15 +3,15 @@
 与 `task_queue` 的分工：
 - `task_queue` 是**当前状态**：排队/运行/完成，会被重试与清理覆盖；
 - `task_run_logs` 是**历史台账**：谁在什么时间跑了多久、处理多少、用的哪张显卡。
-  任务被删除/重试都不会丢掉已完成的记录；每条执行尝试独立一行（attempt 为
-  worker 的 retry_count 快照），因此「中途崩溃后重跑」也能看清。
+  每次执行尝试独立一行（attempt 为 worker 的 retry_count 快照），因此
+  「中途崩溃后重跑」也能看清；任务被物理删除时按 FK ON DELETE CASCADE 一并清理。
 
 GPU 型号由 `nvidia-smi` 探测一次并缓存；探测不到就存 NULL（不猜）。
 """
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -29,7 +29,11 @@ class TaskRunLog(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(Integer, index=True)
+    task_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("task_queue.id", ondelete="CASCADE"),
+        index=True,
+    )
     task_type: Mapped[str] = mapped_column(String(32), index=True)
     # worker 认领时的重试次数快照：0=首次执行，1=第一次重试，……
     attempt: Mapped[int] = mapped_column(Integer, default=0, index=True)

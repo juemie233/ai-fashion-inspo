@@ -431,11 +431,47 @@ async def _run_task(task_id: int, worker_id: str | None = None) -> None:
                     db, run_log_id, task, error="任务执行期间被外部取消/暂停/接管"
                 )
                 return
+            # 成功终态用带条件的 SQL 更新：refresh 与 commit 之间仍可能被
+            # 取消/暂停/新 worker 接管；OR 更新不能把外部状态覆盖成 success。
+            await db.flush()
+            success_stmt = update(TaskQueue).where(
+                TaskQueue.id == task.id,
+                TaskQueue.status == "running",
+            )
+            if worker_id:
+                success_stmt = success_stmt.where(
+                    TaskQueue.claimed_by == worker_id
+                )
+            success_result = await db.execute(
+                success_stmt.values(
+                    status="success",
+                    progress=100,
+                    error=None,
+                    next_retry_at=None,
+                    updated_at=utcnow(),
+                )
+            )
+            if success_result.rowcount == 0:
+                await db.rollback()
+                current = await db.get(
+                    TaskQueue, task.id, populate_existing=True
+                )
+                if current and current.status == "cancelled":
+                    await _broadcast_task_event(
+                        current, "cancelled", error=current.error
+                    )
+                await _finish_foreign_run_log(
+                    db,
+                    run_log_id,
+                    current,
+                    error="任务完成时已被外部取消/暂停/接管",
+                )
+                return
+            await _commit_with_retry(db)
             task.status = "success"
             task.progress = 100
             task.error = None
             task.next_retry_at = None
-            await _commit_with_retry(db)
             await _finish_run_log(
                 db, run_log_id, status="success", item_count=task.done
             )
