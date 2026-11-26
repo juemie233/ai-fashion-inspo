@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
-# 一键跑全部质量门禁（与 .github/workflows/ci.yml 对齐：本地先绿，再推）。
-#   bash scripts/ci/test.sh          全部门禁（后端默认排除 slow / system 用例）
-#   bash scripts/ci/test.sh --cov    后端额外输出行级覆盖率报告（term-missing）
-#   bash scripts/ci/test.sh --slow   后端把 slow 长耗时用例加回本次运行（system 仍排除）
-#   bash scripts/ci/test.sh --e2e    跑完 15 项后再跑 Playwright（需后端在跑，可选/nightly）
+# 一键跑质量门禁（与 .github/workflows/ci.yml 对齐：本地先绿，再推）。
+#
+# 默认是**按改动范围裁剪**：只改后端就只跑后端与文档生成物，不跑前端/移动端；
+# 只改 docs 就只跑第 15 项。识别逻辑收敛在 scripts/ci/gate_scope.py（有单元测试），
+# 无法识别的文件会保守回退全量，`--all` 永远可强制跑满 15 项。
+#
+# 用法：
+#   bash scripts/ci/test.sh                 按改动范围执行（默认）
+#   bash scripts/ci/test.sh --all           强制全量 15 项（推送前/发版/大改）
+#   bash scripts/ci/test.sh --dry-run       只打印「本次会跑哪几项」，不执行
+#   bash scripts/ci/test.sh --base=<ref>    指定对比基准（默认 origin/master → origin/main → 工作区）
+#   bash scripts/ci/test.sh --staged        只看暂存区（pre-commit 场景）
+#   bash scripts/ci/test.sh --files=a,b     显式指定改动文件（排查/脚本化场景）
+#   bash scripts/ci/test.sh --cov           后端额外输出行级覆盖率报告（term-missing）
+#   bash scripts/ci/test.sh --slow          后端把 slow 长耗时用例加回本次运行（system 仍排除）
+#   bash scripts/ci/test.sh --e2e           跑完门禁后再跑 Playwright（需后端在跑，可选/nightly）
 #
 # 门禁清单（顺序即输出编号）：
 #    1. 后端 pytest 日常集（默认 `not slow and not system`，与 CI 一致；`--slow` 时为 `not system`）
@@ -13,7 +24,7 @@
 #    4. 后端 mypy 棘轮（只查已清零的模块，列表只增不减）
 #    5. 迁移链自检（空库 upgrade head → 结构必须与 ORM 一致）
 #    6. 真实库漂移（ORM ↔ 现有库；无库环境自动跳过）
-#    7. 脚本规范（只读连接 / CLI 入口）
+#    7. 脚本规范（只读连接 / CLI 入口）+ 门禁计划自检
 #    8. 前端 vue-tsc 类型检查
 #    9. 前端 vitest
 #   10. 前端 eslint（带 --max-warnings 棘轮：只能降不能升，当前 34）
@@ -22,6 +33,8 @@
 #   13. 移动端类型检查（tsc）+ 单元测试（jest-expo + RNTL，含覆盖率门槛）
 #   14. 子项目最低测试（browser-extension 纯函数；face-service 存储层，无 venv 时跳过）
 #   15. 文档生成物与代码一致（docs/overview 的 API参考 / 数据模型 / 配置项参考）
+#
+# 各步骤的触发条件（改哪类文件会跑哪些项）见 docs/overview/门禁增量执行方案.md。
 #
 # 依赖：Python 3.12+（可用 PYTHON_BIN 覆盖，如 PYTHON_BIN=py）、Node 20+、web/node_modules。
 # 前端一律用 node 直接调用本地二进制，规避 npx/npm 包装脚本在受限 PowerShell 下的执行策略问题。
@@ -34,14 +47,80 @@ PY="${PYTHON_BIN:-python}"
 COV=""
 RUN_E2E=0
 SLOW=0
+DRY_RUN=0
+PLANNER_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --cov) COV="--cov" ;;
     --slow) SLOW=1 ;;
     --e2e) RUN_E2E=1 ;;
-    *) echo "未知参数：$arg（支持 --cov / --slow / --e2e）" >&2; exit 2 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --all|--staged|--no-worktree) PLANNER_ARGS+=("$arg") ;;
+    --base=*|--files=*) PLANNER_ARGS+=("$arg") ;;
+    *)
+      echo "未知参数：$arg" >&2
+      echo "支持：--all / --dry-run / --base=<ref> / --staged / --files=a,b / --cov / --slow / --e2e" >&2
+      exit 2
+      ;;
   esac
 done
+
+# ── 改动范围 → 本次执行计划 ─────────────────────────────────────────────
+if [[ "$DRY_RUN" == "1" ]]; then
+  "$PY" "$ROOT/scripts/ci/gate_scope.py" ${PLANNER_ARGS[@]+"${PLANNER_ARGS[@]}"}
+  exit 0
+fi
+
+if ! PLAN_OUT="$("$PY" "$ROOT/scripts/ci/gate_scope.py" --format=bash ${PLANNER_ARGS[@]+"${PLANNER_ARGS[@]}"} 2>&1)"; then
+  # 识别失败时宁可贵一点也要跑全：门禁的价值是拦住问题，不是省时间
+  echo "⚠️ 改动范围识别失败，回退全量门禁：" >&2
+  echo "$PLAN_OUT" >&2
+  PLAN_OUT="$("$PY" "$ROOT/scripts/ci/gate_scope.py" --all --format=bash)"
+fi
+eval "$PLAN_OUT"
+
+if [[ -n "${GATE_WARNINGS:-}" ]]; then
+  echo "⚠️ 门禁范围提示："
+  while IFS= read -r line; do [[ -n "$line" ]] && echo "   - $line"; done <<< "$GATE_WARNINGS"
+fi
+
+if [[ "${GATE_EMPTY:-0}" == "1" ]]; then
+  echo ""
+  echo "本次没有检测到待检查改动（相对基准无提交、工作区/暂存区也没有改动）。"
+  echo "如需强制全量门禁：bash scripts/ci/test.sh --all"
+  exit 0
+fi
+
+RUNNING=0
+SKIPPED=0
+run_header() {
+  RUNNING=$((RUNNING + 1))
+  echo ""
+  echo "===== [${1}/15] ${2} ====="
+}
+skip_step() {
+  SKIPPED=$((SKIPPED + 1))
+  local name_var="GATE_NAME_$1" reason_var="GATE_SKIP_REASON_$1"
+  echo ""
+  echo "----- [${1}/15] 跳过：${!name_var}"
+  echo "      原因：${!reason_var}"
+}
+step_enabled() {
+  local var="GATE_STEP_$1"
+  [[ "${!var:-1}" == "1" ]]
+}
+
+echo ""
+echo "===== 改动范围：${GATE_CHANGED_COUNT:-0} 个文件，按需执行 ${GATE_RUN_COUNT:-15}/15 项门禁 ====="
+if [[ "${GATE_FULL:-0}" == "1" ]]; then
+  echo "（全量模式：--all / CI workflow_dispatch）"
+fi
+if [[ "${GATE_RUN_COUNT:-15}" == "0" ]]; then
+  echo ""
+  echo "本次改动无需执行自动门禁（仅涉及仓库说明 / Rust 试点 / 无自动校验目标等范围）。"
+  echo "如需强制全量：bash scripts/ci/test.sh --all"
+  exit 0
+fi
 
 # pytest marker 分层：日常集与 CI 一致（不含 slow / system）；`--slow` 只把 slow
 # 长耗时用例加回来，system 仍然排除——L2 系统测试会起真 uvicorn/worker 子进程，
@@ -54,104 +133,152 @@ else
   MARKER="not slow and not system"
 fi
 
-echo "===== 1/15 后端测试 + 覆盖率棘轮（≥82.9%）+ 关键模块地板 ====="
-cd "$ROOT/backend"
-# 覆盖率底线是**棘轮**：只能往上调。当前 83.02%（2026-11-04 实测），本轮提到 82.9。
-# 注意 backend/.coveragerc 的 precision=2：不设它时覆盖率按整数四舍五入比较，
-# 门槛会「看起来没过、退出码却是 0」（门禁放水）。
-# --cov 参数只影响报告详略（不传则只看被跳过的文件），阈值始终生效。
-if [[ "$COV" == "--cov" ]]; then
-  TZ=UTC "$PY" -m pytest -m "$MARKER" --cov --cov-fail-under=82.9 --cov-report=term-missing
+if step_enabled 1; then
+  run_header 1 "后端测试 + 覆盖率棘轮（≥82.9%）+ 关键模块地板"
+  cd "$ROOT/backend"
+  # 覆盖率底线是**棘轮**：只能往上调。
+  # 注意 backend/.coveragerc 的 precision=2：不设它时覆盖率按整数四舍五入比较，
+  # 门槛会「看起来没过、退出码却是 0」（门禁放水）。
+  # --cov 参数只影响报告详略（不传则只看被跳过的文件），阈值始终生效。
+  if [[ "$COV" == "--cov" ]]; then
+    TZ=UTC "$PY" -m pytest -m "$MARKER" --cov --cov-fail-under=82.9 --cov-report=term-missing
+  else
+    TZ=UTC "$PY" -m pytest -m "$MARKER" --cov --cov-fail-under=82.9 --cov-report=term:skip-covered
+  fi
+  # 全局覆盖率会掩盖关键模块的薄弱：worker/出图/搜索/AI 设置单独设地板
+  "$PY" scripts/check_module_coverage.py
 else
-  TZ=UTC "$PY" -m pytest -m "$MARKER" --cov --cov-fail-under=82.9 --cov-report=term:skip-covered
-fi
-# 全局覆盖率会掩盖关键模块的薄弱：worker/出图/搜索/AI 设置单独设地板
-"$PY" scripts/check_module_coverage.py
-
-echo ""
-echo "===== 2/15 后端 lint（ruff，零告警：app + 脚本目录）====="
-cd "$ROOT/backend"
-# 脚本目录也纳入：2026-10-28 在 fetch_xhs_following.py 里发现「def 被注释吞掉」的
-# 真损坏（模块能导入、函数却不存在），正是「脚本不 lint」才会潜伏下来的问题
-"$PY" -m ruff check app scripts ../scripts
-
-echo ""
-echo "===== 3/15 后端死代码（vulture，置信度 80 必须 0 条）====="
-cd "$ROOT/backend"
-"$PY" -m vulture app --min-confidence 80
-
-echo ""
-echo "===== 4/15 后端类型（mypy 棘轮）====="
-cd "$ROOT/backend"
-"$PY" scripts/check_types.py
-
-echo ""
-echo "===== 5/15 迁移链自检（空库 → 与 ORM 一致）====="
-cd "$ROOT/backend"
-"$PY" scripts/check_fresh_migrations.py
-
-echo ""
-echo "===== 6/15 库结构漂移（ORM ↔ 现有库）====="
-cd "$ROOT/backend"
-"$PY" scripts/check_alembic_drift.py
-
-echo ""
-echo "===== 7/15 脚本规范（只读连接 / CLI 入口）====="
-cd "$ROOT"
-"$PY" scripts/ci/check_scripts.py
-
-echo ""
-echo "===== 8/15 前端类型检查（vue-tsc）====="
-cd "$ROOT/web"
-node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
-
-echo ""
-echo "===== 9/15 前端测试（vitest + 覆盖率）====="
-cd "$ROOT/web"
-node node_modules/vitest/vitest.mjs run --coverage
-
-echo ""
-echo "===== 10/15 前端 lint（eslint，棘轮 34）====="
-cd "$ROOT/web"
-node node_modules/eslint/bin/eslint.js . --max-warnings 34
-
-echo ""
-echo "===== 11/15 前端死代码基线（ts-prune + Vue 组件引用）====="
-cd "$ROOT"
-node scripts/ci/check-web-dead-code.mjs
-node scripts/ci/check-web-unused-components.mjs
-
-echo ""
-echo "===== 12/15 前端格式（只查改动文件）====="
-cd "$ROOT"
-node scripts/ci/check-web-format.mjs
-
-echo ""
-echo "===== 13/15 移动端（tsc + jest）====="
-cd "$ROOT/mobile"
-# 移动端没有独立的 lint 脚本，类型检查用 tsc；测试含「非 <Text> 节点下不许有裸字符串」
-# 的断言，专门防只有原生 RN 才会拦的白屏（见 CLAUDE.md）
-node node_modules/typescript/bin/tsc --noEmit
-node node_modules/jest/bin/jest.js --ci --coverage
-
-echo ""
-echo "===== 14/15 子项目最低测试（浏览器插件 / 人脸子服务）====="
-cd "$ROOT"
-node --test browser-extension/test-extract-images.mjs
-if [[ -x "$ROOT/face-service/.venv/Scripts/python.exe" ]]; then
-  cd "$ROOT/face-service"
-  .venv/Scripts/python.exe -m unittest -q test_storage.py
-else
-  echo "[skip] face-service/.venv 不存在；CI 的 subprojects job 会覆盖该测试"
+  skip_step 1
 fi
 
-echo ""
-echo "===== 15/15 文档生成物与代码一致（API / 数据模型 / 配置项）====="
-cd "$ROOT"
-# 这三份文档由代码生成（scripts/data/gen_docs_from_code.py），手改会被判「与代码不一致」。
-# 放在最后：它最便宜，但前面的门禁更重要——先让真问题先报，别让文档 diff 掩盖测试失败。
-# 报红时按提示重跑：python scripts/data/gen_docs_from_code.py
-"$PY" scripts/data/gen_docs_from_code.py --check
+if step_enabled 2; then
+  run_header 2 "后端 lint（ruff，零告警：app + 脚本目录）"
+  cd "$ROOT/backend"
+  # 脚本目录也纳入：2026-10-28 在 fetch_xhs_following.py 里发现「def 被注释吞掉」的
+  # 真损坏（模块能导入、函数却不存在），正是「脚本不 lint」才会潜伏下来的问题
+  "$PY" -m ruff check app scripts ../scripts
+else
+  skip_step 2
+fi
+
+if step_enabled 3; then
+  run_header 3 "后端死代码（vulture，置信度 80 必须 0 条）"
+  cd "$ROOT/backend"
+  "$PY" -m vulture app --min-confidence 80
+else
+  skip_step 3
+fi
+
+if step_enabled 4; then
+  run_header 4 "后端类型（mypy 棘轮）"
+  cd "$ROOT/backend"
+  "$PY" scripts/check_types.py
+else
+  skip_step 4
+fi
+
+if step_enabled 5; then
+  run_header 5 "迁移链自检（空库 → 与 ORM 一致）"
+  cd "$ROOT/backend"
+  "$PY" scripts/check_fresh_migrations.py
+else
+  skip_step 5
+fi
+
+if step_enabled 6; then
+  run_header 6 "库结构漂移（ORM ↔ 现有库）"
+  cd "$ROOT/backend"
+  "$PY" scripts/check_alembic_drift.py
+else
+  skip_step 6
+fi
+
+if step_enabled 7; then
+  run_header 7 "脚本规范（只读连接 / CLI 入口）+ 门禁计划自检"
+  cd "$ROOT"
+  "$PY" scripts/ci/check_scripts.py
+  # 只改 scripts/ 时不会触发 pytest，门禁计划器自身的分类/回退逻辑在这里兜底自检
+  "$PY" scripts/ci/gate_scope.py --self-test
+else
+  skip_step 7
+fi
+
+if step_enabled 8; then
+  run_header 8 "前端类型检查（vue-tsc）"
+  cd "$ROOT/web"
+  node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
+else
+  skip_step 8
+fi
+
+if step_enabled 9; then
+  run_header 9 "前端测试（vitest + 覆盖率）"
+  cd "$ROOT/web"
+  node node_modules/vitest/vitest.mjs run --coverage
+else
+  skip_step 9
+fi
+
+if step_enabled 10; then
+  run_header 10 "前端 lint（eslint，棘轮 34）"
+  cd "$ROOT/web"
+  node node_modules/eslint/bin/eslint.js . --max-warnings 34
+else
+  skip_step 10
+fi
+
+if step_enabled 11; then
+  run_header 11 "前端死代码基线（ts-prune + Vue 组件引用）"
+  cd "$ROOT"
+  node scripts/ci/check-web-dead-code.mjs
+  node scripts/ci/check-web-unused-components.mjs
+else
+  skip_step 11
+fi
+
+if step_enabled 12; then
+  run_header 12 "前端格式（只查改动文件）"
+  cd "$ROOT"
+  node scripts/ci/check-web-format.mjs
+else
+  skip_step 12
+fi
+
+if step_enabled 13; then
+  run_header 13 "移动端（tsc + jest）"
+  cd "$ROOT/mobile"
+  # 移动端没有独立的 lint 脚本，类型检查用 tsc；测试含「非 <Text> 节点下不许有裸字符串」
+  # 的断言，专门防只有原生 RN 才会拦的白屏（见 CLAUDE.md）
+  node node_modules/typescript/bin/tsc --noEmit
+  node node_modules/jest/bin/jest.js --ci --coverage
+else
+  skip_step 13
+fi
+
+if step_enabled 14; then
+  run_header 14 "子项目最低测试（浏览器插件 / 人脸子服务）"
+  cd "$ROOT"
+  node --test browser-extension/test-extract-images.mjs
+  if [[ -x "$ROOT/face-service/.venv/Scripts/python.exe" ]]; then
+    cd "$ROOT/face-service"
+    .venv/Scripts/python.exe -m unittest -q test_storage.py
+  else
+    echo "[skip] face-service/.venv 不存在；CI 的 subprojects job 会覆盖该测试"
+  fi
+else
+  skip_step 14
+fi
+
+if step_enabled 15; then
+  run_header 15 "文档生成物与代码一致（API / 数据模型 / 配置项）"
+  cd "$ROOT"
+  # 这三份文档由代码生成（scripts/data/gen_docs_from_code.py），手改会被判「与代码不一致」。
+  # 放在最后：它最便宜，但前面的门禁更重要——先让真问题先报，别让文档 diff 掩盖测试失败。
+  # 报红时按提示重跑：python scripts/data/gen_docs_from_code.py
+  "$PY" scripts/data/gen_docs_from_code.py --check
+else
+  skip_step 15
+fi
 
 if [[ "$RUN_E2E" == "1" ]]; then
   echo ""
@@ -162,7 +289,7 @@ fi
 
 echo ""
 if [[ "$RUN_E2E" == "1" ]]; then
-  echo "✅ 15 项门禁 + E2E 全部通过"
+  echo "✅ 门禁通过：执行 ${RUNNING}/15 项，跳过 ${SKIPPED} 项 + E2E"
 else
-  echo "✅ 15 项门禁全部通过"
+  echo "✅ 门禁通过：执行 ${RUNNING}/15 项，跳过 ${SKIPPED} 项（按改动范围裁剪；全量请加 --all）"
 fi

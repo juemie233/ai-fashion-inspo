@@ -1,35 +1,99 @@
 name: CI
 
 # 质量门禁：push / PR 到主分支时自动执行，与本地 `scripts/ci/test.sh` 对齐。
-#   前端 job：ESLint（棘轮）+ vitest + vue-tsc + 死代码基线（ts-prune，只拦新增）
-#   后端 job：ruff（零告警）+ vulture（死代码）+ mypy 棘轮 + 迁移链自检（空库 → 与 ORM 一致）
-#             + 脚本规范（只读连接 / argparse）+ pytest 全量 + 覆盖率棘轮（≥82.9%）+ 关键模块地板
-#             + 文档生成物一致性（docs/overview 的 API参考 / 数据模型 / 配置项参考）
-#   移动端 job：tsc 类型检查 + jest-expo 单测（含「非 <Text> 节点下不许有裸字符串」的断言，
-#             专门防只有原生 RN 才会拦的白屏；Jest 里不校验，所以用自建断言补齐）
+#
+# 与本地一致，CI 也是**按改动范围裁剪**的（2026-11-26 起）：
+#   changes job 先算「这次改了哪几类文件」，其余 job 只在命中时运行。
+#   - 只改后端 → backend job；只改前端 → web job；只改 docs → docs job；
+#   - 只改 scripts/ 或 .github/ → 轻量 scripts job（不装后端依赖）；
+#   - 无法识别的文件 / 识别失败 → 回退全量（安全兜底）。
+#   完全没命中任何 job 的改动（如只改 README）只跑 changes job，整体为绿。
+#
+# Job 分工：
+#   changes     改动范围识别（scripts/ci/gate_scope.py，本地门禁同一份逻辑）
+#   backend     ruff 零告警 + vulture + mypy 棘轮 + 迁移链自检 + 脚本规范
+#               + pytest 全量 + 覆盖率棘轮（≥82.9%）+ 关键模块地板
+#               + 文档生成物一致性（API参考 / 数据模型 / 配置项参考）
+#   web         ESLint（棘轮）+ vitest + vue-tsc + 死代码基线（ts-prune，只拦新增）
+#   mobile      tsc 类型检查 + jest-expo 单测（含「非 <Text> 节点下不许有裸字符串」断言）
+#   subprojects browser-extension 纯函数测试 / face-service 存储层测试（按改动拆分）
+#   docs        docs/ 改动但后端未动时，只校验文档生成物（纯 AST，秒级）
+#   scripts     scripts/ 或 .github/ 改动时，只跑脚本规范 + ruff + 门禁计划自检
+#
 # 任何一步失败即标红，把「人肉漏检」变成「机器必抓」。
 #
-# ⚠️ 注意两个 job 都设了 `defaults.run.working-directory`（web / backend），
+# ⚠️ web / backend / mobile 三个 job 都设了 `defaults.run.working-directory`，
 # 需要仓库根相对路径的步骤必须显式写 `working-directory: ${{ github.workspace }}`，
 # 否则会去找 web/scripts 或 backend/scripts 而报「No such file」（2026-10-28 踩过）。
 #
 # ⚠️ 只有 GitHub 镜像会触发本工作流：`origin` 指向 gitee，gitee 侧没有 CI。
-# 所以推 gitee 前请先在本地跑 `bash scripts/ci/test.sh`——那是唯一能在推送前拦住问题的门。
+# 推送 gitee 前请先在本地跑 `bash scripts/ci/test.sh`（默认按改动裁剪）——
+# 那是唯一能在推送前拦住问题的门。发版/大改前建议 `--all` 跑满 15 项。
 #
 # 开发阶段约定：项目当前仅在本地运行（npm run dev + uvicorn），尚未进入
 # 部署阶段，CI 不做产物构建（vite build）——只保留能抓问题的 lint / 类型
-# 检查 / 单测，避免为用不上的产物构建付出维护成本（构建还会依赖 python
-# 注入 schema 版本，进一步增加 CI 复杂度）。进入部署阶段后再加回 build。
+# 检查 / 单测，避免为用不上的产物构建付出维护成本。
 
 on:
   push:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  # 手动触发 = 全量门禁（适合发版前或怀疑裁剪漏项时）
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
+  changes:
+    name: 改动范围识别
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.plan.outputs.backend }}
+      web: ${{ steps.plan.outputs.web }}
+      mobile: ${{ steps.plan.outputs.mobile }}
+      subprojects: ${{ steps.plan.outputs.subprojects }}
+      browser_ext: ${{ steps.plan.outputs.browser_ext }}
+      face_service: ${{ steps.plan.outputs.face_service }}
+      docs: ${{ steps.plan.outputs.docs }}
+      scripts: ${{ steps.plan.outputs.scripts }}
+      full: ${{ steps.plan.outputs.full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 必须取全历史：要按 base commit 做 git diff 判断改动范围
+          fetch-depth: 0
+
+      # 识别失败时不让依赖 job 全被跳过：plan.outcome 为 failure 时 outputs 为空，
+      # 下游条件统一写 `!= 'false'`，空值即视为「照常全跑」（安全兜底）。
+      - name: 计算改动范围（scripts/ci/gate_scope.py）
+        id: plan
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python3 scripts/ci/gate_scope.py --all --format=github-output >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE="${{ github.event.before }}"
+          fi
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE="$(git rev-parse HEAD^ 2>/dev/null || git rev-parse HEAD)"
+          fi
+          echo "对比基准：$BASE"
+          python3 scripts/ci/gate_scope.py --base "$BASE" --no-worktree --format=github-output >> "$GITHUB_OUTPUT"
+
+      - name: 识别失败提示
+        if: steps.plan.outcome == 'failure'
+        run: echo "::warning::改动范围识别失败，本 workflow 回退为全量执行（安全兜底）"
+
   web:
     name: Web 前端（lint / 类型检查 / 测试）
+    needs: changes
+    if: always() && needs.changes.outputs.web != 'false'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -63,6 +127,8 @@ jobs:
 
   mobile:
     name: 移动端（tsc / jest）
+    needs: changes
+    if: always() && needs.changes.outputs.mobile != 'false'
     runs-on: ubuntu-latest
     # 固定 UTC：与后端 job 一致，也让「本地 +08:00 全绿、CI 挂」的时区差异在本地可复现
     # （2026-11-12 就有一个把 UTC 字面量写进断言的用例栽在这里）。
@@ -92,6 +158,8 @@ jobs:
 
   backend:
     name: 后端（lint / 迁移 / pytest 全量）
+    needs: changes
+    if: always() && needs.changes.outputs.backend != 'false'
     runs-on: ubuntu-latest
     env:
       TZ: UTC
@@ -130,38 +198,30 @@ jobs:
         run: python -m vulture app --min-confidence 80
 
       # 后端类型：mypy 棘轮（只查已清零的模块，清单在 scripts/check_types.py）。
-      # 全仓存量约 370 个类型错误，一次性清零不现实；棘轮保证「新代码不再欠债」，
-      # 每修好一个模块就往清单里加一行。
+      # 全仓存量约 370 个类型错误，一次性清零不现实；棘轮保证「新代码不再欠债」。
       - name: mypy 棘轮（类型检查）
         run: python scripts/check_types.py
 
       # 迁移链自检：临时空库 → `alembic upgrade head` → 结构必须与 ORM 一致。
-      # 为什么必须在 CI 跑：本地建库走 create_all + stamp head，迁移链平时不执行，
-      # 「空库跑不通 / 空库少约束」只有在这里才暴露（2026-10-20 就是这样发现链尾
-      # 对齐迁移撞索引、以及漏了 12 处 NOT NULL/唯一索引的）。全程用临时库，不碰真实数据。
       - name: 迁移链自检（空库 → 与 ORM 一致）
         run: python scripts/check_fresh_migrations.py
 
-      # 脚本目录的静态守卫：只读用途的 sqlite 连接必须 mode=ro（f2 的外部库不能被
-      # 脚本以读写方式打开），入口必须用 argparse。scripts 不计覆盖率，只能静态兜。
-      #
-      # ⚠️ 必须显式指定工作目录：本 job 的默认 `working-directory: backend`，
-      # 直接写 `python scripts/ci/check_scripts.py` 会去找 backend/scripts/...（不存在）
-      # 而整步报 exit 2（2026-10-28 实测）。校验脚本在**仓库根**的 scripts/ci/ 下。
-      - name: 脚本规范（只读连接 / CLI 入口）
+      # 脚本目录的静态守卫：只读用途的 sqlite 连接必须 mode=ro，入口必须用 argparse。
+      # ⚠️ 必须显式指定工作目录：本 job 默认 `working-directory: backend`，
+      # 直接写 `python scripts/ci/check_scripts.py` 会去找 backend/scripts/...（不存在）。
+      - name: 脚本规范（只读连接 / CLI 入口）+ 门禁计划自检
         working-directory: ${{ github.workspace }}
-        run: python scripts/ci/check_scripts.py
+        run: |
+          python scripts/ci/check_scripts.py
+          python scripts/ci/gate_scope.py --self-test
 
       # 文档生成物：docs/overview 下的 API参考 / 数据模型 / 配置项参考 由代码生成。
       # 手改文档、或改了 router/model/config 却忘了重跑生成器，都会在这里红。
-      # 同样必须把工作目录指到仓库根（本 job 默认 backend，直接跑会找不到脚本）。
       - name: 文档生成物一致性（API / 数据模型 / 配置项）
         working-directory: ${{ github.workspace }}
         run: python scripts/data/gen_docs_from_code.py --check
 
-      # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
-      # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
-      # 覆盖率是**棘轮底线**（只能往上调，当前 83.00%）：测试被误删/跳过时这里会红。
+      # 覆盖率是**棘轮底线**（只能往上调）：测试被误删/跳过时这里会红。
       - name: pytest 全量 + 覆盖率棘轮（≥82.9%）
         run: |
           python -m pytest -q --tb=long --cov --cov-fail-under=82 \
@@ -179,22 +239,30 @@ jobs:
 
   subprojects:
     name: 子项目（浏览器插件 / 人脸子服务）
+    needs: changes
+    if: always() && needs.changes.outputs.subprojects != 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # 只有 browser-extension/ 改动才跑插件测试（全量触发时两个都跑）
       - uses: actions/setup-node@v4
+        if: needs.changes.outputs.browser_ext != 'false'
         with:
           node-version: 20
 
       - name: 浏览器插件纯函数测试
+        if: needs.changes.outputs.browser_ext != 'false'
         run: node --test browser-extension/test-extract-images.mjs
 
-      - uses: actions/setup-python@v5
+      # 只有 face-service/ 改动才装人脸子服务依赖（onnxruntime 安装很慢）
+      - if: needs.changes.outputs.face_service != 'false'
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: 人脸子服务存储层测试
+        if: needs.changes.outputs.face_service != 'false'
         working-directory: face-service
         run: |
           python -m pip install --upgrade pip
@@ -213,3 +281,37 @@ jobs:
           CPU_ONNX="$(sed -n 's/^onnxruntime-gpu==//p' requirements.txt)"
           pip install -r /tmp/face-requirements-cpu.txt "onnxruntime==${CPU_ONNX}"
           python -m unittest -q test_storage.py
+
+  docs:
+    name: 文档生成物（docs-only 改动）
+    needs: changes
+    if: always() && needs.changes.outputs.docs != 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # 生成器是纯 AST（不 import app），因此不需要装后端依赖
+      - name: 文档生成物一致性（API / 数据模型 / 配置项）
+        run: python scripts/data/gen_docs_from_code.py --check
+
+  scripts:
+    name: 脚本与门禁配置（轻量）
+    needs: changes
+    if: always() && needs.changes.outputs.scripts != 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 安装 ruff（脚本目录 lint 用，不装后端运行依赖）
+        run: python -m pip install --upgrade pip ruff
+      - name: 脚本规范（只读连接 / CLI 入口）
+        run: python scripts/ci/check_scripts.py
+      - name: 门禁计划自检
+        run: python scripts/ci/gate_scope.py --self-test
+      - name: ruff（scripts + backend/scripts）
+        working-directory: backend
+        run: python -m ruff check scripts ../scripts
