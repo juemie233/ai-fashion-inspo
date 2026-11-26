@@ -41,6 +41,7 @@ from app.models.service_heartbeat import ServiceHeartbeat
 from app.models.task import TaskQueue
 from app.models.task_run_log import TaskRunLog
 from app.services.task_runner import (
+    GPU_EXCLUSIVE_TASK_TYPES,
     PermanentTaskError,
     RecoverableTaskError,
     TASK_HANDLERS,
@@ -83,40 +84,10 @@ _RUN_LOG_IDS: dict[int, int] = {}
 # 心跳一过期即被重置回 pending 重新执行。
 _STALE_SWEEP_INTERVAL = 30.0
 
-# ── 重负载任务互斥组 ──
-# 组内任务都吃同一份稀缺资源（GPU：CLIP 图像编码 / VLM 视觉推理 / 人脸推理；
-# face_match 是 numpy 矩阵乘但同样整批占满 CPU 与数据库），同时跑只会互相拖慢：
-# 实测 2026-09-27 18:06–18:33，向量回填与质量审核、人脸匹配挤在一起时，每次
-# 文本嵌入都卡满 30 秒超时才失败（25 条一个检查点耗时 12.7 分钟），而单独跑时
-# 同一个检查点只要 5.4 秒——吞吐差了 130 倍。因此组内任务**全局串行**。
-#
-# 判定写在认领语句里（而不是先查后判断）：多 worker 进程重叠（supervisor 重启
-# 时旧进程可能还没退出、或手工 extra 起了一个）或 worker_concurrency > 1 时，
-# 只有同一条带条件 UPDATE 才能保证「两个重负载任务不会同时 running」。
-#
-# 不在组内的任务（f2_import 下载入库、deduplicate/phash_backfill 图像计算、
-# batch_delete、enrich_blogger_profile 抓主页、tag_* 扫描）不吃 GPU，重负载任务
-# 运行期间照常认领执行，不陪着一起等——这就是互斥只发生在组内的意义。
-# 新增任务类型时：若它会大量占用 GPU / 整批打满 CPU，加进这个集合。
-#
-# 取舍（2026-09-27 审查确认保留）：互斥 = 组内全局串行，代价是「一个卡住则全组等」。
-# 进程崩掉的情况由心跳租约兜住（90 秒过期 + 每 30 秒清扫 → 重置回 pending 后组即释放）；
-# 但 handler 卡死而进程存活时心跳照常续租，租约不会过期——此时组内其它任务会一直等，
-# 唯一的出口是用户取消那个卡住的任务（运行中取消在白名单内，取消后互斥立即释放）。
-# 这是用「可能被卡住的任务堵住」换「不再互相抢 GPU」，值得，但排查时要记得这一条。
-GPU_EXCLUSIVE_TASK_TYPES: frozenset[str] = frozenset(
-    {
-        "vector_backfill",  # CLIP 图像编码 + Ollama 文本嵌入
-        "quality_check",  # VLM 视觉推理（批量）
-        "batch_analyze",  # VLM 视觉推理（批量）
-        "multi_analyze",  # VLM 视觉推理（多模型组合）
-        "face_scan",  # 人脸推理（face-service embed_batch）
-        "face_match",  # 全库人脸相似度矩阵乘（numpy，整批占 CPU + DB）
-        "image_gen",  # ComfyUI 出图（与 Ollama 抢同一块显存，必须与上面互斥）
-    }
-)
-
-
+# 重负载任务互斥组由 app.services.task_runner.TASK_REGISTRY 的
+# gpu_exclusive 标记派生，worker 不再维护第二份名单；新增任务类型只在
+# task_runner 登记一次，避免「handler 登记了但忘了加互斥」。
+# 组内任务全局串行，代价是一个卡住则全组等；进程崩溃由心跳租约兜底。
 def _build_worker_id() -> str:
     """生成当前 worker 实例的唯一标识（pid + 随机后缀）。"""
     return f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
