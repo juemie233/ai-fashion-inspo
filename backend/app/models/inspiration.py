@@ -174,31 +174,36 @@ class Inspiration(Base):
         "InspirationTag",
         back_populates="inspiration",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         lazy="selectin",
     )
     analysis_logs: Mapped[list["AIAnalysisLog"]] = relationship(
         "AIAnalysisLog",
         back_populates="inspiration",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         lazy="selectin",
     )
     bloggers: Mapped[list["InspirationBlogger"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationBlogger",
         back_populates="inspiration",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         lazy="selectin",
     )
     models: Mapped[list["InspirationModel"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationModel",
         back_populates="inspiration",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         lazy="selectin",
     )
     face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationFaceDetection",
         back_populates="inspiration",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        passive_deletes=True,
+        lazy="raise",
     )
 
     def __repr__(self) -> str:
@@ -214,13 +219,20 @@ class AIAnalysisLog(Base):
     """AI 分析日志：记录每次模型分析的过程和结果。"""
 
     __tablename__ = "ai_analysis_log"
+    __table_args__ = (
+        # 未分析计数/筛选按 log_type 等值 + inspiration_id 分组；id 是 rowid，
+        # 该索引对 GROUP BY inspiration_id ... max(id) 可用。
+        Index("ix_ai_log_type_insp", "log_type", "inspiration_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     inspiration_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("inspirations.id", ondelete="CASCADE"), index=True
     )
     model_name: Mapped[str] = mapped_column(String(64))
-    log_type: Mapped[str] = mapped_column(String(16), default="analysis")  # analysis | quality_check
+    log_type: Mapped[str] = mapped_column(
+        String(16), default="analysis", server_default="analysis", nullable=False
+    )  # analysis | quality_check
     raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
@@ -240,13 +252,15 @@ class AIAnalysisLog(Base):
         "AIAnalysisTag",
         back_populates="log",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        passive_deletes=True,
+        lazy="raise",
     )
     quality_reviews: Mapped[list["AIQualityReview"]] = relationship(
         "AIQualityReview",
         back_populates="log",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        passive_deletes=True,
+        lazy="raise",
     )
 
     def __repr__(self) -> str:
@@ -320,10 +334,10 @@ def analysis_log_filter() -> ColumnElement[bool]:
     """返回「标签分析日志」的过滤条件（排除 quality_check 质量审核日志）。
 
     判断「是否已做标签分析」时应使用本条件：quality_check 只做二分类审核，
-    不产出标签，不能算作「已分析」。历史日志（迁移前）的 log_type 为 NULL，
-    统一按 analysis 处理。
+    不产出标签，不能算作「已分析」。历史 NULL 已由迁移回填为 analysis，
+    log_type 已改为 NOT NULL，因此这里用可命中索引的等值条件。
     """
-    return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"
+    return AIAnalysisLog.log_type == "analysis"
 
 
 def latest_analysis_log_subquery() -> Any:
@@ -342,6 +356,7 @@ def latest_analysis_log_subquery() -> Any:
         .group_by(AIAnalysisLog.inspiration_id)
         .subquery()
     )
+
 
 class QualityCorrection(Base):
     """质量审核的「误判反馈」记录（审查 P0：误判反馈闭环）。
@@ -381,6 +396,8 @@ class FavoriteEvent(Base):
     __tablename__ = "favorite_events"
     __table_args__ = (
         Index("ix_favorite_events_inspiration_time", "inspiration_id", "created_at"),
+        # 收藏中心「最近动态」按全局 created_at 倒序，单素材历史索引帮不上忙
+        Index("ix_favorite_events_created", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

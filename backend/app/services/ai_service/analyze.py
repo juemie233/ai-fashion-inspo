@@ -320,11 +320,16 @@ async def _update_dominant_colors(
             clean_colors.append(c.upper())
     if not clean_colors:
         return
-    insp = await db.get(Inspiration, inspiration_id)
-    if insp:
-        # 模型要求 2~3 个主色；超过 3 个截断，避免字段无限膨胀
-        insp.dominant_colors = json.dumps(clean_colors[:3], ensure_ascii=False)
-        await db.flush()
+    # 只为写一个字符串字段，不要 ORM 加载整条素材（会触发 tags/analysis_logs 等
+    # 集合的 selectin 预加载）；直接 UPDATE 单列。
+    from sqlalchemy import update
+
+    await db.execute(
+        update(Inspiration)
+        .where(Inspiration.id == inspiration_id)
+        .values(dominant_colors=json.dumps(clean_colors[:3], ensure_ascii=False))
+    )
+    await db.flush()
 
 
 async def _write_analysis_log(
