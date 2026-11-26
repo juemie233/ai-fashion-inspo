@@ -20,7 +20,7 @@ from app.database import async_session
 from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.models.tag import InspirationTag, Tag
 from app.routers import search as search_router
-from app.services import vector_store
+from app.services import file_service, vector_store
 
 
 async def _insp(**fields) -> str:
@@ -114,8 +114,9 @@ class TestSearchFilters:
         new = await _insp(created_at=datetime(2026, 6, 1, 8, 0, 0))
 
         assert _ids(await _search(date_from="2026-03-01")) == {new}
-        assert _ids(await _search(date_to="2026-03-01")) == {old}
-        assert _ids(await _search(date_from="2026-01-01", date_to="2026-12-31")) == {old, new}
+        same_day = await _insp(created_at=datetime(2026, 3, 1, 23, 0, 0))
+        assert _ids(await _search(date_to="2026-03-01")) == {old, same_day}
+        assert _ids(await _search(date_from="2026-01-01", date_to="2026-12-31")) == {old, new, same_day}
 
     async def test_dominant_color_and_rating(self, client):
         red = await _insp(dominant_colors='["红色", "米色"]', rating=5)
@@ -136,6 +137,8 @@ class TestSearchFilters:
         assert _ids(await _search(include_tags="法式,通勤", combine="AND")) == {both}
         assert _ids(await _search(include_tags="法式,通勤", combine="OR")) == {both, only_a}
         assert _ids(await _search(include_tags="不存在的标签")) == set()  # 早退空结果
+        # AND 模式混入不存在标签：不能只按存在的标签放宽，应返回空
+        assert _ids(await _search(include_tags="法式,不存在", combine="AND")) == set()
 
     async def test_exclude_tags(self, client):
         keep = await _insp()
@@ -204,9 +207,11 @@ class TestSearchFilters:
         """回归：sort=match_score 但没传 include_tags 时不能 NameError。"""
         await _insp()
 
+        newest = await _insp(created_at=datetime(2026, 12, 1))
         out = await _search(sort="match_score")
 
-        assert out.total >= 1
+        # 没有 include_tags 时回退 newest，而不是按 id 升序
+        assert out.items[0].id == newest
 
     async def test_pagination(self, client):
         ids = [await _insp() for _ in range(3)]
@@ -299,6 +304,7 @@ class TestVectorSearch:
             return [{"inspiration_id": real, "score": 0.7}]
 
         monkeypatch.setattr(search_router, "_save_temp_image", _save)
+        monkeypatch.setattr(file_service, "validate_media", lambda *_a, **_k: None)
         monkeypatch.setattr(search_router, "generate_image_embedding", _image_embed)
         monkeypatch.setattr(vector_store, "search_vectors", _search_vectors)
         monkeypatch.setattr(vector_store, "is_lancedb_available", lambda: True)
@@ -321,6 +327,7 @@ class TestVectorSearch:
             return None
 
         monkeypatch.setattr(search_router, "_save_temp_image", _save)
+        monkeypatch.setattr(file_service, "validate_media", lambda *_a, **_k: None)
         monkeypatch.setattr(search_router, "generate_image_embedding", _image_embed)
         monkeypatch.setattr(vector_store, "is_lancedb_available", lambda: True)
 

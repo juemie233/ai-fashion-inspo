@@ -1,5 +1,6 @@
 """多维度搜索的 REST API 路由。"""
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -32,11 +33,15 @@ from app.services.embedding_service import (
     get_image_embedding_status,
     get_text_embedding_status,
 )
+from app.services import file_service
 from app.services.inspiration_query import (
     RATING_SORTS,
+    inclusive_date_upper_bound,
     inspiration_load_options,
     load_live_inspiration,
+    load_live_inspirations,
     rating_sort_clauses,
+    rating_sort_filter,
 )
 from app.services.vector_service import find_similar_hybrid
 
@@ -114,18 +119,25 @@ async def search_inspirations(
     if date_from:
         conditions.append(Inspiration.created_at >= date_from)
     if date_to:
-        conditions.append(Inspiration.created_at <= date_to)
+        conditions.append(
+            Inspiration.created_at < inclusive_date_upper_bound(date_to)
+        )
     if dominant_color:
-        conditions.append(Inspiration.dominant_colors.contains(dominant_color))
+        color_needle = f'"{dominant_color.lower()}"'
+        conditions.append(
+            func.lower(Inspiration.dominant_colors).contains(
+                color_needle, autoescape=True
+            )
+        )
 
     # 关键词搜索：标签名、作者名、文件名
     if keyword:
         matching_tag_ids = select(InspirationTag.inspiration_id).join(
             Tag, InspirationTag.tag_id == Tag.id
-        ).where(Tag.name.contains(keyword))
+        ).where(Tag.name.contains(keyword, autoescape=True))
         kw_conds = [
-            Inspiration.source_author.contains(keyword),
-            Inspiration.file_path.contains(keyword),
+            Inspiration.source_author.contains(keyword, autoescape=True),
+            Inspiration.file_path.contains(keyword, autoescape=True),
             Inspiration.id.in_(matching_tag_ids),
         ]
         conditions.append(or_(*kw_conds))
@@ -133,11 +145,15 @@ async def search_inspirations(
     # 分析状态（done/error 基于「最新一条」标签分析日志，与卡片状态一致）
     if analysis_status in ("done", "error"):
         latest = latest_analysis_log_subquery()
-        error_cond = (
-            (AIAnalysisLog.error.isnot(None)) & (AIAnalysisLog.error != "")
-            if analysis_status == "error"
-            else AIAnalysisLog.error.is_(None)
-        )
+        if analysis_status == "error":
+            error_cond = (AIAnalysisLog.error.isnot(None)) & (
+                AIAnalysisLog.error != ""
+            )
+        else:
+            # 与 list_inspirations 一致：空字符串错误也属于 done
+            error_cond = or_(
+                AIAnalysisLog.error.is_(None), AIAnalysisLog.error == ""
+            )
         conditions.append(
             Inspiration.id.in_(
                 select(AIAnalysisLog.inspiration_id)
@@ -194,44 +210,37 @@ async def search_inspirations(
                     )
                 )
             )
-        else:  # AND
-            for tag_id in include_ids:
+        else:  # AND：按名称逐个建子查询，不存在/同名多类型都不会被静默放宽
+            for name in include_list:
                 base_query = base_query.where(
                     Inspiration.id.in_(
-                        select(InspirationTag.inspiration_id).where(
-                            InspirationTag.tag_id == tag_id
-                        )
+                        select(InspirationTag.inspiration_id)
+                        .join(Tag, InspirationTag.tag_id == Tag.id)
+                        .where(Tag.name == name)
                     )
                 )
 
     if exclude_list:
-        exclude_tag_ids = select(Tag.id).where(Tag.name.in_(exclude_list))
-        tag_result = await db.execute(exclude_tag_ids)
-        exclude_ids = [row[0] for row in tag_result.all()]
-
-        if exclude_ids:
-            base_query = base_query.where(
-                ~Inspiration.id.in_(
-                    select(InspirationTag.inspiration_id).where(
-                        InspirationTag.tag_id.in_(exclude_ids)
-                    )
-                )
+        base_query = base_query.where(
+            ~Inspiration.id.in_(
+                select(InspirationTag.inspiration_id)
+                .join(Tag, InspirationTag.tag_id == Tag.id)
+                .where(Tag.name.in_(exclude_list))
             )
+        )
 
     # 评分排序口径：rating_asc 只排已评分；其余评分排序包含未评分。
     if sort == "rating_asc":
-        base_query = base_query.where(Inspiration.rating > 0)
+        filter_clause = rating_sort_filter(sort)
+        if filter_clause is not None:
+            base_query = base_query.where(filter_clause)
 
-    # 排序
-    sort_mapping = {
-        "newest": Inspiration.created_at.desc(),
-        "oldest": Inspiration.created_at.asc(),
-        "tag_count": Inspiration.id.desc(),  # 占位，下面特殊处理
-        "match_score": Inspiration.id.asc(),  # 占位，下面特殊处理
-    }
+    # 先 count，再做 ORDER BY / tag_count / match_score 的 JOIN
+    total = (
+        await db.execute(select(func.count()).select_from(base_query.subquery()))
+    ).scalar() or 0
 
     if sort == "tag_count":
-        # 按标签数量降序（标签丰富的素材排前面）
         tag_count_sub = (
             select(
                 InspirationTag.inspiration_id,
@@ -243,9 +252,12 @@ async def search_inspirations(
         base_query = base_query.outerjoin(
             tag_count_sub,
             Inspiration.id == tag_count_sub.c.inspiration_id,
-        ).order_by(func.coalesce(tag_count_sub.c.cnt, 0).desc())
+        ).order_by(
+            func.coalesce(tag_count_sub.c.cnt, 0).desc(),
+            Inspiration.created_at.desc(),
+            Inspiration.id.desc(),
+        )
     elif sort == "match_score" and include_ids:
-        # 按匹配标签数量降序（包含更多搜索标签的排前面）
         match_sub = (
             select(
                 InspirationTag.inspiration_id,
@@ -258,17 +270,22 @@ async def search_inspirations(
         base_query = base_query.outerjoin(
             match_sub,
             Inspiration.id == match_sub.c.inspiration_id,
-        ).order_by(func.coalesce(match_sub.c.cnt, 0).desc())
+        ).order_by(
+            func.coalesce(match_sub.c.cnt, 0).desc(),
+            Inspiration.created_at.desc(),
+            Inspiration.id.desc(),
+        )
     elif sort in RATING_SORTS:
         base_query = base_query.order_by(*rating_sort_clauses(sort))
+    elif sort == "oldest":
+        base_query = base_query.order_by(
+            Inspiration.created_at.asc(), Inspiration.id.asc()
+        )
     else:
-        base_query = base_query.order_by(sort_mapping.get(sort, Inspiration.created_at.desc()))
-
-    # 统计总数
-    count_subquery = base_query.subquery()
-    count_query = select(func.count()).select_from(count_subquery)
-    total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
+        # newest / match_score 缺 include_tags / 未知 sort 均回退 newest
+        base_query = base_query.order_by(
+            Inspiration.created_at.desc(), Inspiration.id.desc()
+        )
 
     # 分页
     base_query = base_query.offset((page - 1) * size).limit(size)
@@ -286,9 +303,9 @@ async def search_inspirations(
 
 @router.post("/vector", response_model=VectorSearchOut)
 async def vector_search(
-    text: str | None = Form(default=None),
+    text: str | None = Form(default=None, max_length=1000),
     file: UploadFile | None = File(default=None),
-    top_k: int = Form(default=settings.vector_top_k_default, ge=1, le=50),
+    top_k: int | None = Form(default=None, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
 ) -> VectorSearchOut:
     """语义搜索 / 以图搜图：接受文本或图片，返回 TopK 相似素材。
@@ -298,6 +315,7 @@ async def vector_search(
         - file: 搜索图片（以图搜图，走 CLIP 图像向量 + 图像向量表）
         - top_k: 返回数量（默认 20）
     """
+    top_k = top_k or settings.vector_top_k_default
     if not text and not file:
         raise HTTPException(status_code=400, detail="请提供搜索文本或图片")
     if text and file:
@@ -319,6 +337,10 @@ async def vector_search(
         tmp_path = None
         try:
             tmp_path = await _save_temp_image(file)
+            # 先验证确实是图片；否则 CLIP 返回 None 会被误报成“未安装 CLIP 依赖”
+            await asyncio.to_thread(
+                file_service.validate_media, tmp_path, getattr(file, "content_type", None)
+            )
             query_vec = await generate_image_embedding(file_path=str(tmp_path))
         finally:
             if tmp_path:
@@ -328,16 +350,18 @@ async def vector_search(
         hits = await vector_store.search_vectors("image", query_vec, top_k)
         query_type = "image"
 
-    items: list[VectorSearchItem] = []
-    for hit in hits:
-        insp = await load_live_inspiration(db, hit["inspiration_id"])
-        if insp:
-            items.append(
-                VectorSearchItem(
-                    inspiration=inspiration_to_out(insp),
-                    score=hit["score"],
-                )
-            )
+    # 一次 IN 取回全部命中，避免逐条 load_live_inspiration 的 N+1；
+    # 向量库可能包含已软删除素材，过滤后可能少于 top_k，所以上面多取一倍。
+    hit_ids = [str(hit["inspiration_id"]) for hit in hits]
+    by_id = await load_live_inspirations(db, hit_ids)
+    items = [
+        VectorSearchItem(
+            inspiration=inspiration_to_out(by_id[str(hit["inspiration_id"])]),
+            score=hit["score"],
+        )
+        for hit in hits
+        if str(hit["inspiration_id"]) in by_id
+    ][:top_k]
 
     return VectorSearchOut(
         query_type=query_type,
@@ -443,7 +467,8 @@ async def _save_temp_image(file: UploadFile) -> Path:
                         detail=f"文件超过大小限制（{settings.max_image_upload_mb}MB）",
                     )
                 await f.write(chunk)
-    except Exception:
+    except BaseException:
+        # CancelledError 也要清理；否则客户端断开时半写文件会残留
         tmp_path.unlink(missing_ok=True)
         raise
     return tmp_path

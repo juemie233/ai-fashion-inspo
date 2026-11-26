@@ -91,6 +91,24 @@ async def load_inspiration_full(
     return result.unique().scalar_one_or_none()
 
 
+async def load_live_inspirations(
+    db: AsyncSession, inspiration_ids: list[str]
+) -> dict[str, Inspiration]:
+    """批量加载未删除素材（链式预加载），返回 {id: Inspiration}。
+
+    向量搜索命中后一次 IN 查询取回，避免逐条 load_live_inspiration 的 N+1。
+    """
+    ids = list(dict.fromkeys(i for i in inspiration_ids if i))
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(Inspiration)
+        .options(*inspiration_load_options())
+        .where(Inspiration.id.in_(ids), Inspiration.deleted_at.is_(None))
+    )
+    return {item.id: item for item in result.unique().scalars().all()}
+
+
 async def load_live_inspiration(
     db: AsyncSession, inspiration_id: str
 ) -> Inspiration | None:
