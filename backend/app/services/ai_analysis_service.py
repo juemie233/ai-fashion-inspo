@@ -13,6 +13,7 @@ from datetime import datetime, UTC
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app.models.inspiration import (
     AIAnalysisLog,
@@ -216,6 +217,7 @@ async def get_analysis_history(
     """
     query = (
         select(AIAnalysisLog)
+        .options(undefer(AIAnalysisLog.raw_response))
         .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
         .where(_analysis_log_filter(), NOT_DELETED)
     )
@@ -413,7 +415,12 @@ async def delete_failed_logs(db: AsyncSession) -> int:
 
 async def get_analysis_detail(db: AsyncSession, log_id: int) -> dict | None:
     """查询单条分析日志的详细信息（含关联标签、素材信息、解析结果与结构化快照），不存在返回 None。"""
-    log = await db.get(AIAnalysisLog, log_id)
+    detail_result = await db.execute(
+        select(AIAnalysisLog)
+        .options(undefer(AIAnalysisLog.raw_response))
+        .where(AIAnalysisLog.id == log_id)
+    )
+    log = detail_result.scalar_one_or_none()
     if not log:
         return None
 
@@ -556,6 +563,7 @@ async def get_analysis_comparison(db: AsyncSession, inspiration_id: str) -> dict
     # 获取该素材的所有分析日志（排除质量审核日志）
     result = await db.execute(
         select(AIAnalysisLog)
+        .options(undefer(AIAnalysisLog.raw_response))
         .where(
             _analysis_log_filter(),
             AIAnalysisLog.inspiration_id == inspiration_id,
@@ -657,7 +665,9 @@ async def compare_logs_batch(db: AsyncSession, log_ids: list[int]) -> dict:
         raise ValueError("至少选择 2 条分析记录才能对比")
 
     result = await db.execute(
-        select(AIAnalysisLog).where(
+        select(AIAnalysisLog)
+        .options(undefer(AIAnalysisLog.raw_response))
+        .where(
             _analysis_log_filter(),
             AIAnalysisLog.id.in_(log_ids),
         )
@@ -778,7 +788,12 @@ async def apply_analysis_to_material(db: AsyncSession, log_id: int) -> dict:
         AIAnalysisNotFoundError: 记录不存在
         ValueError: 记录不可应用（失败记录 / 无标签 / 素材已删除等）
     """
-    log = await db.get(AIAnalysisLog, log_id)
+    apply_result = await db.execute(
+        select(AIAnalysisLog)
+        .options(undefer(AIAnalysisLog.raw_response))
+        .where(AIAnalysisLog.id == log_id)
+    )
+    log = apply_result.scalar_one_or_none()
     if not log:
         raise AIAnalysisNotFoundError("分析记录未找到")
     if (log.log_type or "analysis") != "analysis":

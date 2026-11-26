@@ -14,6 +14,7 @@ Ollama 在测试里用假 HTTP 客户端替身（按调用次数返回预设响�
 import json
 
 import httpx
+from sqlalchemy import select
 import pytest
 
 from app.database import async_session
@@ -510,7 +511,15 @@ async def test_analyze_video_fuses_tags_by_max_confidence(_fake_http):
     assert ok is True
     logs = await _logs("v1")
     assert len(logs) == 1  # 整段视频只有一条日志
-    assert logs[0].raw_response and "[帧 1]" in logs[0].raw_response
+    async with async_session() as db:
+        raw = (
+            await db.execute(
+                select(AIAnalysisLog.raw_response).where(
+                    AIAnalysisLog.inspiration_id == "v1"
+                )
+            )
+        ).scalar_one()
+    assert raw and "[帧 1]" in raw
     async with async_session() as db:
         insp = await db.get(Inspiration, "v1")
     assert json.loads(insp.dominant_colors) == ["#000000"]

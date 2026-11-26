@@ -233,7 +233,10 @@ class AIAnalysisLog(Base):
     log_type: Mapped[str] = mapped_column(
         String(16), default="analysis", server_default="analysis", nullable=False
     )  # analysis | quality_check
-    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 大字段：列表/详情/轮询默认不加载，只有分析历史/日志详情显式 undefer
+    raw_response: Mapped[str | None] = mapped_column(
+        Text, nullable=True, deferred=True
+    )
     prompt_version: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )  # 分析所用 Prompt 的内容哈希（前 8 位），用于版本追溯
