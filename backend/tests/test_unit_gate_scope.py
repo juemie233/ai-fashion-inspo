@@ -57,6 +57,24 @@ def test_decode_git_path_handles_octal_unicode_and_quotes():
     assert gate_scope._decode_git_path("web/src/App.vue") == "web/src/App.vue"
 
 
+def test_compute_cache_key_is_stable_and_sensitive_to_each_input():
+    """同状态缓存键：任一输入变化都必须换键，避免把旧结论误当成新状态。"""
+    base = gate_scope.compute_cache_key(
+        "head", "diff", {"new.txt": "a" * 64}, {"impl": "v1"}
+    )
+
+    assert (
+        gate_scope.compute_cache_key("head", "diff", {"new.txt": "a" * 64}, {"impl": "v1"})
+        == base
+    )
+    assert gate_scope.compute_cache_key("head2", "diff", {"new.txt": "a" * 64}, {"impl": "v1"}) != base
+    assert gate_scope.compute_cache_key("head", "diff2", {"new.txt": "a" * 64}, {"impl": "v1"}) != base
+    assert gate_scope.compute_cache_key("head", "diff", {"new.txt": "b" * 64}, {"impl": "v1"}) != base
+    assert gate_scope.compute_cache_key("head", "diff", {"new.txt": "a" * 64}, {"impl": "v2"}) != base
+    # 未跟踪文件路径也要参与键：重命名但内容相同同样应视为状态变化
+    assert gate_scope.compute_cache_key("head", "diff", {"other.txt": "a" * 64}, {"impl": "v1"}) != base
+
+
 def test_plan_backend_app_runs_core_steps_only():
     plan = gate_scope.build_plan(["backend/app/main.py"])
 

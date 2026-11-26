@@ -15,6 +15,16 @@
 #   bash scripts/ci/test.sh --cov           后端额外输出行级覆盖率报告（term-missing）
 #   bash scripts/ci/test.sh --slow          后端把 slow 长耗时用例加回本次运行（system 仍排除）
 #   bash scripts/ci/test.sh --e2e           跑完门禁后再跑 Playwright（需后端在跑，可选/nightly）
+#   bash scripts/ci/test.sh --no-cache      忽略「同一状态已通过」缓存，强制重跑
+#
+# 重复执行抑制（2026-11-26）：
+#   - 运行锁：同一时刻只允许一个门禁进程，后来者排队等待（`GATE_NO_WAIT=1` 立即退出，
+#     `GATE_LOCK_WAIT=<秒>` 改等待上限）。防止两个后端 pytest --cov 并发互相擦除
+#     coverage 数据，出现「测试全过、覆盖率 50%」的假红。
+#   - 同状态缓存：HEAD + 工作区内容 + 门禁实现版本完全相同且上次全部通过时，
+#     直接秒过（`--no-cache` 或 `--all` 可强制重跑）。
+#   - 迭代期间建议只跑定向测试（pytest 单文件 / vitest 单文件），一轮改完在提交前
+#     跑一次本门禁即可，不要每改一处就整跑。
 #
 # 门禁清单（顺序即输出编号）：
 #    1. 后端 pytest 日常集（默认 `not slow and not system`，与 CI 一致；`--slow` 时为 `not system`）
@@ -48,6 +58,7 @@ COV=""
 RUN_E2E=0
 SLOW=0
 DRY_RUN=0
+NO_CACHE=0
 PLANNER_ARGS=()
 for arg in "$@"; do
   case "$arg" in
@@ -55,11 +66,12 @@ for arg in "$@"; do
     --slow) SLOW=1 ;;
     --e2e) RUN_E2E=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --no-cache) NO_CACHE=1 ;;
     --all|--staged|--no-worktree) PLANNER_ARGS+=("$arg") ;;
     --base=*|--files=*) PLANNER_ARGS+=("$arg") ;;
     *)
       echo "未知参数：$arg" >&2
-      echo "支持：--all / --dry-run / --base=<ref> / --staged / --files=a,b / --cov / --slow / --e2e" >&2
+      echo "支持：--all / --dry-run / --no-cache / --base=<ref> / --staged / --files=a,b / --cov / --slow / --e2e" >&2
       exit 2
       ;;
   esac
@@ -70,6 +82,63 @@ if [[ "$DRY_RUN" == "1" ]]; then
   "$PY" "$ROOT/scripts/ci/gate_scope.py" ${PLANNER_ARGS[@]+"${PLANNER_ARGS[@]}"}
   exit 0
 fi
+
+# ── 运行锁：同一时刻只允许一个门禁 ─────────────────────────────────────
+# 两个并发门禁（常见于多个会话各自后台跑）会互相擦除 coverage 数据、抢 CPU，
+# 导致假红进而触发更多重跑；这里让后来者排队，把并发变成串行。
+LOCK_DIR="$ROOT/.git/dsh-gate.lock"
+GATE_LOCK_WAIT="${GATE_LOCK_WAIT:-900}"
+release_gate_lock() { rm -rf "$LOCK_DIR" 2>/dev/null || true; }
+trap release_gate_lock EXIT INT TERM
+acquire_gate_lock() {
+  local waited=0 other_pid other_started now
+  while true; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      echo "$$" > "$LOCK_DIR/pid"
+      date +%s > "$LOCK_DIR/started"
+      return 0
+    fi
+    other_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    other_started="$(cat "$LOCK_DIR/started" 2>/dev/null || true)"
+    now="$(date +%s)"
+    if [[ -z "$other_pid" ]]; then
+      # mkdir 与写 pid 之间的瞬时窗口；2 秒后仍无 pid 视为崩溃残留
+      sleep 2
+      if [[ -z "$(cat "$LOCK_DIR/pid" 2>/dev/null || true)" ]]; then
+        echo "⚠️ 清理无主门禁锁" >&2
+        rm -rf "$LOCK_DIR"
+        continue
+      fi
+    fi
+    if [[ -n "$other_started" ]] && (( now - other_started > 5400 )); then
+      echo "⚠️ 发现陈旧门禁锁（超过 90 分钟），清理后继续" >&2
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    if [[ "${GATE_NO_WAIT:-0}" == "1" ]]; then
+      echo "❌ 另一个门禁正在运行（PID ${other_pid:-未知}）。GATE_NO_WAIT=1，直接退出。" >&2
+      exit 3
+    fi
+    if (( waited == 0 )); then
+      echo "⏳ 另一个门禁正在运行（PID ${other_pid:-未知}），等待其结束（最多 ${GATE_LOCK_WAIT}s；GATE_NO_WAIT=1 可立即退出）……" >&2
+    fi
+    sleep 5
+    waited=$((waited + 5))
+    if (( waited >= GATE_LOCK_WAIT )); then
+      echo "❌ 等待门禁锁超时（${GATE_LOCK_WAIT}s）；如确认无其他门禁在跑，可删除 $LOCK_DIR 后重试。" >&2
+      exit 3
+    fi
+    # 对方 bash 已退出却来不及清理锁（被强杀/断电/测试场景）：直接清理。
+    # 锁里存的是 bash 自己的 MSYS pid，kill -0 可靠，且持有者退出后 pid 不会
+    # 在几秒内被复用，因此不必等 5 分钟。
+    if [[ -n "$other_pid" ]] && ! kill -0 "$other_pid" 2>/dev/null; then
+      echo "⚠️ 上一个门禁进程已退出（PID ${other_pid}），清理残留锁" >&2
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+  done
+}
+acquire_gate_lock
 
 if ! PLAN_OUT="$("$PY" "$ROOT/scripts/ci/gate_scope.py" --format=bash ${PLANNER_ARGS[@]+"${PLANNER_ARGS[@]}"} 2>&1)"; then
   # 识别失败时宁可贵一点也要跑全：门禁的价值是拦住问题，不是省时间
@@ -120,6 +189,31 @@ if [[ "${GATE_RUN_COUNT:-15}" == "0" ]]; then
   echo "本次改动无需执行自动门禁（仅涉及仓库说明 / Rust 试点 / 无自动校验目标等范围）。"
   echo "如需强制全量：bash scripts/ci/test.sh --all"
   exit 0
+fi
+
+# ── 同状态缓存：完全相同的改动内容 + 计划 + 门禁实现 → 上次全过则秒过 ──────
+CACHE_FILE="$ROOT/.git/dsh-gate-cache.key"
+CACHE_KEY=""
+if [[ "${GATE_FULL:-0}" != "1" && "$NO_CACHE" != "1" ]]; then
+  PLAN_SIG=""
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    v="GATE_STEP_$i"
+    PLAN_SIG+="${!v:-1}"
+  done
+  RAW_KEY="$("$PY" "$ROOT/scripts/ci/gate_scope.py" --cache-key 2>/dev/null || true)"
+  if [[ -n "$RAW_KEY" ]]; then
+    CACHE_KEY="$(printf '%s|slow=%s|e2e=%s|plan=%s' "$RAW_KEY" "$SLOW" "$RUN_E2E" "$PLAN_SIG" | sha256sum | cut -d' ' -f1)"
+    if [[ -f "$CACHE_FILE" ]]; then
+      PREV_KEY="$(sed -n 1p "$CACHE_FILE" 2>/dev/null || true)"
+      PREV_TIME="$(sed -n 2p "$CACHE_FILE" 2>/dev/null || true)"
+      if [[ "$PREV_KEY" == "$CACHE_KEY" ]]; then
+        echo ""
+        echo "✅ 同一改动状态已通过门禁（上次通过：${PREV_TIME:-未知}），本次跳过重复执行。"
+        echo "   如需强制重跑：bash scripts/ci/test.sh --no-cache（或 --all）"
+        exit 0
+      fi
+    fi
+  fi
 fi
 
 # pytest marker 分层：日常集与 CI 一致（不含 slow / system）；`--slow` 只把 slow
@@ -285,6 +379,11 @@ if [[ "$RUN_E2E" == "1" ]]; then
   echo "===== 附加：端到端 E2E（需后端在跑）====="
   cd "$ROOT/web"
   node node_modules/@playwright/test/cli.js test --reporter=list
+fi
+
+# 全部通过才写缓存；任一失败会由 set -e 提前退出，不会留下「假通过」缓存
+if [[ -n "${CACHE_KEY:-}" ]]; then
+  { echo "$CACHE_KEY"; date '+%Y-%m-%d %H:%M:%S'; } > "$CACHE_FILE"
 fi
 
 echo ""

@@ -34,6 +34,7 @@ vue-tsc / vitest / jest，本地一次门禁 8~10 分钟，其中大半与改动
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -386,6 +387,77 @@ def collect_changed_files(
     return sorted(set(files))
 
 
+# ── 同状态缓存 ──────────────────────────────────────────────────────────
+
+
+def collect_cache_inputs() -> tuple[str, str, dict[str, str]]:
+    """采集「当前工作状态」的缓存输入。
+
+    Returns:
+        ``(HEAD, 完整 diff 文本, {未跟踪文件路径: 内容 sha256})``。
+        已跟踪文件的改动由 ``git diff HEAD --binary`` 覆盖（含暂存/未暂存），
+        未跟踪文件逐个算内容摘要（只看文件名不够，同名文件内容也会变）。
+    """
+    head = _git("rev-parse", "HEAD").strip()
+    diff = _git("diff", "HEAD", "--binary")
+    untracked: dict[str, str] = {}
+    for path in _split_lines(_git("ls-files", "--others", "--exclude-standard")):
+        try:
+            data = (ROOT / path).read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        untracked[path] = hashlib.sha256(data).hexdigest()
+    return head, diff, untracked
+
+
+def compute_cache_key(
+    head: str,
+    diff: str,
+    untracked: dict[str, str],
+    extra: dict[str, str] | None = None,
+) -> str:
+    """计算同状态缓存键（纯函数，便于单测）。
+
+    相同 HEAD + 相同改动内容 + 相同门禁实现版本 ⇒ 键相同，可直接复用上次
+    「全部通过」的结论；任一文件内容变化都会换键，不会误跳过。
+    """
+    digest = hashlib.sha256()
+    digest.update(b"fashion-gate-cache-v1\0")
+    digest.update(head.encode("utf-8", "replace"))
+    digest.update(b"\0")
+    digest.update(diff.encode("utf-8", "replace"))
+    digest.update(b"\0")
+    for path in sorted(untracked):
+        digest.update(path.encode("utf-8", "replace"))
+        digest.update(b"\0")
+        digest.update(untracked[path].encode("utf-8", "replace"))
+        digest.update(b"\0")
+    for key in sorted(extra or {}):
+        digest.update(key.encode("utf-8", "replace"))
+        digest.update(b"=")
+        digest.update(str((extra or {})[key]).encode("utf-8", "replace"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _impl_hash() -> str:
+    """门禁实现自身的指纹：改了 test.sh / gate_scope.py 就让旧缓存失效。"""
+    digest = hashlib.sha256()
+    for rel in ("scripts/ci/test.sh", "scripts/ci/gate_scope.py"):
+        try:
+            digest.update((ROOT / rel).read_bytes())
+        except OSError:
+            digest.update(rel.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()[:32]
+
+
+def current_cache_key() -> str:
+    """读当前仓库状态并算出缓存键（CLI ``--cache-key`` 用）。"""
+    head, diff, untracked = collect_cache_inputs()
+    return compute_cache_key(head, diff, untracked, {"impl": _impl_hash()})
+
+
 # ── 输出 ────────────────────────────────────────────────────────────────
 
 
@@ -573,6 +645,29 @@ def self_test() -> int:
     check("unknown.conservative", unknown_plan.conservative, True)
     check("unknown.warning", len(unknown_plan.warnings) > 0, True)
 
+    cache_key = compute_cache_key("head", "diff", {"new.txt": "a" * 64}, {"impl": "v1"})
+    check("cache-stable", compute_cache_key("head", "diff", {"new.txt": "a" * 64}, {"impl": "v1"}), cache_key)
+    check(
+        "cache-head-changes",
+        compute_cache_key("head2", "diff", {"new.txt": "a" * 64}, {"impl": "v1"}) != cache_key,
+        True,
+    )
+    check(
+        "cache-diff-changes",
+        compute_cache_key("head", "diff2", {"new.txt": "a" * 64}, {"impl": "v1"}) != cache_key,
+        True,
+    )
+    check(
+        "cache-untracked-changes",
+        compute_cache_key("head", "diff", {"new.txt": "b" * 64}, {"impl": "v1"}) != cache_key,
+        True,
+    )
+    check(
+        "cache-impl-changes",
+        compute_cache_key("head", "diff", {"new.txt": "a" * 64}, {"impl": "v2"}) != cache_key,
+        True,
+    )
+
     if failures:
         print("门禁计划自检失败：")
         for line in failures:
@@ -598,10 +693,18 @@ def main(argv: list[str] | None = None) -> int:
         help="输出格式：text 供人读；bash 供 test.sh eval；json / github-output 给 CI",
     )
     parser.add_argument("--self-test", action="store_true", help="跑内置分类/计划断言后退出")
+    parser.add_argument(
+        "--cache-key",
+        action="store_true",
+        help="打印当前工作状态的缓存键后退出（test.sh 判断「同一状态已通过」用）",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
         return self_test()
+    if args.cache_key:
+        print(current_cache_key())
+        return 0
 
     warnings: list[str] = []
     if args.files:
