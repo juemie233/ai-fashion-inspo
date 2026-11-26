@@ -184,22 +184,22 @@ class TestGpuModel:
 
 
 class TestRunLogFailures:
-    async def test_start_run_log_failure_is_swallowed(self, logs):
-        """台账写失败（DB 忙/磁盘满）只告警 + 回滚，返回 None 让任务照常执行。"""
+    async def test_start_run_log_failure_is_swallowed(self, logs, monkeypatch):
+        """台账写失败（DB 忙/磁盘满）只告警，返回 None 让任务照常执行。"""
         session = _FakeSession(commit_error=RuntimeError("disk full"))
         task = SimpleNamespace(id=3, type="batch_analyze", total=1, retry_count=0)
+        monkeypatch.setattr(wk, "async_session", lambda: _FakeSessionCtx(session))
 
         assert await wk._start_run_log(session, task) is None
-
-        assert session.rollbacks == 1
         assert any("写任务运行台账失败" in line for line in logs.warnings)
 
-    async def test_start_run_log_rollback_failure_is_swallowed(self, logs):
+    async def test_start_run_log_rollback_failure_is_swallowed(self, logs, monkeypatch):
         session = _FakeSession(
             commit_error=RuntimeError("disk full"),
             rollback_error=RuntimeError("rollback failed too"),
         )
         task = SimpleNamespace(id=3, type="batch_analyze", total=1, retry_count=0)
+        monkeypatch.setattr(wk, "async_session", lambda: _FakeSessionCtx(session))
 
         assert await wk._start_run_log(session, task) is None  # 两层异常都不外泄
 
@@ -209,12 +209,13 @@ class TestRunLogFailures:
         await wk._finish_run_log(session, 42, status="success", item_count=1)  # row 不存在
         assert session.commits == 0
 
-    async def test_finish_run_log_failure_is_swallowed(self, logs):
+    async def test_finish_run_log_failure_is_swallowed(self, logs, monkeypatch):
         class _BoomDb(_FakeSession):
             async def get(self, _model, _pk):
                 raise RuntimeError("db gone")
 
         session = _BoomDb(rollback_error=RuntimeError("rollback failed"))
+        monkeypatch.setattr(wk, "async_session", lambda: _FakeSessionCtx(session))
 
         await wk._finish_run_log(session, 7, status="failed", item_count=0, error="x")
 
@@ -317,14 +318,17 @@ class TestWorkerLoopBoundaries:
         monkeypatch.setattr(wk.time, "monotonic", _monotonic)
 
     async def test_watchdog_cancels_stalled_task_and_retries_finalize(self, monkeypatch, logs):
-        async def _noop():
+        wk._WATCHDOG_CANCELLED.clear()
+        async def _noop(*_args, **_kwargs):
             return None
 
         async def _noop_async(*_args, **_kwargs):
             return None
 
-        async def _never(_task_id):
-            await asyncio.sleep(3600)
+        async def _never(*_args, **_kwargs):
+            # 用 Event 而不是 asyncio.sleep：本用例把 asyncio.sleep 换成了
+            # 第 3 次调用即 CancelledError 的替身，sleep 会让任务提前结束。
+            await asyncio.Event().wait()
 
         claims = {"n": 0}
 

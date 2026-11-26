@@ -453,7 +453,7 @@ async def test_worker_loop_claims_until_empty_then_sleeps(monkeypatch):
 
     ran: list[int] = []
 
-    async def _run(tid):
+    async def _run(tid, worker_id=None):
         ran.append(tid)
 
     real_sleep = asyncio.sleep
@@ -484,7 +484,7 @@ async def test_worker_loop_claims_until_empty_then_sleeps(monkeypatch):
     assert sorted(ran) == [1, 2]
 
 
-async def _claim_none():
+async def _claim_none(*_args, **_kwargs):
     return None
 
 
@@ -636,3 +636,75 @@ async def test_worker_id_is_unique_per_instance():
     a, b = _build_worker_id(), _build_worker_id()
     assert a.startswith("worker-")
     assert a != b  # 多实例必须能区分（心跳租约按 id 判定）
+
+async def test_run_task_safe_finalizes_zombie_when_failure_cleanup_raises(handlers, monkeypatch):
+    """失败收尾自己撞 database is locked 时，任务必须被看门狗改成 failed，不能永久 running。"""
+    import app.worker as w
+
+    async def _boom(db, task):
+        raise RuntimeError("Ollama 超时")
+
+    async def _locked(*_args, **_kwargs):
+        raise RuntimeError("database is locked")
+
+    handlers(_boom)
+    monkeypatch.setattr(w, "_schedule_retry", _locked)
+    tid = await _task(status="running", claimed_by="w-zombie")
+    w._WATCHDOG_CANCELLED.discard(tid)
+
+    await _run_task_safe(tid, "w-zombie")
+
+    row = await _get(tid)
+    assert row.status == "failed"
+    assert "异常退出" in (row.error or "")
+
+
+async def test_failure_does_not_override_cancel(handlers):
+    """运行中被取消后，handler 再抛异常也不能把 cancelled 改回 failed。"""
+    async def _cancel_then_fail(db, task):
+        row = await db.get(TaskQueue, task.id)
+        row.status = "cancelled"
+        row.error = "用户取消"
+        await db.commit()
+        raise PermanentTaskError("取消后的尾部异常")
+
+    handlers(_cancel_then_fail)
+    tid = await _task(status="running", claimed_by="w-cancel")
+
+    await _run_task(tid, "w-cancel")
+
+    row = await _get(tid)
+    assert row.status == "cancelled"
+    assert row.error == "用户取消"
+
+
+async def test_finish_log_failure_does_not_overwrite_success(handlers, monkeypatch):
+    """台账收尾失败不能把已提交的 success 覆盖成 failed。"""
+    import app.worker as w
+
+    async def _ok(db, task):
+        return None
+
+    async def _broken_log(*_args, **_kwargs):
+        raise RuntimeError("ledger locked")
+
+    handlers(_ok)
+    monkeypatch.setattr(w, "_finish_run_log", _broken_log)
+    tid = await _task(status="running", claimed_by="w-ledger")
+
+    await _run_task_safe(tid, "w-ledger")
+
+    assert (await _get(tid)).status == "success"
+
+
+async def test_reset_stale_excludes_current_worker():
+    """本 worker 正在跑的任务不能被周期清扫重置。"""
+    old = utcnow() - timedelta(seconds=600)
+    tid = await _task(status="running", claimed_by="w-live", heartbeat_at=old)
+
+    await _reset_stale_tasks(exclude_worker="w-live")
+    assert (await _get(tid)).status == "running"
+
+    await _reset_stale_tasks()
+    assert (await _get(tid)).status == "pending"
+

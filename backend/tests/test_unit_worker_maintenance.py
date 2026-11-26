@@ -367,8 +367,8 @@ class TestWorkerMain:
             "ensure_schema",
             "cleanup_analyze",
             "cleanup_runs",
-            "finalize_orphans",
             "reset_stale",
+            "finalize_orphans",
             "flush_backfills",
             "worker_loop",
         ]

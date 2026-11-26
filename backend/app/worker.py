@@ -8,7 +8,9 @@ worker 与 API 之间通过 task_queue 表解耦。
 任务认领按 priority DESC, id ASC（高优先级先执行，同优先级 FIFO）；
 同时执行的任务数由 settings.worker_concurrency 控制（默认 1 串行）。
 重负载任务（GPU_EXCLUSIVE_TASK_TYPES：向量回填 / 质量审核 / 批量分析 /
-人脸扫描与匹配）全局串行，不吃 GPU 的任务不受影响——见该常量的说明。
+人脸扫描与匹配）全局串行。注意：默认 ``worker_concurrency=1`` 时重负载任务会占满
+唯一槽位，轻量任务也要排队；只有并发 >= 2 或多 worker 进程时，“轻量任务不受影响”
+才成立。见 GPU_EXCLUSIVE_TASK_TYPES 的说明。
 """
 
 import asyncio
@@ -150,7 +152,7 @@ async def _claim_next_task(worker_id: str) -> int | None:
             ~exclusive_running,
         )
         result = await db.execute(
-            select(TaskQueue.id)
+            select(TaskQueue.id, claimable.label("claimable"))
             .where(
                 TaskQueue.status == "pending",
                 or_(
@@ -168,7 +170,11 @@ async def _claim_next_task(worker_id: str) -> int | None:
             .limit(1)
         )
         row = result.first()
-        if not row:
+        # 兼容只返回 id 的旧测试替身；真实查询返回 (id, claimable)
+        claimable_ok = bool(row[1]) if row and len(row) > 1 else bool(row)
+        if not row or not claimable_ok:
+            # 队首任务被互斥组挡住时直接返回，避免带条件的 UPDATE
+            # 白白获取 SQLite 写锁；下一轮再看互斥组是否释放。
             return None
 
         task_id = row[0]
@@ -201,13 +207,13 @@ async def _claim_next_task(worker_id: str) -> int | None:
         return task_id
 
 
-"""任务运行台账日志目录（与 supervisor 的 logs/ 同级）。"""
+# 任务运行台账日志目录（与 supervisor 的 logs/ 同级）。
 _LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 
 
 @lru_cache(maxsize=1)
 def _gpu_model() -> str | None:
-    """探测显卡型号（只探一次）；没有 nvidia-smi/多卡时返回 None，不猜。"""
+    """探测显卡型号（只探一次）；多卡时用 "; " 拼接型号，探测失败时返回 None。"""
     override = os.environ.get("GPU_MODEL", "").strip()
     if override:
         return override[:128]
@@ -229,89 +235,88 @@ def _gpu_model() -> str | None:
     return None
 
 
-async def _start_run_log(db: AsyncSession, task: TaskQueue) -> int | None:
+async def _start_run_log(db: AsyncSession | None, task: TaskQueue) -> int | None:
     """任务开始：写一条运行台账（started_at + GPU + attempt）。
 
-    独立提交：即使 handler 随后失败/回滚，这条「开始过」的记录仍在，
-    进程崩溃时也能看出哪次执行没有结束。
+    使用独立数据库会话，避免台账失败回滚主任务会话导致 task 过期/成功被覆盖。
+    ``db`` 参数仅为兼容既有调用与测试保留，不参与写库。
     """
     try:
-        row = TaskRunLog(
-            task_id=task.id,
-            task_type=task.type,
-            attempt=int(task.retry_count or 0),
-            started_at=utcnow(),
-            item_count=0,
-            total_count=int(task.total or 0),
-            status="running",
-            gpu_model=await asyncio.to_thread(_gpu_model),
-        )
-        db.add(row)
-        await db.commit()
-        # 本次执行的账本行 id：日志格式里的 run= 字段据此与 task_run_logs 对齐
-        run_id_var.set(str(row.id))
-        _RUN_LOG_IDS[task.id] = row.id
-        logger.info(
-            "任务开始: #%s (%s) total=%s attempt=%s gpu=%s",
-            task.id,
-            task.type,
-            task.total,
-            task.retry_count,
-            row.gpu_model or "unknown",
-        )
-        return row.id
+        async with async_session() as log_db:
+            row = TaskRunLog(
+                task_id=task.id,
+                task_type=task.type,
+                attempt=int(task.retry_count or 0),
+                started_at=utcnow(),
+                item_count=0,
+                total_count=int(task.total or 0),
+                status="running",
+                gpu_model=await asyncio.to_thread(_gpu_model),
+            )
+            log_db.add(row)
+            await log_db.commit()
+            await log_db.refresh(row)
+            # 本次执行的账本行 id：日志格式里的 run= 字段据此与 task_run_logs 对齐
+            run_id_var.set(str(row.id))
+            _RUN_LOG_IDS[task.id] = row.id
+            logger.info(
+                "任务开始: #%s (%s) total=%s attempt=%s gpu=%s",
+                task.id,
+                task.type,
+                task.total,
+                task.retry_count,
+                row.gpu_model or "unknown",
+            )
+            return row.id
     except Exception as exc:  # noqa: BLE001 —— 台账失败不能阻断任务执行
         logger.warning("写任务运行台账失败（忽略）: %s", exc)
-        try:
-            await db.rollback()
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("_start_run_log: 忽略异常（预期降级）：%s", exc)
-            pass
         return None
 
 
 async def _finish_run_log(
-    db: AsyncSession,
+    db: AsyncSession | None,
     run_log_id: int | None,
     *,
     status: str,
     item_count: int,
     error: str | None = None,
-) -> None:
-    """任务结束：补 finished_at / 状态 / 实际张数。"""
+) -> bool:
+    """任务结束：补 finished_at / 状态 / 实际张数；返回是否成功落库。
+
+    使用独立数据库会话：台账写失败不能影响主任务的成功终态（也不回滚主会话）。
+    ``db`` 参数仅为兼容既有调用与测试保留。
+    """
     if run_log_id is None:
-        return
+        return False
     try:
-        row = await db.get(TaskRunLog, run_log_id)
-        if row is None:
-            return
-        row.finished_at = utcnow()
-        row.status = status
-        row.item_count = int(item_count or 0)
-        row.error = (error or "")[:2000] or None
-        await db.commit()
-        seconds = (
-            (row.finished_at - row.started_at).total_seconds()
-            if row.started_at and row.finished_at
-            else 0
-        )
-        logger.info(
-            "任务结束: #%s (%s) status=%s done=%s/%s elapsed=%.1fs gpu=%s",
-            row.task_id,
-            row.task_type,
-            status,
-            row.item_count,
-            row.total_count,
-            seconds,
-            row.gpu_model or "unknown",
-        )
+        async with async_session() as log_db:
+            row = await log_db.get(TaskRunLog, run_log_id)
+            if row is None:
+                return True
+            row.finished_at = utcnow()
+            row.status = status
+            row.item_count = int(item_count or 0)
+            row.error = (error or "")[:2000] or None
+            await log_db.commit()
+            seconds = (
+                (row.finished_at - row.started_at).total_seconds()
+                if row.started_at and row.finished_at
+                else 0
+            )
+            logger.info(
+                "任务结束: #%s (%s) status=%s done=%s/%s elapsed=%.1fs gpu=%s",
+                row.task_id,
+                row.task_type,
+                status,
+                row.item_count,
+                row.total_count,
+                seconds,
+                row.gpu_model or "unknown",
+            )
+            return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("写任务运行台账收尾失败（忽略）: %s", exc)
-        try:
-            await db.rollback()
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("_finish_run_log: 忽略异常（预期降级）：%s", exc)
-            pass
+        return False
 
 
 async def _reload_for_failure(
@@ -338,7 +343,38 @@ async def _reload_for_failure(
     return fresh
 
 
-async def _run_task(task_id: int) -> None:
+def _is_foreign_task(task: TaskQueue | None, worker_id: str | None) -> bool:
+    """任务是否已被外部取消/暂停/接管，或已经进入其它终态。"""
+    if task is None:
+        return True
+    if task.status != "running":
+        return True
+    return bool(worker_id and task.claimed_by != worker_id)
+
+
+async def _finish_foreign_run_log(
+    db: AsyncSession | None,
+    run_log_id: int | None,
+    task: TaskQueue | None,
+    *,
+    error: str,
+) -> None:
+    """旧协程发现自己已失去任务归属时，只收尾自己的台账，不动任务行。"""
+    if task is None:
+        return
+    try:
+        await _finish_run_log(
+            db,
+            run_log_id,
+            status=task.status if task.status in ("cancelled", "paused") else "failed",
+            item_count=task.done,
+            error=error,
+        )
+    except Exception:  # noqa: BLE001 —— 台账失败不能把旧协程/主循环带崩
+        logger.exception("旧协程台账收尾失败（忽略）")
+
+
+async def _run_task(task_id: int, worker_id: str | None = None) -> None:
     """执行单个任务，处理成功 / 自动重试 / 失败标记。
 
     在独立 asyncio 协程中运行（并发数由 worker_concurrency 控制，默认 1），
@@ -346,11 +382,22 @@ async def _run_task(task_id: int) -> None:
 
     参数:
         task_id: 任务 ID
+        worker_id: 认领它的 worker 实例；缺省时按任务行 claimed_by 兼容旧调用
     """
     async with async_session() as db:
         task = await db.get(TaskQueue, task_id)
         if not task:
             logger.warning(f"任务不存在: #{task_id}，跳过")
+            return
+        if worker_id is None:
+            worker_id = task.claimed_by
+        if worker_id and task.claimed_by != worker_id:
+            logger.warning(
+                "任务 #%s 已被 %s 接管，跳过旧 worker %s 的执行",
+                task_id,
+                task.claimed_by,
+                worker_id,
+            )
             return
 
         # 广播「开始执行」事件（安全入口，无 WS 连接时静默降级）
@@ -365,19 +412,19 @@ async def _run_task(task_id: int) -> None:
             await handler(db, task)
             # 任务执行期间状态可能被外部变更（如取消/暂停接口），仅当仍为 running 时才标记 success
             await db.refresh(task)
-            if task.status != "running":
+            if task.status != "running" or (worker_id and task.claimed_by != worker_id):
                 logger.info(
-                    f"任务状态在执行期间被外部改为 {task.status}，跳过 success 覆盖: #{task.id}"
+                    "任务状态/归属在执行期间被外部变更（status=%s, claimed_by=%s），"
+                    "跳过 success 覆盖: #%s",
+                    task.status,
+                    task.claimed_by,
+                    task.id,
                 )
                 # 外部已置为 cancelled：补一次终态广播（paused 不在事件契约内，不广播）
                 if task.status == "cancelled":
                     await _broadcast_task_event(task, "cancelled", error=task.error)
-                await _finish_run_log(
-                    db,
-                    run_log_id,
-                    status=task.status,
-                    item_count=task.done,
-                    error=task.error,
+                await _finish_foreign_run_log(
+                    db, run_log_id, task, error="任务执行期间被外部取消/暂停/接管"
                 )
                 return
             task.status = "success"
@@ -395,6 +442,15 @@ async def _run_task(task_id: int) -> None:
             task = await _reload_for_failure(db, task_id)
             if task is None:
                 return
+            if _is_foreign_task(task, worker_id):
+                logger.info(
+                    "任务 #%s 失败处理时已被外部取消/暂停/接管，保留外部状态",
+                    task_id,
+                )
+                await _finish_foreign_run_log(
+                    db, run_log_id, task, error="执行失败但任务已被外部接管"
+                )
+                return
             await _schedule_retry(db, task, str(e))
             await db.commit()
             await _finish_run_log(
@@ -403,6 +459,15 @@ async def _run_task(task_id: int) -> None:
         except PermanentTaskError as e:
             task = await _reload_for_failure(db, task_id)
             if task is None:
+                return
+            if _is_foreign_task(task, worker_id):
+                logger.info(
+                    "任务 #%s 失败处理时已被外部取消/暂停/接管，保留外部状态",
+                    task_id,
+                )
+                await _finish_foreign_run_log(
+                    db, run_log_id, task, error="执行失败但任务已被外部接管"
+                )
                 return
             task.status = "failed"
             task.error = str(e)
@@ -416,6 +481,15 @@ async def _run_task(task_id: int) -> None:
         except Exception as e:
             task = await _reload_for_failure(db, task_id)
             if task is None:
+                return
+            if _is_foreign_task(task, worker_id):
+                logger.info(
+                    "任务 #%s 失败处理时已被外部取消/暂停/接管，保留外部状态",
+                    task_id,
+                )
+                await _finish_foreign_run_log(
+                    db, run_log_id, task, error="执行失败但任务已被外部接管"
+                )
                 return
             msg = str(e) or e.__class__.__name__
             if _is_recoverable_error(msg):
@@ -438,31 +512,48 @@ async def _run_task(task_id: int) -> None:
                 await _broadcast_task_event(task, "failed", error=msg)
 
 
-async def _run_task_safe(task_id: int) -> None:
+async def _run_task_safe(task_id: int, worker_id: str | None = None) -> None:
     """并发槽位中执行单个任务：捕获所有异常，防止执行协程崩溃拖垮主循环。"""
     # 任务上下文：task_id / run_id 写进 contextvar，任务 runner 内所有日志自动带上
     task_token = task_id_var.set(f"#{task_id}")
     run_token = run_id_var.set("-")
     try:
-        await _run_task(task_id)
+        if worker_id is None:
+            await _run_task(task_id)
+        else:
+            await _run_task(task_id, worker_id)
     except asyncio.CancelledError:
         # 看门狗取消：写 failed 终态 + 补台账结束时间，再放行异常让槽位释放。
         # 进程关闭（asyncio.run 收尾）取消时不写终态：任务保持 running，下次启动
         # 由 _reset_stale_tasks 按心跳超时重置，语义与历史一致。
         if task_id in _WATCHDOG_CANCELLED:
             try:
-                await _fail_stalled_task(task_id)
+                finalized = await _fail_stalled_task(task_id)
             except Exception:  # noqa: BLE001 —— 收尾失败不能把 worker 主循环带崩
                 # P1-4：收尾失败时**保留**标记，由主循环 watchdog 周期重试；
                 # 先 discard 会让任务永远留在 running（没有下一次处理机会）。
                 logger.exception("看门狗收尾失败（保留标记待重试）: #%s", task_id)
             else:
-                _WATCHDOG_CANCELLED.discard(task_id)
+                if finalized is not False:
+                    _WATCHDOG_CANCELLED.discard(task_id)
         raise
     except Exception:
+        # _run_task 的失败收尾本身也可能因为 database is locked 抛出来；
+        # 此时协程即将结束，但任务行仍是 running，必须交给已有的看门狗重试通道
+        # 收尾为 failed，否则心跳会一直续租、任务永久卡死并占住互斥组。
         logger.exception(f"任务执行协程异常退出: #{task_id}")
+        _WATCHDOG_CANCELLED.add(task_id)
+        try:
+            finalized = await _fail_stalled_task(task_id, reason="任务执行协程异常退出")
+        except Exception:  # noqa: BLE001 —— 保留标记，主循环继续重试
+            logger.exception("执行协程异常退出后的收尾失败（保留标记待重试）: #%s", task_id)
+        else:
+            if finalized is not False:
+                _WATCHDOG_CANCELLED.discard(task_id)
     finally:
-        _RUN_LOG_IDS.pop(task_id, None)
+        # 看门狗收尾重试仍需要 run_log_id；只有已成功收尾/未进入看门狗时才清理。
+        if task_id not in _WATCHDOG_CANCELLED:
+            _RUN_LOG_IDS.pop(task_id, None)
         run_id_var.reset(run_token)
         task_id_var.reset(task_token)
 
@@ -493,35 +584,42 @@ async def _stalled_task_ids(worker_id: str, stall_seconds: int) -> list[int]:
     return list(rows)
 
 
-async def _fail_stalled_task(task_id: int) -> None:
-    """看门狗取消任务后的收尾：标记 failed、补台账结束时间、广播失败事件。
+async def _fail_stalled_task(task_id: int, reason: str | None = None) -> bool:
+    """看门狗取消/异常退出后的收尾：标记 failed、补台账、广播失败事件。
 
     为什么不在取消前写库：取消前写会让卡死的执行协程与新写操作共用 SQLite 写锁，
     极端情况下反而卡住收尾；先 cancel 释放它持有的会话/锁，再由本函数用新会话收尾。
     """
-    minutes = max(1, int(settings.task_stall_timeout_seconds) // 60)
-    message = (
-        f"任务超过 {minutes} 分钟无进度更新，已由看门狗强制终止（释放并发槽位；"
-        f"可重新提交，已产生的数据保留）"
-    )
+    if reason:
+        message = f"{reason}，已由 worker 强制收尾（释放并发槽位；可重新提交，已产生的数据保留）"
+    else:
+        minutes = max(1, int(settings.task_stall_timeout_seconds) // 60)
+        message = (
+            f"任务超过 {minutes} 分钟无进度更新，已由看门狗强制终止（释放并发槽位；"
+            f"可重新提交，已产生的数据保留）"
+        )
     async with async_session() as db:
         task = await db.get(TaskQueue, task_id)
         if task is None:
-            return
+            return True
         if task.status == "running":
             task.status = "failed"
             task.error = message
             task.next_retry_at = None
             task.updated_at = utcnow()
             await db.commit()
-            await _finish_run_log(
+            finished = await _finish_run_log(
                 db,
-                _RUN_LOG_IDS.pop(task_id, None),
+                _RUN_LOG_IDS.get(task_id),
                 status="failed",
                 item_count=task.done,
                 error=message,
             )
+            if finished:
+                _RUN_LOG_IDS.pop(task_id, None)
             await _broadcast_task_event(task, "failed", error=message)
+            if not finished:
+                return False
         logger.error(
             "任务看门狗终止: #%s (%s) 已 %s 秒无进度更新，状态=%s",
             task.id,
@@ -529,10 +627,11 @@ async def _fail_stalled_task(task_id: int) -> None:
             settings.task_stall_timeout_seconds,
             task.status,
         )
+        return True
 
 
-async def _reset_stale_tasks() -> None:
-    """启动时基于心跳租约重置遗留的 running 任务。
+async def _reset_stale_tasks(exclude_worker: str | None = None) -> None:
+    """基于心跳租约重置遗留的 running 任务。
 
     worker 进程异常终止后，其认领的任务会卡在 running 状态且心跳停止；
     重启时仅重置「心跳超时（认领它的 worker 已死）」的 running 任务，
@@ -554,6 +653,16 @@ async def _reset_stale_tasks() -> None:
             TaskQueue.heartbeat_at < stale_before,
         ),
     )
+    # 本 worker 仍在跑的协程由进程内看门狗负责；周期清扫不能因为一次心跳写锁拥塞
+    # 就把自己的任务重置/重排（否则长任务会白跑一遍，GPU 互斥也被破坏）。
+    if exclude_worker:
+        stale_cond = and_(
+            stale_cond,
+            or_(
+                TaskQueue.claimed_by.is_(None),
+                TaskQueue.claimed_by != exclude_worker,
+            ),
+        )
     async with async_session() as db:
         # 1) 重试次数已用尽：崩溃也算一次失败，直接判失败（否则无限重启循环）
         exhausted = await db.execute(
@@ -664,7 +773,9 @@ async def _worker_loop(worker_id: str) -> None:
             # 90s 内快速重启会让遗留任务永久卡在 running——见 _STALE_SWEEP_INTERVAL）
             if time.monotonic() - last_stale_sweep >= _STALE_SWEEP_INTERVAL:
                 last_stale_sweep = time.monotonic()
-                await _reset_stale_tasks()
+                await _reset_stale_tasks(exclude_worker=worker_id)
+                # 重置后的任务台账也要收尾，否则运行记录会留下永久“进行中”
+                await _finalize_orphan_run_logs()
             # 任务看门狗：本 worker 认领的任务长时间没进度 → cancel + 写 failed。
             # 低频（30s）执行，查询只涉及本 worker 的少数 running 行。
             stall_seconds = int(settings.task_stall_timeout_seconds or 0)
@@ -696,7 +807,7 @@ async def _worker_loop(worker_id: str) -> None:
                 task_id = await _claim_next_task(worker_id)
                 if task_id is None:
                     break
-                running[asyncio.create_task(_run_task_safe(task_id))] = task_id
+                running[asyncio.create_task(_run_task_safe(task_id, worker_id))] = task_id
             await asyncio.sleep(_POLL_INTERVAL)
         except asyncio.CancelledError:
             raise
@@ -762,7 +873,10 @@ async def _cleanup_old_run_logs() -> None:
     try:
         async with async_session() as db:
             result = await db.execute(
-                delete(TaskRunLog).where(TaskRunLog.started_at < cutoff)
+                delete(TaskRunLog).where(
+                    TaskRunLog.started_at < cutoff,
+                    TaskRunLog.status != "running",
+                )
             )
             await db.commit()
             if result.rowcount:
@@ -786,11 +900,12 @@ async def _retry_pending_watchdog_finalize(running_task_ids: set[int]) -> None:
         if task_id in running_task_ids:
             continue
         try:
-            await _fail_stalled_task(task_id)
+            finalized = await _fail_stalled_task(task_id)
         except Exception:  # noqa: BLE001 —— 下一轮继续重试
             logger.exception("看门狗收尾重试失败（保留标记）: #%s", task_id)
             continue
-        _WATCHDOG_CANCELLED.discard(task_id)
+        if finalized is not False:
+            _WATCHDOG_CANCELLED.discard(task_id)
 
 
 async def _finalize_orphan_run_logs() -> None:
@@ -854,7 +969,7 @@ def _setup_logging() -> None:
     # P1-5：启动时打印生效的看门狗参数，排障时不用反查 .env
     logger.info(
         "[worker] 看门狗阈值=%ss，心跳间隔=%.0fs，并发槽位=%s（TASK_STALL_TIMEOUT_SECONDS / "
-        "WORKER_HEARTBEAT_STALE_SECONDS 见文档）",
+        "WORKER_STALE_HEARTBEAT_THRESHOLD_SECONDS 见文档）",
         settings.task_stall_timeout_seconds,
         _HEARTBEAT_INTERVAL,
         settings.worker_concurrency,
@@ -874,10 +989,12 @@ async def main() -> None:
     # 日志/台账保留期清理（P1-4）：启动时各做一次，失败只告警不阻断
     _cleanup_old_analyze_logs()
     await _cleanup_old_run_logs()
-    await _finalize_orphan_run_logs()
 
     worker_id = _build_worker_id()
+    # 先重置任务，再收尾台账：否则崩溃遗留的 running 任务会让其旧台账被
+    # _finalize_orphan_run_logs 误判为“仍在运行”，要等下一次重启才补 failed。
     await _reset_stale_tasks()
+    await _finalize_orphan_run_logs()
     await _flush_pending_backfills_on_startup()
     heartbeat_task = asyncio.create_task(_heartbeat_loop(worker_id))
     try:
