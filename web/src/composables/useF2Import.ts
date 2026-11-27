@@ -334,25 +334,6 @@ export function useF2Import() {
   }
 
   /**
-   * 组装查询参数：**数组一律自己拼成逗号分隔的字符串**。
-   *
-   * 为什么不能直接把数组交给 axios：axios 1.x 默认把数组序列化成
-   * `collect_ids[]=111&collect_ids[]=222`（键带方括号），而后端（FastAPI）按
-   * `collect_ids` 取值 → **永远收到空**。真实后果：用户勾了 19 个收藏夹，后端当成
-   * 「一个都没勾」——旧代码退回平铺收藏把整棵目录收进素材库（任务 #386/#387），
-   * 加了硬前置之后又变成任务一开始就失败（#389）。显式拼串后这种"静默丢参数"
-   * 不可能再发生（后端也同时兼容三种写法，见 routers/scraper.py 的 _split_multi）。
-   */
-  function toWireParams(options: F2ImportOptions): Record<string, unknown> {
-    const { collect_ids, profiles, ...rest } = options
-    return {
-      ...rest,
-      ...(collect_ids?.length ? { collect_ids: collect_ids.join(',') } : {}),
-      ...(profiles?.length ? { profiles: profiles.join(',') } : {}),
-    }
-  }
-
-  /**
    * 入库前预览（只读）：跑同一条「扫描 → 五层判重」，返回「新增多少 / 跳过多少（含原因）」。
    *
    * 后端与入库共用 `build_import_plan`，所以数字与真正入库一致；差别只在于它不写库。
@@ -400,12 +381,15 @@ export function useF2Import() {
             ? '采集我的喜欢'
             : '一键获取素材'
     try {
+      // 2026-11-27 起后端支持可选 JSON body：profiles/collect_ids 用原生数组，
+      // 不再手工 join(',') 走 query。后端按「body 字段非 null 覆盖 query」解析；
+      // 这里传 body 后 query 不带这些字段，旧 query 兼容路径仍由后端保留。
       const { data } = await apiClient.post<{
         task_id: number | null
         message: string
         /** 后端已有进行中的同类任务，直接复用它（并发保护） */
         reused?: boolean
-      }>('/scraper/f2-import', null, { params: toWireParams(options) })
+      }>('/scraper/f2-import', options)
       if (!data.task_id) {
         Message.warning(data.message || '任务未创建')
         return { taskId: null, reused: false }

@@ -331,14 +331,12 @@ describe('F2LikeCard', () => {
     await submit.trigger('click')
     await flushPromises()
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: {
-        fetch: true,
-        mode: 'like',
-        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-        register_bloggers: true,
-        like_max_counts: 0, // 缺省全量（显式传 0，避免被后端配置顶掉）
-      },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      mode: 'like',
+      like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+      register_bloggers: true,
+      like_max_counts: 0, // 缺省全量（显式传 0，避免被后端配置顶掉）
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()
   })
@@ -359,14 +357,12 @@ describe('F2LikeCard', () => {
     await buttons(wrapper).submit.trigger('click')
     await flushPromises()
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: {
-        fetch: true,
-        mode: 'like',
-        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-        register_bloggers: false,
-        like_max_counts: 0,
-      },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      mode: 'like',
+      like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+      register_bloggers: false,
+      like_max_counts: 0,
     })
   })
 
@@ -407,14 +403,12 @@ describe('F2LikeCard', () => {
     await buttons(wrapper).submit.trigger('click')
     await flushPromises()
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: {
-        fetch: true,
-        mode: 'like',
-        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-        register_bloggers: true,
-        like_max_counts: 200,
-      },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      mode: 'like',
+      like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+      register_bloggers: true,
+      like_max_counts: 200,
     })
   })
 
@@ -431,8 +425,8 @@ describe('F2LikeCard', () => {
     await buttons(wrapper).submit.trigger('click')
     await flushPromises()
 
-    const params = (mocks.post.mock.calls[0][2] as { params: Record<string, unknown> }).params
-    expect(params.like_max_counts).toBe(0)
+    const body = mocks.post.mock.calls[0][1] as Record<string, unknown>
+    expect(body.like_max_counts).toBe(0)
   })
 
   it('收藏模式：按 mode=collection 提交，文案与可用性走收藏字段', async () => {
@@ -459,17 +453,15 @@ describe('F2LikeCard', () => {
     await wrapper.find('button.popconfirm-ok').trigger('click')
     await flushPromises()
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: {
-        fetch: true,
-        mode: 'collection',
-        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-        // 收藏恒不补建博主（2026-10-01 口径）：开关不出现，值也恒为 false
-        register_bloggers: false,
-        like_max_counts: 0,
-        // 确认弹窗通过后才带的显式许可：后端默认拒绝平铺导入（含未勾选的夹）
-        allow_all_collect: true,
-      },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      mode: 'collection',
+      like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+      // 收藏恒不补建博主（2026-10-01 口径）：开关不出现，值也恒为 false
+      register_bloggers: false,
+      like_max_counts: 0,
+      // 确认弹窗通过后才带的显式许可：后端默认拒绝平铺导入（含未勾选的夹）
+      allow_all_collect: true,
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()
   })
@@ -550,18 +542,14 @@ describe('F2LikeCard', () => {
     await wrapper.find('.f2l-modal-ok').trigger('click')
     await flushPromises()
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: {
-        fetch: true,
-        mode: 'collection',
-        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-        register_bloggers: false, // 收藏恒不补建博主（见上一条用例）
-        like_max_counts: 0,
-        // **必须是逗号分隔的字符串**，不能是数组：数组会被 axios 序列化成
-        // `collect_ids[]=111&collect_ids[]=333`，后端按 collect_ids 取值 → 收到空
-        // → 用户勾的夹全部丢失（真实事故，见 useF2Import.toWireParams 注释）
-        collect_ids: '111,333',
-      },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      mode: 'collection',
+      like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+      register_bloggers: false, // 收藏恒不补建博主（见上一条用例）
+      like_max_counts: 0,
+      // JSON body 原生数组：不拆逗号、不再走 query
+      collect_ids: ['111', '333'],
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()
     // 提交后弹窗关闭

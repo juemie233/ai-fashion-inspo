@@ -31,6 +31,9 @@ test('治理页：统计与四个子页面切换（tab 写进 URL）', async ({ 
 })
 
 test('治理页：数据完整性检查可执行且给出结论', async ({ page }) => {
+  // 真实大库上单次完整性巡检（DB 路径比对 + storage 全量扫描）实测可达 25s 以上，
+  // 且本用例会连续触发两次（进页自动 + 手动重跑），默认 30s 全局超时不够。
+  test.setTimeout(90_000)
   await page.goto('/admin/governance?tab=integrity')
 
   await expect(page.getByText('数据完整性检查').first()).toBeVisible({ timeout: 15_000 })
@@ -39,10 +42,17 @@ test('治理页：数据完整性检查可执行且给出结论', async ({ page 
     { timeout: 30_000 },
   )
 
-  // 手动重跑：点「重新检查」后结论应重新出现（中途是 loading 态，所以放宽超时）
-  await page.getByRole('button', { name: '重新检查' }).first().click()
+  // 手动重跑：等「重新检查」对应的接口真实返回后再断言结论文本（不用固定 sleep；
+  // 也避免旧结论还在页面上时断言直接命中，导致没验证到重跑结果）。
+  await Promise.all([
+    page.waitForResponse(
+      (resp) => resp.url().includes('/api/admin/integrity-check') && resp.status() === 200,
+      { timeout: 60_000 },
+    ),
+    page.getByRole('button', { name: '重新检查' }).first().click(),
+  ])
   await expect(page.getByText(/数据完整，未发现|发现.*问题|缺失文件|孤立文件/).first()).toBeVisible(
-    { timeout: 30_000 },
+    { timeout: 60_000 },
   )
   await expect(page.getByText('页面渲染出错')).toHaveCount(0)
 })

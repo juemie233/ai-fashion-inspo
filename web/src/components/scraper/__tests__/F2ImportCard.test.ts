@@ -293,13 +293,11 @@ describe('F2ImportCard · 按博主全量下载', () => {
     await wrapper.find('.f2-profile input').setValue(`https://www.douyin.com/user/${SEC}`)
     await submitProfile(wrapper)
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: {
-        fetch: true,
-        // 逗号分隔字符串（不是数组）：数组会被 axios 序列化成 `profiles[]=…` → 后端收不到
-        profiles: `https://www.douyin.com/user/${SEC}`,
-        make_thumbnails: true,
-      },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      // JSON body 原生数组（2026-11-27）：不再手工 join(',') 走 query
+      profiles: [`https://www.douyin.com/user/${SEC}`],
+      make_thumbnails: true,
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()
   })
@@ -313,10 +311,9 @@ describe('F2ImportCard · 按博主全量下载', () => {
       .setValue(`${SEC}, https://www.douyin.com/user/MS4wLjABAAAAother0000`)
     await submitProfile(wrapper)
 
-    // **逗号分隔字符串**而不是数组：数组会被 axios 序列化成 `profiles[]=…`，
-    // 后端按 profiles 取值 → 收到空，「按博主全量下载」会静默退化成普通增量
-    const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
-    expect(params.profiles).toBe(`${SEC},https://www.douyin.com/user/MS4wLjABAAAAother0000`)
+    // JSON body 原生数组：多个博主用多个元素，不再拼逗号字符串
+    const body = mocks.post.mock.calls[0][1] as { profiles: string[] }
+    expect(body.profiles).toEqual([SEC, 'https://www.douyin.com/user/MS4wLjABAAAAother0000'])
   })
 
   it('没填时按钮禁用，不会发出空 profiles 的请求', async () => {
@@ -365,8 +362,8 @@ describe('F2ImportCard · 按博主全量下载', () => {
     await flushPromises()
     await submitProfile(wrapper)
 
-    const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
-    expect(params.profiles).toBe(`https://www.douyin.com/user/${SEC}`)
+    const body = mocks.post.mock.calls[0][1] as { profiles: string[] }
+    expect(body.profiles).toEqual([`https://www.douyin.com/user/${SEC}`])
     expect(wrapper.emitted('submitted')).toBeTruthy()
   })
 
@@ -382,9 +379,9 @@ describe('F2ImportCard · 按博主全量下载', () => {
       .setValue(`https://www.douyin.com/user/${SEC}, MS4wLjABAAAAother0000`)
     await submitProfile(wrapper)
 
-    const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
+    const body = mocks.post.mock.calls[0][1] as { profiles: string[] }
     // 选择器在前、手填在后；重复的那一个只提交一次
-    expect(params.profiles).toBe(`https://www.douyin.com/user/${SEC},MS4wLjABAAAAother0000`)
+    expect(body.profiles).toEqual([`https://www.douyin.com/user/${SEC}`, 'MS4wLjABAAAAother0000'])
   })
 
   it('选中的博主缺主页标识时给出提示，且没有可提交标识时按钮禁用', async () => {
@@ -533,8 +530,8 @@ describe('F2ImportCard · 预览参数快照与博主确认', () => {
       .trigger('click')
     await flushPromises()
 
-    const params = (mocks.post.mock.calls[0][2] as { params: { fetch: boolean } }).params
-    expect(params.fetch).toBe(true)
+    const body = mocks.post.mock.calls[0][1] as { fetch: boolean }
+    expect(body.fetch).toBe(true)
   })
 
   it('博主下载必须先确认，确认前不提交', async () => {

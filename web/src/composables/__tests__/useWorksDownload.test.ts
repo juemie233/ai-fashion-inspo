@@ -81,7 +81,7 @@ function mockApi(resolve: unknown) {
 
 function f2ImportCall() {
   const call = mocks.post.mock.calls.find((c) => String(c[0]).includes('/scraper/f2-import'))
-  return call as [string, unknown, { params: Record<string, string> }] | undefined
+  return call as [string, { profiles?: string[]; mode?: string }] | undefined
 }
 
 describe('useWorksDownload', () => {
@@ -159,8 +159,9 @@ describe('useWorksDownload', () => {
     expect(resolving.value).toBe(false)
     expect(mocks.post.mock.calls[0][0]).toBe('/bloggers/1/resolve-douyin-profile')
     const f2Call = f2ImportCall()
-    expect(f2Call?.[2].params.profiles).toBe(DOUYIN_URL)
-    expect(f2Call?.[2].params.mode).toBe('post')
+    // JSON body 原生数组（2026-11-27）：profiles 不再 join 成 query 字符串
+    expect(f2Call?.[1].profiles).toEqual([DOUYIN_URL])
+    expect(f2Call?.[1].mode).toBe('post')
     expect(reloaded).toBe(1) // 通知详情页重拉，让主页链接显示出来
     expect(success).toHaveBeenCalled()
   })
@@ -210,6 +211,6 @@ describe('useWorksDownload', () => {
     expect(mocks.post.mock.calls.some((c) => String(c[0]).includes('resolve-douyin-profile'))).toBe(
       false,
     )
-    expect(f2ImportCall()?.[2].params.profiles).toBe(DOUYIN_URL)
+    expect(f2ImportCall()?.[1].profiles).toEqual([DOUYIN_URL])
   })
 })

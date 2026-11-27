@@ -81,8 +81,9 @@ describe('useF2Import', () => {
 
     await submit({ fetch: true, include_unknown_authors: true })
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: { fetch: true, include_unknown_authors: true },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      include_unknown_authors: true,
     })
     success.mockRestore()
   })
@@ -176,8 +177,11 @@ describe('useF2Import', () => {
     const taskId = await submit({ fetch: true, authors: '里香', limit: 100, skip_live: true })
 
     expect(taskId).toBe(42)
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: { fetch: true, authors: '里香', limit: 100, skip_live: true },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      authors: '里香',
+      limit: 100,
+      skip_live: true,
     })
     expect(submitting.value).toBe(false)
     expect(success).toHaveBeenCalled()
@@ -416,8 +420,10 @@ describe('useF2Import', () => {
 
     await submit({ fetch: true, mode: 'like', like_user: 'MS4wLjABAAAAme' })
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: { fetch: true, mode: 'like', like_user: 'MS4wLjABAAAAme' },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      mode: 'like',
+      like_user: 'MS4wLjABAAAAme',
     })
     success.mockRestore()
   })
@@ -434,18 +440,50 @@ describe('useF2Import', () => {
       collect_ids: ['111', '333'],
     })
 
-    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
-      params: {
-        fetch: true,
-        mode: 'collection',
-        like_user: 'MS4wLjABAAAAme',
-        // **逗号分隔字符串**：数组会被 axios 序列化成 `collect_ids[]=…`，
-        // 后端按 collect_ids 取值 → 收到空 → 勾的夹全丢（真实事故）
-        collect_ids: '111,333',
-      },
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', {
+      fetch: true,
+      mode: 'collection',
+      like_user: 'MS4wLjABAAAAme',
+      // JSON body 原生数组：不再 join(',')；后端 F2ImportRequest 直接按数组解析
+      collect_ids: ['111', '333'],
     })
+    // query 不再携带旧的逗号串参数（axios 第三参不传）
+    expect(mocks.post.mock.calls[0]).toHaveLength(2)
     // 提示文案要说清是「按收藏夹下载」，否则用户以为又全量下了一遍收藏
     expect(success).toHaveBeenCalledWith(expect.stringContaining('按收藏夹下载（2 个夹）'))
+    success.mockRestore()
+  })
+
+  it('submit 用 JSON body 传 profiles 原生数组，布尔/数字保持原值', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.post.mockResolvedValue({ data: { task_id: 53, message: '已提交' } })
+    const { submit } = useF2Import()
+
+    await submit({
+      fetch: true,
+      profiles: ['https://www.douyin.com/user/MS4wLjABAAAAme', 'MS4wLjABAAAAnother'],
+      limit: 30,
+      skip_live: false,
+      make_thumbnails: true,
+      since_days: 0,
+    })
+
+    const [url, body, config] = mocks.post.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+      unknown,
+    ]
+    expect(url).toBe('/scraper/f2-import')
+    expect(config).toBeUndefined() // 不再传 params
+    expect(Array.isArray(body.profiles)).toBe(true)
+    expect(body.profiles).toEqual([
+      'https://www.douyin.com/user/MS4wLjABAAAAme',
+      'MS4wLjABAAAAnother',
+    ])
+    expect(body.limit).toBe(30)
+    expect(body.skip_live).toBe(false)
+    expect(body.make_thumbnails).toBe(true)
+    expect(body.since_days).toBe(0)
     success.mockRestore()
   })
 
