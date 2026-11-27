@@ -125,7 +125,7 @@ async def test_cancel_running_not_whitelisted_returns_400():
         with pytest.raises(HTTPException) as exc:
             await tasks_router.cancel_task(task_id, db=db)
 
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 409
     assert "仅等待中的任务" in str(exc.value.detail)
     assert await _status(task_id) == "running"
 
@@ -148,7 +148,7 @@ async def test_cancel_terminal_states_return_400(status):
         with pytest.raises(HTTPException) as exc:
             await tasks_router.cancel_task(task_id, db=db)
 
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 409
     assert await _status(task_id) == status
 
 
@@ -178,7 +178,7 @@ async def test_pause_rejects_non_pausable_type():
         with pytest.raises(HTTPException) as exc:
             await tasks_router.pause_task(task_id, db=db)
 
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 409
     assert await _status(task_id) == "running"
 
 
@@ -215,7 +215,7 @@ async def test_resume_rejects_running_task():
         with pytest.raises(HTTPException) as exc:
             await tasks_router.resume_task(task_id, db=db)
 
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 409
 
 
 async def test_resume_missing_task_returns_404():
@@ -236,7 +236,7 @@ async def test_delete_pending_rejected():
         with pytest.raises(HTTPException) as exc:
             await tasks_router.delete_task(task_id, db=db)
 
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 409
     assert "请使用取消操作" in str(exc.value.detail)
     assert await _status(task_id) == "pending"
 
@@ -249,7 +249,7 @@ async def test_delete_running_with_fresh_heartbeat_rejected():
         with pytest.raises(HTTPException) as exc:
             await tasks_router.delete_task(task_id, db=db)
 
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 409
     assert "正在执行中" in str(exc.value.detail)
     assert await _status(task_id) == "running"
 

@@ -4,6 +4,7 @@
 """
 
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import DateTime, Index, Integer, String, Text, event
 from sqlalchemy.dialects.sqlite import JSON
@@ -12,6 +13,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 from app.models.inspiration import utcnow
 from app.utils.task_summary import summarize_result
+
+
+class TaskStatus(StrEnum):
+    """任务队列状态机（数据库仍存字符串，API 层用它约束枚举值）。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    PAUSED = "paused"
+    SUCCESS = "success"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class TaskQueue(Base):

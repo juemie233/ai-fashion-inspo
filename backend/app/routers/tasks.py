@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.task import TaskQueue
+from app.models.task import TaskQueue, TaskStatus
 from app.models.task_run_log import TaskRunLog
 from app.schemas.task import (
     TaskCancelOut,
@@ -116,11 +116,16 @@ _PAUSABLE_RUNNING_TYPES = (
 )
 
 
+def _type_names(types: tuple[str, ...]) -> str:
+    """把任务类型白名单格式化为中文提示，避免直接把 Python tuple 塞给用户。"""
+    return "、".join(types)
+
+
 @router.get("", response_model=TaskListOut)
 async def list_tasks(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
-    status: str | None = None,
+    status: TaskStatus | None = None,
     type: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -300,9 +305,7 @@ async def cancel_task(
         result = await db.execute(
             delete(TaskQueue).where(TaskQueue.id == task_id, TaskQueue.status == "pending")
         )
-        if result.rowcount:
-            # TaskRunLog 没有 DB 级 ON DELETE CASCADE；手动清理，避免孤儿台账
-            await db.execute(delete(TaskRunLog).where(TaskRunLog.task_id == task_id))
+        # 台账已由 task_run_logs.task_id 的 ON DELETE CASCADE 自动清理
         await db.commit()
         if result.rowcount == 0:
             # 竞态：读取 pending 后任务已被 worker 认领为 running（或已被并发删除），
@@ -310,7 +313,7 @@ async def cancel_task(
             current = await db.get(TaskQueue, task_id, populate_existing=True)
             state = current.status if current else "已删除"
             raise HTTPException(
-                status_code=400,
+                status_code=409,
                 detail=f"任务已开始执行（当前状态 {state}），不能删除",
             )
         return {"message": "任务已删除", "task_id": task_id, "deleted": True}
@@ -341,7 +344,8 @@ async def cancel_task(
         if result.rowcount == 0:
             await db.refresh(task)
             raise HTTPException(
-                status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法取消"
+                status_code=409,
+                detail=f"任务状态已变化（当前状态 {task.status}），无法取消",
             )
         # 取消达到终态：广播 cancelled 事件（安全入口，失败静默降级为轮询）
         task.status = "cancelled"
@@ -349,7 +353,7 @@ async def cancel_task(
         await _broadcast_task_event(task, "cancelled", error="用户手动取消")
         return {"message": "任务已取消", "task_id": task_id}
     raise HTTPException(
-        status_code=400,
+        status_code=409,
         detail=f"仅等待中的任务可以取消并删除（当前状态 {task.status}）",
     )
 
@@ -375,9 +379,9 @@ async def pause_task(
 
     if task.status != "running" or task.type not in _PAUSABLE_RUNNING_TYPES:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=(
-                f"仅运行中的 {_PAUSABLE_RUNNING_TYPES} 任务可暂停"
+                f"仅运行中的 {_type_names(_PAUSABLE_RUNNING_TYPES)} 任务可暂停"
                 f"（当前状态 {task.status}）"
             ),
         )
@@ -392,7 +396,8 @@ async def pause_task(
     if result.rowcount == 0:
         await db.refresh(task)
         raise HTTPException(
-            status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法暂停"
+            status_code=409,
+            detail=f"任务状态已变化（当前状态 {task.status}），无法暂停",
         )
     task.status = "paused"
     task.paused_at = utcnow()
@@ -428,9 +433,9 @@ async def resume_task(
 
     if task.status != "paused" or task.type not in _PAUSABLE_RUNNING_TYPES:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=(
-                f"仅已暂停的 {_PAUSABLE_RUNNING_TYPES} 任务可恢复"
+                f"仅已暂停的 {_type_names(_PAUSABLE_RUNNING_TYPES)} 任务可恢复"
                 f"（当前状态 {task.status}）"
             ),
         )
@@ -454,7 +459,8 @@ async def resume_task(
     if result.rowcount == 0:
         await db.refresh(task)
         raise HTTPException(
-            status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法恢复"
+            status_code=409,
+            detail=f"任务状态已变化（当前状态 {task.status}），无法恢复",
         )
     task.status = values["status"]
     task.paused_at = None
@@ -482,7 +488,7 @@ async def delete_task(
         raise HTTPException(status_code=404, detail="任务未找到")
     if task.status == "pending":
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail="任务状态为 pending，不能删除（如需移除请使用取消操作）",
         )
     stale_before = utcnow() - timedelta(
@@ -493,7 +499,7 @@ async def delete_task(
         zombie = task.heartbeat_at is None or task.heartbeat_at < stale_before
         if not zombie:
             raise HTTPException(
-                status_code=400,
+                status_code=409,
                 detail="任务正在执行中（心跳正常），不能删除",
             )
     # 原子删除：二次确认状态仍落在可删范围（终态 / 僵尸 running / 暂停），
@@ -513,14 +519,13 @@ async def delete_task(
             ),
         )
     )
-    if result.rowcount:
-        await db.execute(delete(TaskRunLog).where(TaskRunLog.task_id == task_id))
+    # 台账已由 task_run_logs.task_id 的 ON DELETE CASCADE 自动清理
     await db.commit()
     if result.rowcount == 0:
         current = await db.get(TaskQueue, task_id, populate_existing=True)
         state = current.status if current else "已删除"
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"任务状态已变化（当前状态 {state}），不能删除",
         )
     return {"message": "任务已删除", "task_id": task_id, "deleted": True}

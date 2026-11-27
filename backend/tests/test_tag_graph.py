@@ -299,7 +299,7 @@ async def test_network_pause_unauthorized(client, upload):
         await db.commit()
 
     r = client.post(f"/api/tasks/{task_id}/pause")
-    assert r.status_code == 400
+    assert r.status_code == 409
 
 
 async def test_network_resume_unauthorized(client, upload):
@@ -309,7 +309,7 @@ async def test_network_resume_unauthorized(client, upload):
     task_id = r.json()["task_id"]
 
     r = client.post(f"/api/tasks/{task_id}/resume")
-    assert r.status_code == 400  # pending 状态不可恢复
+    assert r.status_code == 409  # pending 状态不可恢复
 
 
 async def test_network_cancel(client, upload):

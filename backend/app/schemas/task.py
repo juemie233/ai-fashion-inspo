@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, field_serializer
 
+from app.models.task import TaskStatus
 from app.utils.time import format_utc
 
 
@@ -13,7 +14,7 @@ class TaskOut(BaseModel):
 
     id: int
     type: str
-    status: str  # pending/running/success/failed/cancelled
+    status: TaskStatus  # pending/running/paused/success/failed/cancelled
     priority: int = 0  # 队列优先级：越大越先执行（默认 0，清理类任务 -5）
     progress: int  # 0~100
     total: int

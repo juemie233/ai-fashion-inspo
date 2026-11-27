@@ -129,12 +129,18 @@ async def test_cancel_pending_task_physically_deletes(client):
         assert await db.get(PendingVectorBackfill, backfill_id) is not None
 
 
+async def test_list_tasks_rejects_unknown_status(client):
+    """status 是枚举：拼错的状态返回 422，而不是静默查空列表。"""
+    r = client.get("/api/tasks", params={"status": "pinding"})
+    assert r.status_code == 422, r.text
+
+
 async def test_cancel_non_pending_task_rejected(client):
     """取消非 pending 任务（success）→ 400，记录保留。"""
     tid = await _add_task(status="success")
 
     r = client.post(f"/api/tasks/{tid}/cancel")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert "仅等待中的任务" in r.json()["detail"]
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "success"
 
@@ -148,7 +154,7 @@ async def test_cancel_running_task_rejected(client):
     tid = await _add_task(status="running", type_="deduplicate")
 
     r = client.post(f"/api/tasks/{tid}/cancel")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "running"
 
 
@@ -216,7 +222,7 @@ async def test_delete_pending_running_rejected(client):
     tid = await _add_task(status="pending")
 
     r = client.delete(f"/api/tasks/{tid}")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert "不能删除" in r.json()["detail"]
     assert client.get(f"/api/tasks/{tid}").status_code == 200
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "pending"
@@ -227,7 +233,7 @@ async def test_delete_live_running_rejected(client):
     tid = await _add_task(status="running", heartbeat_at=utcnow())
 
     r = client.delete(f"/api/tasks/{tid}")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert "不能删除" in r.json()["detail"]
     assert client.get(f"/api/tasks/{tid}").status_code == 200
 
@@ -312,7 +318,7 @@ async def test_pause_non_pausable_type_rejected(client):
     tid = await _add_task(status="running", type_="face_scan")
 
     r = client.post(f"/api/tasks/{tid}/pause")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert "可暂停" in r.json()["detail"]
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "running"
 
@@ -371,7 +377,7 @@ async def test_cancel_paused_task_of_non_pausable_type_rejected(client):
     tid = await _add_task(status="paused", type_="face_scan")
 
     r = client.post(f"/api/tasks/{tid}/cancel")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "paused"
 
 
@@ -419,7 +425,7 @@ async def test_pause_non_running_rejected(client):
     tid = await _add_task(status="pending", type_="batch_analyze")
 
     r = client.post(f"/api/tasks/{tid}/pause")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "pending"
 
 
@@ -463,7 +469,7 @@ async def test_resume_non_paused_rejected(client):
     tid = await _add_task(status="running", type_="batch_analyze")
 
     r = client.post(f"/api/tasks/{tid}/resume")
-    assert r.status_code == 400, r.text
+    assert r.status_code == 409, r.text
     assert "可恢复" in r.json()["detail"]
 
 
