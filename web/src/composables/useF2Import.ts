@@ -1,8 +1,8 @@
 /** f2「一键获取素材」的状态与提交逻辑。
  *
  * 后端链路：`POST /api/scraper/f2-import` 创建后台任务（f2 增量下载 → 五层去重 →
- * 入库），由独立 worker 执行，进度在「任务中心」查看；本组合式只负责可用性检查
- * 与提交，不持有任务进度（避免与任务中心重复轮询）。
+ * 入库），由独立 worker 执行，进度在「任务中心」查看；本组合式负责状态/博主清单/
+ * 收藏夹扫描、预览、提交与自动获取配置，不持有任务进度（避免与任务中心重复轮询）。
  */
 
 import { ref } from 'vue'
@@ -10,6 +10,9 @@ import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
 import type { F2PreviewResult } from '@/types/scraper'
+
+/** f2 采集入口：post=博主主页作品 / like=我的喜欢 / collection=我的收藏 */
+type F2Mode = 'post' | 'like' | 'collection'
 
 /** f2 **下载期间**的实时统计（后端 result.download_progress；非下载阶段为空）。
  *
@@ -66,8 +69,8 @@ export interface F2RunningTask {
   total: number
   /** 阶段标记：download / scan / import / done（空串表示后端未标记） */
   stage: string
-  /** 采集入口：post=博主主页作品；like=我的喜欢（决定阶段文案口径） */
-  fetch_mode: string
+  /** 采集入口：post=博主主页作品；like=我的喜欢；collection=我的收藏 */
+  fetch_mode: F2Mode
   /** f2 下载期间的实时统计（无则 null）：三种下载入口都有 */
   download_progress: F2DownloadProgress | null
 }
@@ -77,7 +80,7 @@ export interface F2AutoStatus {
   /** 是否开启每日自动增量入库 */
   enabled: boolean
   /** 自动获取走哪个入口：post=博主主页作品 / like=我的喜欢 / collection=我的收藏 */
-  mode: string
+  mode: F2Mode
   /** 最小间隔（小时）：距上次任务不足则跳过本轮 */
   interval_hours: number
   /** 自动获取是否跳过 live 实况分段 */
@@ -205,13 +208,13 @@ export interface F2ImportOptions {
   /** 是否连「未登记到博主库」的 f2 账号一起处理（缺省否：只处理已登记博主） */
   include_unknown_authors?: boolean
   /** 采集模式：post=博主主页作品（缺省）；like=我的喜欢（点赞，需 like_user） */
-  mode?: 'post' | 'like' | 'collection'
-  /** mode=like 时的「我的主页链接 / sec_user_id」（缺省用后端已保存的配置） */
+  mode?: F2Mode
+  /** mode=like/collection 时的「我的主页链接 / sec_user_id」（缺省用后端已保存的配置） */
   like_user?: string
-  /** mode=like 时：入库后把未登记的来源作者补建成抖音博主并绑定素材（缺省开；
+  /** mode=like/collection 时：入库后把未登记的来源作者补建成抖音博主并绑定素材（缺省开；
    *  补建的博主标记为「自动登记」，不算已登记博主、不进一键获取素材的下载白名单） */
   register_bloggers?: boolean
-  /** mode=like 时最多翻多少条点赞（0=全量翻到底）。
+  /** mode=like/collection 时最多翻多少条（0=全量翻到底）。
    *  收窄的是 f2 的翻页量（`-o`）：点赞分页没有「遇到已下载就停」，全量每次都要空翻
    *  到底；点赞列表最新在前，填 100~200 可把日常增量降到一两页。代价是两次运行之间
    *  新增点赞超过该值会漏。注意 f2 的点赞模式**不读 `-i`**，日期窗口在此无效。 */
@@ -233,6 +236,12 @@ export interface F2ImportOptions {
   allow_all_collect?: boolean
 }
 
+/** 提交结果：reused=true 表示后端复用了进行中的任务，本次参数可能未生效 */
+interface F2SubmitResult {
+  taskId: number | null
+  reused: boolean
+}
+
 export function useF2Import() {
   const status = ref<F2ImportStatus | null>(null)
   const statusLoading = ref(false)
@@ -248,6 +257,9 @@ export function useF2Import() {
   /** 「先扫描」结果：收藏夹清单（供勾选，默认全选） */
   const collectFolders = ref<F2CollectFolders | null>(null)
   const collectScanning = ref(false)
+  /** 状态/清单加载序号：慢的旧响应不能覆盖新响应 */
+  let statusLoadSeq = 0
+  let authorsLoadSeq = 0
 
   /**
    * 读取可用性（卡片挂载、刷新按钮与「有任务在跑」时的轮询都调它）。
@@ -256,29 +268,41 @@ export function useF2Import() {
    *   状态行每 5 秒闪一次加载态；首次加载与手动刷新仍走非静默）。
    */
   async function loadStatus(options: { silent?: boolean } = {}): Promise<void> {
+    const seq = ++statusLoadSeq
     if (!options.silent) statusLoading.value = true
     try {
       const { data } = await apiClient.get<F2ImportStatus>('/scraper/f2-status')
+      if (seq !== statusLoadSeq) return // 旧响应不覆盖新状态
       status.value = data
     } catch (e) {
-      status.value = null
-      Message.warning(getApiErrorMessage(e, 'f2 状态读取失败'))
+      if (seq !== statusLoadSeq) return
+      // 静默轮询失败保留上一次好数据：网络抖动不能把状态行/按钮一起清空，
+      // 也不能每 5 秒弹一次 toast
+      if (!options.silent) {
+        status.value = null
+        Message.warning(getApiErrorMessage(e, 'f2 状态读取失败'))
+      }
     } finally {
-      statusLoading.value = false
+      if (seq === statusLoadSeq && !options.silent) statusLoading.value = false
     }
   }
 
   /** 读取 f2 博主清单（展开清单时调，也可手动刷新） */
-  async function loadAuthors(): Promise<void> {
+  async function loadAuthors(options: { silent?: boolean } = {}): Promise<void> {
+    const seq = ++authorsLoadSeq
     authorsLoading.value = true
     try {
       const { data } = await apiClient.get<F2AuthorsOverview>('/scraper/f2-authors')
+      if (seq !== authorsLoadSeq) return
       f2Authors.value = data
     } catch (e) {
-      f2Authors.value = null
-      Message.warning(getApiErrorMessage(e, 'f2 博主清单读取失败'))
+      if (seq !== authorsLoadSeq) return
+      if (!options.silent) {
+        f2Authors.value = null
+        Message.warning(getApiErrorMessage(e, 'f2 博主清单读取失败'))
+      }
     } finally {
-      authorsLoading.value = false
+      if (seq === authorsLoadSeq) authorsLoading.value = false
     }
   }
 
@@ -288,6 +312,9 @@ export function useF2Import() {
    * 为什么要先扫描：平铺的「我的收藏」会把收藏夹里的作品一并下下来（实测 31 个夹
    * 约 2000 件，其中混着「股票 / 哲学 / 历史」这类明显不想要的 1 件夹），用户需要
    * 在下载前看到清单、勾掉不要的夹，再只下勾选的。
+   *
+   * 后端按 f2 配置文件里的登录 Cookie 读取收藏夹，**不接受 like_user 参数**；
+   * 用户刚粘贴但未保存的主页链接必须先 setLikeUser，否则扫描用的是旧配置。
    *
    * @returns 扫描结果；失败（Cookie 失效 / 风控）返回 null 并提示原因。
    */
@@ -331,6 +358,9 @@ export function useF2Import() {
    * 后端与入库共用 `build_import_plan`，所以数字与真正入库一致；差别只在于它不写库。
    * ⚠️ 预览的是**下载目录里已有的产物**：`fetch=true` 时会先增量下载，新下下来的
    * 作品不在预览里（预览是下限，不是承诺值）。
+   * ⚠️ 后端 `/f2-preview` 目前只接受 authors/limit/skip_live/mode/include_unknown_authors，
+   * **不支持 like_user / collect_ids / profiles**：收藏夹按夹下载、按博主全量下载
+   * 的精确数字应以实际任务为准，不能拿这个预览当承诺。
    */
   async function preview(options: F2ImportOptions): Promise<F2PreviewResult | null> {
     previewing.value = true
@@ -353,17 +383,22 @@ export function useF2Import() {
     }
   }
 
-  /** 提交一键获取素材任务，成功返回 task_id（失败返回 null） */
-  async function submit(options: F2ImportOptions): Promise<number | null> {
+  /** 提交并返回复用标志（调用方据此决定是否记录本次参数/选择） */
+  async function submitDetailed(options: F2ImportOptions): Promise<F2SubmitResult> {
+    if (submitting.value) return { taskId: null, reused: false }
     submitting.value = true
-    // 三个入口共用同一个接口，提示文案按用途区分（点赞入口说「一键获取素材」会让人以为点错了）
+    // 三个入口共用同一个接口，提示文案按用途区分（点赞/收藏入口说「一键获取素材」会让人以为点错了）
     const label = options.profiles?.length
       ? '按博主全量下载'
       : options.collect_ids?.length
         ? `按收藏夹下载（${options.collect_ids.length} 个夹）`
-        : options.mode === 'like'
-          ? '采集我的喜欢'
-          : '一键获取素材'
+        : options.mode === 'collection'
+          ? options.allow_all_collect
+            ? '一键下载全部收藏'
+            : '采集我的收藏'
+          : options.mode === 'like'
+            ? '采集我的喜欢'
+            : '一键获取素材'
     try {
       const { data } = await apiClient.post<{
         task_id: number | null
@@ -373,20 +408,27 @@ export function useF2Import() {
       }>('/scraper/f2-import', null, { params: toWireParams(options) })
       if (!data.task_id) {
         Message.warning(data.message || '任务未创建')
-        return null
+        return { taskId: null, reused: false }
       }
       if (data.reused) {
-        Message.info(data.message || `已有进行中的「${label}」任务`)
-        return data.task_id
+        // 后端只按任务类型复用：此次收藏夹/参数不一定生效，调用方不能把它当成提交成功
+        Message.warning(data.message || `已有进行中的「${label}」任务，本次设置未生效`)
+        return { taskId: data.task_id, reused: true }
       }
       Message.success(`已提交「${label}」任务，进度见任务中心`)
-      return data.task_id
+      return { taskId: data.task_id, reused: false }
     } catch (e) {
       Message.error(getApiErrorMessage(e, '提交失败'))
-      return null
+      return { taskId: null, reused: false }
     } finally {
       submitting.value = false
     }
+  }
+
+  /** 提交一键获取素材任务，成功返回 task_id（失败返回 null，保持旧签名） */
+  async function submit(options: F2ImportOptions): Promise<number | null> {
+    const result = await submitDetailed(options)
+    return result.taskId
   }
 
   /**
@@ -395,12 +437,13 @@ export function useF2Import() {
    * 后端会立即把配置写入 .env（persist=true），并回传最新的 auto 状态，
    * 因此这里直接用返回值覆盖本地状态，避免再多发一次 status 请求。
    */
-  async function setAuto(
-    enabled: boolean,
-    intervalHours?: number,
-    persist = true,
-    mode?: 'post' | 'like' | 'collection',
-  ): Promise<boolean> {
+  async function setAuto(options: {
+    enabled: boolean
+    intervalHours?: number
+    persist?: boolean
+    mode?: F2Mode
+  }): Promise<boolean> {
+    if (autoSaving.value) return false
     autoSaving.value = true
     try {
       const { data } = await apiClient.put<{ message: string; auto: F2AutoStatus }>(
@@ -408,11 +451,11 @@ export function useF2Import() {
         null,
         {
           params: {
-            enabled,
-            interval_hours: intervalHours,
-            persist,
+            enabled: options.enabled,
+            interval_hours: options.intervalHours,
+            persist: options.persist ?? true,
             // 入口只在显式指定时下发（未指定＝沿用后端已保存的模式）
-            ...(mode ? { mode } : {}),
+            ...(options.mode ? { mode: options.mode } : {}),
           },
         },
       )
@@ -436,6 +479,7 @@ export function useF2Import() {
    * URL 并写入 .env（persist=true），之后手动/任务都直接用这个配置。
    */
   async function setLikeUser(likeUser: string, persist = true): Promise<boolean> {
+    if (likeUserSaving.value) return false
     likeUserSaving.value = true
     try {
       const { data } = await apiClient.put<{ message: string; like_user: string }>(
@@ -443,12 +487,11 @@ export function useF2Import() {
         null,
         { params: { like_user: likeUser, persist } },
       )
-      if (status.value) {
-        status.value.like_user = data.like_user
-        // 链接变了，可用性随之变化：回读一次拿到 like_available / like_reason
-        await loadStatus({ silent: true })
-      }
+      if (status.value) status.value.like_user = data.like_user
+      // 先给成功反馈，回读慢时不要让用户以为没保存
       Message.success(data.message || '已保存')
+      // 无条件回读：首次加载失败（status=null）时也要补齐可用性，而不是等手动刷新
+      await loadStatus({ silent: true })
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '保存「我的主页链接」失败'))
@@ -471,6 +514,7 @@ export function useF2Import() {
    * ⚠ f2 的点赞模式**不读 `-i`**（源码实测），所以日期窗口在这里无效——能收窄的只有它。
    */
   async function setLikeMaxCounts(maxCounts: number, persist = true): Promise<boolean> {
+    if (likeMaxSaving.value) return false
     likeMaxSaving.value = true
     try {
       const { data } = await apiClient.put<{ message: string; like_max_counts: number }>(
@@ -505,6 +549,7 @@ export function useF2Import() {
     loadAuthors,
     scanCollects,
     submit,
+    submitDetailed,
     preview,
     setAuto,
     setLikeUser,

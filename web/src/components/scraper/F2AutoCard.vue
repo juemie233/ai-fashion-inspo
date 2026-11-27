@@ -48,20 +48,35 @@ watch(
 
 /** 开关：立刻写回后端（含 .env 持久化），失败时回读状态复原开关 */
 async function onToggleAuto(value: string | number | boolean) {
-  await setAuto(Boolean(value), intervalHours.value, true, autoMode.value)
+  await setAuto({
+    enabled: Boolean(value),
+    intervalHours: intervalHours.value,
+    persist: true,
+    mode: autoMode.value,
+  })
 }
 
 /** 间隔改动：开关处于开启状态时一并生效，关闭时只留作下次开启的默认值 */
 async function onIntervalChange(value: number | undefined) {
   if (!value || value === status.value?.auto?.interval_hours) return
-  await setAuto(autoEnabled.value, value, true, autoMode.value)
+  await setAuto({
+    enabled: autoEnabled.value,
+    intervalHours: value,
+    persist: true,
+    mode: autoMode.value,
+  })
 }
 
 /** 入口改动：立刻写回后端（与开关、间隔一并持久化） */
 async function onModeChange(value: unknown) {
   // a-select 的 change 值类型很宽（含对象/数组），这里按白名单收敛
   const mode = value === 'like' || value === 'collection' ? value : 'post'
-  await setAuto(autoEnabled.value, intervalHours.value, true, mode)
+  await setAuto({
+    enabled: autoEnabled.value,
+    intervalHours: intervalHours.value,
+    persist: true,
+    mode,
+  })
 }
 
 /** 「上次运行 / 下次到期」提示：说明自动获取现在的实际行为 */

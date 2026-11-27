@@ -568,6 +568,23 @@ describe('F2LikeCard', () => {
     expect(wrapper.find('.f2l-modal').exists()).toBe(false)
   })
 
+  it('后端复用进行中任务时不把本次收藏夹选择记成已生效，弹窗保持打开', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+    mocks.post.mockResolvedValue({
+      data: { task_id: 7, reused: true, message: '已有进行中的任务' },
+    })
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+    await wrapper.find('.f2l-modal-ok').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.f2l-modal').exists()).toBe(true)
+    expect(localStorage.getItem('f2-collect-folders')).toBeNull()
+    expect(wrapper.emitted('submitted')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('一个夹都没勾：不下发任何任务（避免误点成「全下」）', async () => {
     const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
 

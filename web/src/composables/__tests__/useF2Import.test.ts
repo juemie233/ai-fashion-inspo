@@ -1,4 +1,4 @@
-﻿/**
+/**
  * useF2Import 测试：一键获取素材的可用性检查与任务提交。
  *
  * 关注两件事：① 提交参数要按界面选项透传（后端据此决定是否下载/收窄范围）；
@@ -85,6 +85,20 @@ describe('useF2Import', () => {
       params: { fetch: true, include_unknown_authors: true },
     })
     success.mockRestore()
+  })
+
+  it('静默轮询失败不清空状态、不弹 toast，保留上一次好数据', async () => {
+    const warn = vi.spyOn(Message, 'warning').mockImplementation((() => {}) as never)
+    mocks.get.mockResolvedValueOnce({ data: makeStatus() }).mockRejectedValueOnce(new Error('boom'))
+    const { status, loadStatus } = useF2Import()
+
+    await loadStatus()
+    const before = status.value
+    await loadStatus({ silent: true })
+
+    expect(status.value).toBe(before)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('loadStatus 失败时置空并提示（不抛异常）', async () => {
@@ -234,8 +248,8 @@ describe('useF2Import', () => {
     success.mockRestore()
   })
 
-  it('submit 复用进行中的任务时给出提示而非「已提交」', async () => {
-    const info = vi.spyOn(Message, 'info').mockImplementation((() => {}) as never)
+  it('submitDetailed 复用进行中的任务时返回 reused，submit 保持旧签名返回 task_id', async () => {
+    const warn = vi.spyOn(Message, 'warning').mockImplementation((() => {}) as never)
     const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
     mocks.post.mockResolvedValue({
       data: {
@@ -244,14 +258,16 @@ describe('useF2Import', () => {
         reused: true,
       },
     })
-    const { submit } = useF2Import()
+    const { submit, submitDetailed } = useF2Import()
+
+    const detail = await submitDetailed({ fetch: true })
+    expect(detail).toEqual({ taskId: 7, reused: true })
+    expect(warn).toHaveBeenCalled()
+    expect(success).not.toHaveBeenCalled()
 
     const taskId = await submit({ fetch: true })
-
     expect(taskId).toBe(7)
-    expect(info).toHaveBeenCalled()
-    expect(success).not.toHaveBeenCalled()
-    info.mockRestore()
+    warn.mockRestore()
     success.mockRestore()
   })
 
@@ -347,7 +363,7 @@ describe('useF2Import', () => {
     const { status, loadStatus, setAuto, autoSaving } = useF2Import()
     await loadStatus()
 
-    const ok = await setAuto(true, 12)
+    const ok = await setAuto({ enabled: true, intervalHours: 12 })
 
     expect(ok).toBe(true)
     expect(mocks.put).toHaveBeenCalledWith('/scraper/f2-auto', null, {
@@ -368,7 +384,7 @@ describe('useF2Import', () => {
     const { loadStatus, setAuto } = useF2Import()
     await loadStatus()
 
-    await setAuto(true, 24, true, 'collection')
+    await setAuto({ enabled: true, intervalHours: 24, persist: true, mode: 'collection' })
 
     expect(mocks.put).toHaveBeenCalledWith('/scraper/f2-auto', null, {
       params: { enabled: true, interval_hours: 24, persist: true, mode: 'collection' },
@@ -383,7 +399,7 @@ describe('useF2Import', () => {
     const { status, loadStatus, setAuto } = useF2Import()
     await loadStatus()
 
-    const ok = await setAuto(true)
+    const ok = await setAuto({ enabled: true })
 
     expect(ok).toBe(false)
     expect(error).toHaveBeenCalledWith('写入 .env 失败')

@@ -74,6 +74,7 @@ const {
   loadStatus,
   scanCollects,
   submit,
+  submitDetailed,
   setLikeUser,
   setLikeMaxCounts,
 } = useF2Import()
@@ -233,10 +234,15 @@ async function onDownloadCheckedFolders(): Promise<boolean> {
     Message.warning('至少勾选一个收藏夹（不想要的取消勾选即可）')
     return false
   }
-  const taskId = await submit(
+  const result = await submitDetailed(
     buildPayload({ mode: 'collection', collect_ids: checkedFolderIds.value }),
   )
-  if (!taskId) return false
+  if (!result.taskId) return false
+  if (result.reused) {
+    // 后端只按任务类型复用：既有任务可能没带这次勾选的夹，不能把选择记成已生效
+    Message.warning('已有进行中的采集任务，本次收藏夹选择未生效；请等任务结束后重试')
+    return false
+  }
   // 只有真的按这个选择下了任务才记：只扫描不下载不该覆盖上次的选择
   saveFolderSelection(checkedFolderIds.value)
   emit('submitted')
