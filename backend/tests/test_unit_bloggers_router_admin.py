@@ -408,7 +408,7 @@ class TestListEndpoints:
         async def _similar(*_args, **_kwargs):
             return [{"id": 9, "score": 0.8}]
 
-        async def _dupes(_db, _service):
+        async def _dupes(_db):
             return [
                 {"key": "甲", "items": [{"id": 5}, {"id": 6}]},
                 {"key": "乙", "items": [{"id": 7}]},

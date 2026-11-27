@@ -857,7 +857,7 @@ async def blogger_similar(
     # 疑似重复：只保留「包含当前博主」的分组，前端直接给「合并为同一人」入口
     duplicates = [
         group
-        for group in await duplicate_name_groups(db, blogger_service)
+        for group in await duplicate_name_groups(db)
         if any(item["id"] == blogger.id for item in group.get("items") or [])
     ]
     return {"similar": similar, "duplicates": duplicates}
