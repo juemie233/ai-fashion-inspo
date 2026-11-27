@@ -304,12 +304,27 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 @router.get("/unanalyzed-ids")
-async def unanalyzed_ids(db: AsyncSession = Depends(get_db)) -> dict[str, list[str] | int]:
-    """获取所有未分析过的图片素材 ID 列表（暂不分析视频）。
+async def unanalyzed_ids(
+    limit: int | None = Query(
+        None,
+        ge=1,
+        le=5000,
+        description=(
+            "最多返回多少个未分析素材 ID（缺省=全部）；下推到 SQL LIMIT，"
+            "批量分析「取前 N 个」时不用先拉全量"
+        ),
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, list[str] | int]:
+    """获取未分析过的图片/视频素材 ID 列表（可选 limit 截断）。
 
     排除已进入未完成 batch/multi 分析任务的素材（数据库任务队列真值），避免重复分析。
+    ``limit`` 在 SQL 层下推（1~5000，缺省=全部），不传时兼容旧行为；响应
+    ``{ids, count}`` 不变，``count`` 为本次实际返回的条数。
     """
-    ids = await ai_svc.get_unanalyzed_ids(db)
+    ids = await ai_svc.get_unanalyzed_ids(
+        db, limit=limit if isinstance(limit, int) else None
+    )
     return {"ids": ids, "count": len(ids)}
 
 

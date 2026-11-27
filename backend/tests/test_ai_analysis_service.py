@@ -115,6 +115,37 @@ async def test_unanalyzed_ids(client, upload):
     assert data["ids"] == [b]
 
 
+async def test_unanalyzed_ids_limit(client, upload):
+    """limit 下推：limit=2 只返回 2 个；limit 大于实际返回全部；不传仍返回全部。"""
+    ids = {upload().json()["id"] for _ in range(5)}
+
+    no_limit = client.get("/api/ai/unanalyzed-ids").json()
+    assert no_limit["count"] == 5
+    assert set(no_limit["ids"]) == ids
+
+    limited = client.get("/api/ai/unanalyzed-ids", params={"limit": 2}).json()
+    assert limited["count"] == 2
+    assert len(limited["ids"]) == 2
+    assert set(limited["ids"]).issubset(ids)
+
+    over = client.get("/api/ai/unanalyzed-ids", params={"limit": 100}).json()
+    assert over["count"] == 5
+    assert set(over["ids"]) == ids
+
+    # 全部有成功日志后：空结果仍保持 {ids: [], count: 0} 结构
+    for insp_id in ids:
+        await _add_log(insp_id)
+    empty = client.get("/api/ai/unanalyzed-ids", params={"limit": 2}).json()
+    assert empty == {"ids": [], "count": 0}
+
+
+async def test_unanalyzed_ids_limit_validation(client):
+    """limit 非法值（0 / 负数 / 超过 5000）→ 422（FastAPI Query 校验）。"""
+    for bad in (0, -1, 5001):
+        resp = client.get("/api/ai/unanalyzed-ids", params={"limit": bad})
+        assert resp.status_code == 422, (bad, resp.text)
+
+
 async def test_analysis_queue_stats(client, upload):
     """分析队列统计：总数/已分析/失败/未分析。
 

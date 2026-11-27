@@ -9,7 +9,7 @@
    靠 `_analysis_log_filter()` 区分；漏一个统计就会虚高。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -34,8 +34,8 @@ async def _insp(
                 file_path=f"images/x/{insp_id}.jpg" if media_type == "image" else f"videos/{insp_id}.mp4",
                 media_type=media_type,
                 quality_status="approved",
-                deleted_at=datetime.now(timezone.utc) if deleted else None,
-                created_at=created_at or datetime.now(timezone.utc),
+                deleted_at=datetime.now(UTC) if deleted else None,
+                created_at=created_at or datetime.now(UTC),
             )
         )
         await db.commit()
@@ -163,6 +163,39 @@ async def test_unanalyzed_ids_includes_video_and_skips_trash(client, monkeypatch
 
     assert "v1" in ids   # 视频也要参与分析（经首帧）
     assert "v2" not in ids
+
+
+async def test_unanalyzed_ids_limit_pushed_to_sql(client, monkeypatch):
+    """limit 必须出现在 SQL（LIMIT）里，不是 Python 先取全量再切片。"""
+    await _insp("lim1")
+    await _insp("lim2")
+    await _insp("lim3")
+
+    async def _none(db):
+        return set()
+
+    monkeypatch.setattr(svc, "get_inflight_analysis_ids", _none)
+
+    async with async_session() as db:
+        captured: dict[str, str] = {}
+        original_execute = db.execute
+
+        async def _capture(stmt, *args, **kwargs):
+            captured["sql"] = str(stmt)
+            return await original_execute(stmt, *args, **kwargs)
+
+        monkeypatch.setattr(db, "execute", _capture)
+        limited = await svc.get_unanalyzed_ids(db, limit=2)
+        limited_sql = captured["sql"]
+
+        captured.pop("sql", None)
+        full = await svc.get_unanalyzed_ids(db)
+        full_sql = captured["sql"]
+
+    assert len(limited) == 2
+    assert "LIMIT" in limited_sql.upper()
+    assert "LIMIT" not in full_sql.upper()
+    assert len(full) == 3
 
 
 # ── 时间解析 ──

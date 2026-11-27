@@ -287,23 +287,33 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 创建批量分析任务并开始轮询（支持可选的多模型 × 多提示词组合参数）
+  /**
+   * 创建批量分析任务并开始轮询（支持可选的多模型 × 多提示词组合参数）
    *
    * @param multi 组合分析参数；缺省为单模型 × 单提示词的普通批量分析
    * @param limit 本次最多分析多少个素材（缺省或 <= 0 表示分析全部未分析素材）；
+   *     新后端会把 limit 下推到 /ai/unanalyzed-ids（只返回前 N 个 id），
    *     超出实际未分析数量时按实际数量提交，最终数量以后端返回的 count 为准
    */
   async function triggerBatchAnalyze(multi?: MultiAnalyzeParams, limit?: number) {
     if (batchAnalyzing.value) return
     batchAnalyzing.value = true
     try {
-      const { data } = await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids')
+      const requestLimit = typeof limit === 'number' && limit > 0 ? limit : 0
+      // limit 下推给后端：新接口只查/返回前 N 个未分析 id，避免前端先拉全量
+      const { data } =
+        requestLimit > 0
+          ? await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids', {
+              params: { limit: requestLimit },
+            })
+          : await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids')
       if (data.count === 0) {
         Message.info('所有素材均已分析过，无需重复分析')
         return
       }
-      // 指定数量时只取前 N 个未分析素材，其余留待下次（分析过的素材下次不再出现在列表里）
-      const ids = limit && limit > 0 ? data.ids.slice(0, limit) : data.ids
+      // 新后端已按 limit 截断；这里的 slice 只兜底旧后端（多返回时仍只提交前 N 个），
+      // 不改变最终提交的素材数量。
+      const ids = requestLimit > 0 ? data.ids.slice(0, requestLimit) : data.ids
       // 请求体：传了组合参数用对象格式（多模型 × 多提示词），否则保持旧版数组格式
       const isMulti = !!multi
       const body = multi

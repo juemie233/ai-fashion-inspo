@@ -150,7 +150,9 @@ async def get_inflight_analysis_ids(db: AsyncSession) -> set[str]:
 
 
 async def get_unanalyzed_ids(
-    db: AsyncSession, skip_ids: set[str] | None = None
+    db: AsyncSession,
+    skip_ids: set[str] | None = None,
+    limit: int | None = None,
 ) -> list[str]:
     """返回所有未分析的素材 ID 列表（图片 + 视频，视频经首关键帧分析）。
 
@@ -161,6 +163,9 @@ async def get_unanalyzed_ids(
     额外排除「进行中」的素材，避免重复分析：已进入任一未完成 batch_analyze /
     multi_analyze 任务（DB 任务队列）的素材。``skip_ids`` 保留为可选的额外排除集
     （调用方自定义），当前路由层不再传内存队列 ID。
+
+    ``limit``（2026-11-27）用于「批量分析最多取 N 个」：直接下推到 SQL ``LIMIT``，
+    调用方不再先取全量 ID 再在 Python 里截断；``None`` = 全部（兼容旧行为）。
     """
     analyzed_success_sub = (
         select(AIAnalysisLog.inspiration_id)
@@ -172,14 +177,16 @@ async def get_unanalyzed_ids(
     )
     inflight = await get_inflight_analysis_ids(db)
     excluded = inflight | (skip_ids or set())
-    result = await db.execute(
-        select(Inspiration.id).where(
-            Inspiration.id.notin_(analyzed_success_sub),
-            Inspiration.id.notin_(list(excluded)),
-            Inspiration.media_type.in_(("image", "video")),
-            Inspiration.deleted_at.is_(None),
-        )
+    query = select(Inspiration.id).where(
+        Inspiration.id.notin_(analyzed_success_sub),
+        Inspiration.id.notin_(list(excluded)),
+        Inspiration.media_type.in_(("image", "video")),
+        Inspiration.deleted_at.is_(None),
     )
+    # 下推到 SQL 层：limit 只在调用方明确要求时生效，None 保持旧行为（全量）
+    if limit is not None:
+        query = query.limit(limit)
+    result = await db.execute(query)
     return [row[0] for row in result]
 
 

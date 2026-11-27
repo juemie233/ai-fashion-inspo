@@ -72,7 +72,7 @@
 | `POST` | `/api/ai/analyze/{inspiration_id}` | `analyze_inspiration` | 触发单个素材的 AI 分析（走 worker 任务队列 + GPU 互斥）。 |
 | `POST` | `/api/ai/batch-analyze` | `batch_analyze` | 批量触发多个素材的 AI 分析。 |
 | `GET` | `/api/ai/queue` | `analysis_queue` | 获取分析队列状态：待分析/分析中/已完成/失败统计。 |
-| `GET` | `/api/ai/unanalyzed-ids` | `unanalyzed_ids` | 获取所有未分析过的图片素材 ID 列表（暂不分析视频）。 |
+| `GET` | `/api/ai/unanalyzed-ids` | `unanalyzed_ids` | 获取未分析过的图片/视频素材 ID 列表（可选 limit 截断）。 |
 | `GET` | `/api/ai/history` | `analysis_history` | 获取分析历史记录列表（仅标签分析，排除质量审核日志）。 |
 | `GET` | `/api/ai/history/export` | `export_analysis_history_csv` | 导出分析历史为 CSV（当前筛选条件，上限 10000 条）。 |
 | `POST` | `/api/ai/retry/{inspiration_id}` | `retry_analysis` | 重试失败的分析（走 worker 队列：Ollama 未连接不阻断入队，视为可恢复错误自动重试）。 |

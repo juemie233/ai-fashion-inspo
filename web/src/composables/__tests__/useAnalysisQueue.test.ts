@@ -135,22 +135,36 @@ describe('useAnalysisQueue.triggerBatchAnalyze（按指定数量分析）', () =
     })
   }
 
-  it('传数量时只提交前 N 个未分析素材', async () => {
+  it('传数量时把 limit 下推给未分析接口，且只提交前 N 个未分析素材', async () => {
     mockAnalyzeFlow(['a', 'b', 'c', 'd', 'e'])
 
     const { triggerBatchAnalyze } = useAnalysisQueue()
     await triggerBatchAnalyze(undefined, 2)
 
+    // 新后端按 limit 只返回前 N 个 id，前端先拉全量的问题被消除
+    expect(mocks.get).toHaveBeenCalledWith('/ai/unanalyzed-ids', { params: { limit: 2 } })
+    // 即使旧后端多返回，slice 兜底保证最终只提交前 2 个
     expect(mocks.post).toHaveBeenCalledWith('/ai/batch-analyze', ['a', 'b'])
   })
 
-  it('不传数量时提交全部未分析素材（保持原有行为）', async () => {
+  it('不传数量时提交全部未分析素材（不携带 limit 参数）', async () => {
     mockAnalyzeFlow(['a', 'b', 'c'])
 
     const { triggerBatchAnalyze } = useAnalysisQueue()
     await triggerBatchAnalyze()
 
+    expect(mocks.get).toHaveBeenCalledWith('/ai/unanalyzed-ids')
     expect(mocks.post).toHaveBeenCalledWith('/ai/batch-analyze', ['a', 'b', 'c'])
+  })
+
+  it('limit=0 视为全量，不携带 limit 参数', async () => {
+    mockAnalyzeFlow(['a', 'b'])
+
+    const { triggerBatchAnalyze } = useAnalysisQueue()
+    await triggerBatchAnalyze(undefined, 0)
+
+    expect(mocks.get).toHaveBeenCalledWith('/ai/unanalyzed-ids')
+    expect(mocks.post).toHaveBeenCalledWith('/ai/batch-analyze', ['a', 'b'])
   })
 
   it('数量超过实际未分析数时按实际数量提交，不报错', async () => {
@@ -159,6 +173,35 @@ describe('useAnalysisQueue.triggerBatchAnalyze（按指定数量分析）', () =
     const { triggerBatchAnalyze } = useAnalysisQueue()
     await triggerBatchAnalyze(undefined, 999)
 
+    expect(mocks.get).toHaveBeenCalledWith('/ai/unanalyzed-ids', { params: { limit: 999 } })
     expect(mocks.post).toHaveBeenCalledWith('/ai/batch-analyze', ['a', 'b'])
+  })
+
+  it('未分析数量为 0 时只提示、不创建任务（limit 下推不改变该语义）', async () => {
+    mockAnalyzeFlow([])
+
+    const { triggerBatchAnalyze } = useAnalysisQueue()
+    await triggerBatchAnalyze(undefined, 5)
+
+    expect(mocks.get).toHaveBeenCalledWith('/ai/unanalyzed-ids', { params: { limit: 5 } })
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('组合分析 + limit：body 的 inspiration_ids 只含前 N 个，其它组合参数不变', async () => {
+    mockAnalyzeFlow(['a', 'b', 'c'])
+
+    const { triggerBatchAnalyze } = useAnalysisQueue()
+    await triggerBatchAnalyze({ models: ['qwen3-vl:8b'], promptIds: [1], applyTags: true }, 2)
+
+    expect(mocks.get).toHaveBeenCalledWith('/ai/unanalyzed-ids', { params: { limit: 2 } })
+    expect(mocks.post).toHaveBeenCalledWith(
+      '/ai/batch-analyze',
+      expect.objectContaining({
+        inspiration_ids: ['a', 'b'],
+        models: ['qwen3-vl:8b'],
+        prompt_ids: [1],
+        apply_tags: true,
+      }),
+    )
   })
 })
