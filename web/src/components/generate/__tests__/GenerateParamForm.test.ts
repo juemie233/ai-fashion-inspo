@@ -741,3 +741,110 @@ describe('云端 Seedream 档位', () => {
     wrapper.unmount()
   })
 })
+
+describe('GenerateParamForm 姿势提示词不累积', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('换姿势后旧姿势提示词被替换，用户补充内容保留', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+    await flushPromises()
+    const picker = wrapper.findComponent({ name: 'PosePickerModal' })
+    await picker.vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    const insert = () =>
+      wrapper
+        .findAll('button')
+        .find((b) => b.text() === '插入姿势描述')!
+        .trigger('click')
+    await insert()
+    await flushPromises()
+    await wrapper
+      .find('textarea')
+      .setValue(
+        `${(wrapper.find('textarea').element as HTMLTextAreaElement).value}\n用户补充：镜头低一点`,
+      )
+
+    const nextPose = { ...POSE_FIXTURE, id: 'full_std_P002_side', name: '侧身站姿', angle: '侧面' }
+    await picker.vm.$emit('select', nextPose)
+    await flushPromises()
+    await insert()
+    await flushPromises()
+
+    const value = (wrapper.find('textarea').element as HTMLTextAreaElement).value
+    expect(value).toContain('侧身站姿')
+    expect(value).toContain('用户补充：镜头低一点')
+    expect(value).not.toContain('S形站姿')
+    wrapper.unmount()
+  })
+
+  it('文生图也显式提交当前选中的 model_key', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: '',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue] },
+    })
+    await flushPromises()
+    await wrapper.find('textarea').setValue('一件白衬衫')
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    await submitBtn!.trigger('click')
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.model_key).toBe('z_image_int8')
+    wrapper.unmount()
+  })
+})
+
+describe('GenerateParamForm 历史带入姿势的档位保持', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('带入云端历史参数时 poseMode watcher 不把档位换回本地', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: CLOUD_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+    await flushPromises()
+
+    ;(
+      wrapper.vm as unknown as {
+        applyRunPayload: (payload: Record<string, unknown>) => void
+      }
+    ).applyRunPayload({
+      prompt: '云端姿势',
+      model_key: 'seedream_5_0_flash',
+      reference_ids: ['ref-a'],
+      params: { pose_id: POSE_FIXTURE.id },
+      pose: POSE_FIXTURE,
+    })
+    await flushPromises()
+
+    expect(checkedValue(wrapper)).toBe('seedream_5_0_flash')
+    wrapper.unmount()
+  })
+})

@@ -8,7 +8,7 @@
  */
 
 import { computed, onMounted, ref, watch } from 'vue'
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import type { CreateRunPayload, GenerateStatus } from '@/api/generate'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 import { useGenerateModelSelection } from '@/composables/useGenerateModelSelection'
@@ -112,6 +112,14 @@ const negative = ref('')
 const count = ref(2)
 const steps = ref(8)
 const seed = ref(0)
+
+/** 数字输入清空后 v-model 可能是 undefined：提交前统一收敛到合法范围。 */
+function normalizeCount(value: number | undefined | null): number {
+  return Math.min(4, Math.max(1, Math.round(Number(value) || 1)))
+}
+function normalizeSteps(value: number | undefined | null): number {
+  return Math.min(30, Math.max(1, Math.round(Number(value) || 1)))
+}
 /** 尺寸预设：不给自由输入，避免用户填出必 OOM 的值（见 docs 第 8 节） */
 const sizePresets = [
   { label: '1024 × 1024（方形，最快）', value: '1024x1024' },
@@ -163,11 +171,20 @@ function removeCloudPose(id: string): void {
   if (selectedPose.value?.id === id) selectedPose.value = cloudPoses.value[0] ?? null
 }
 
-// 云端档位固定 i2i + 1 张；切到云端时强制线稿模式并重置张数
+// 云端档位固定 i2i + 1 张；切到云端时强制线稿模式并重置张数。
+// 本地/云端各自保存张数与单选姿势，切回来时恢复，避免云端多选把本地状态覆盖掉。
+const localCountBeforeArk = ref(2)
+const localPoseBeforeArk = ref<PoseItem | null>(null)
 watch(isArk, (ark) => {
-  if (!ark) return
-  poseMode.value = 'lineart'
-  count.value = 1
+  if (ark) {
+    localCountBeforeArk.value = count.value
+    localPoseBeforeArk.value = selectedPose.value
+    poseMode.value = 'lineart'
+    count.value = 1
+    return
+  }
+  count.value = localCountBeforeArk.value
+  selectedPose.value = localPoseBeforeArk.value
 })
 
 // ── 参考素材 id（逗号/空格分隔，1~10 个）——i2i 用 ──
@@ -181,7 +198,10 @@ const posePickerVisible = ref(false)
 const selectedPose = ref<PoseItem | null>(null)
 
 // 用户点生成方式单选时同步档位（选中姿势后才需要切）
+// 带入历史参数时临时抑制，避免 watcher 把刚还原的 model_key 换掉
+let suppressPoseModeWatch = false
 watch(poseMode, (mode) => {
+  if (suppressPoseModeWatch) return
   if (selectedPose.value) applyPoseMode(mode)
 })
 const maxRefs = computed(() => {
@@ -197,14 +217,28 @@ const posePromptCache = new Map<string, string>()
 /** 最近一次自动填入的提示词（用于判断"这是系统填的、可以整段替换"）。 */
 const lastAutoPrompt = ref('')
 
+/** 去掉上一次自动插入的姿势提示，保留用户手写部分（换姿势时不累积冲突提示） */
+function stripAutoPrompt(current: string): string {
+  let base = current
+  if (lastAutoPrompt.value && base.includes(lastAutoPrompt.value)) {
+    base = base.replace(lastAutoPrompt.value, '')
+  }
+  // 兼容旧版本没有记录 lastAutoPrompt 的数据：只删整行、且行首是已知自动模板
+  base = base
+    .split('\n')
+    .filter((line) => !/^(保持第 ?1 ?张参考图|人物姿势：|按最后一张参考图的姿势)/.test(line.trim()))
+    .join('\n')
+  return base.trim()
+}
+
 /** 读取姿势已反推的提示词（后端 `pose_prompts` 表；没有则空串）。 */
 async function loadPoseDbPrompt(pose: PoseItem): Promise<string> {
-  const hit = posePromptCache.get(pose.id)
-  if (hit) return hit
+  // 没有记录的姿势也缓存空串，避免一键出图反复查同一个姿势
+  if (posePromptCache.has(pose.id)) return posePromptCache.get(pose.id) ?? ''
   try {
     const res = await fetchPosePrompt(pose.id)
     const text = (res.prompt ?? '').trim()
-    if (text) posePromptCache.set(pose.id, text)
+    posePromptCache.set(pose.id, text)
     return text
   } catch {
     // 查询失败不阻塞选姿势：生成时后端仍会补数据库提示词
@@ -212,20 +246,15 @@ async function loadPoseDbPrompt(pose: PoseItem): Promise<string> {
   }
 }
 
-/** 线稿参考模式：把 `pose_prompts` 的反推提示词填进描述框（保留用户手写内容）。 */
+/** 线稿参考模式：把 `pose_prompts` 的反推提示词填进描述框（去掉上一段自动提示）。 */
 async function applyPoseDbPrompt(pose: PoseItem): Promise<boolean> {
   if (poseMode.value !== 'lineart') return false
   const text = await loadPoseDbPrompt(pose)
   if (!text) return false
   const current = prompt.value.trim()
-  const legacy = current.includes('保持第 1 张参考图') || current.includes('人物姿势：')
-  if (!current || current === lastAutoPrompt.value || legacy) {
-    prompt.value = text
-    lastAutoPrompt.value = text
-  } else if (!current.includes(text)) {
-    prompt.value = `${text}
-${current}`
-  }
+  const base = stripAutoPrompt(current)
+  prompt.value = base ? `${text}\n${base}` : text
+  lastAutoPrompt.value = text
   return true
 }
 
@@ -246,6 +275,8 @@ async function onPoseSelected(pose: PoseItem): Promise<void> {
 
 function clearPose(): void {
   selectedPose.value = null
+  prompt.value = stripAutoPrompt(prompt.value)
+  lastAutoPrompt.value = ''
 }
 
 /** 姿势体系的构图词：上半身不要硬写「全身照」，双人不要写成单人构图。 */
@@ -266,12 +297,12 @@ async function insertPosePrompt(): Promise<void> {
   if (!pose) return
   if (poseMode.value === 'lineart' && (await applyPoseDbPrompt(pose))) return
   const template = poseMode.value === 'lineart' ? buildPosePrompt(pose) : buildPoseTextPrompt(pose)
-  // 连点两下不重复追加同一段
-  if (prompt.value.includes(template)) return
-  prompt.value = prompt.value.trim()
-    ? `${prompt.value.trim()}
-${template}`
-    : template
+  const base = stripAutoPrompt(prompt.value)
+  // 换姿势时先移除旧自动提示，避免多个互相冲突的姿势描述叠加
+  if (!base.includes(template)) {
+    prompt.value = base ? `${template}\n${base}` : template
+    lastAutoPrompt.value = template
+  }
 }
 
 /** 一键出图档位就绪：按当前生成方式判断——文字描述看 t2i，线稿参考看 i2i。 */
@@ -297,38 +328,7 @@ async function onQuickRun(payload: {
   // 云端 Seedream 不走「性感系 399 姿势轮播」：它需要用户显式多选姿势，
   // 且每次只出 1 张（无 seed/多张概念）。误触时直接忽略，避免队列空转报失败。
   if (isArk.value) return
-  count.value = payload.count
-  steps.value = payload.steps
-  selectedPose.value = payload.pose
-  applyPoseMode(poseMode.value)
-
-  // 描述：每轮都带**姿势名/角度**（否则一键出图几百批的历史描述完全一样，
-  // 事后没法从历史/导出里看出这批用的是哪个姿势）。
-  if (payload.round === 1) {
-    const current = prompt.value.trim()
-    // 上一轮一键出图留下的模板/数据库提示词不算「用户描述」：整段替换，避免反复叠加
-    quickBasePrompt.value =
-      current === lastAutoPrompt.value ||
-      current.includes('按最后一张参考图的姿势') ||
-      current.includes('人物姿势：')
-        ? ''
-        : current
-  }
-  let posePrompt: string
-  if (poseMode.value === 'lineart') {
-    const dbPrompt = await loadPoseDbPrompt(payload.pose)
-    posePrompt = dbPrompt || buildPosePrompt(payload.pose)
-    lastAutoPrompt.value = posePrompt
-  } else {
-    posePrompt = buildPoseTextPrompt(payload.pose)
-    lastAutoPrompt.value = ''
-  }
-  prompt.value = quickBasePrompt.value
-    ? `${quickBasePrompt.value}
-${posePrompt}`
-    : posePrompt
-
-  // 防御：面板已禁用的场景不该真的提交，否则会出一批错图
+  // 先校验再改表单：校验失败时不能把用户刚调好的参数改掉
   if (poseMode.value === 'text') {
     if (kind.value !== 't2i' || !modelReady.value) {
       Message.warning('一键出图未启动：请确认文生图档位就绪')
@@ -338,6 +338,31 @@ ${posePrompt}`
     Message.warning('一键出图未启动：请确认已选参考图且图生图档位就绪')
     return
   }
+
+  count.value = normalizeCount(payload.count)
+  steps.value = normalizeSteps(payload.steps)
+  selectedPose.value = payload.pose
+  applyPoseMode(poseMode.value)
+
+  // 描述：每轮都带**姿势名/角度**（否则一键出图几百批的历史描述完全一样，
+  // 事后没法从历史/导出里看出这批用的是哪个姿势）。
+  if (payload.round === 1) {
+    // 上一轮一键出图留下的模板/数据库提示词不算「用户描述」：只保留用户手写部分
+    quickBasePrompt.value = stripAutoPrompt(prompt.value)
+  }
+  let posePrompt: string
+  if (poseMode.value === 'lineart') {
+    const dbPrompt = await loadPoseDbPrompt(payload.pose)
+    posePrompt = dbPrompt || buildPosePrompt(payload.pose)
+  } else {
+    posePrompt = buildPoseTextPrompt(payload.pose)
+  }
+  lastAutoPrompt.value = posePrompt
+  prompt.value = quickBasePrompt.value
+    ? `${posePrompt}
+${quickBasePrompt.value}`
+    : posePrompt
+
   onSubmit()
 }
 
@@ -348,10 +373,14 @@ function onQuickBatchEnd(): void {
 
 /** 把「逗号/中文逗号/空白」分隔的 id 串拆成数组（两个输入框共用同一口径） */
 function splitIds(text: string): string[] {
-  return text
-    .split(/[,，\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return [
+    ...new Set(
+      text
+        .split(/[,，\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ]
 }
 
 // ── 参考图图形化选择（替代粘 ID）──
@@ -398,11 +427,12 @@ function onSavePreset(): void {
 function onApplyPreset(name: string): void {
   const preset = presets.value.find((p) => p.name === name)
   if (!preset) return
-  prompt.value = preset.prompt
-  negative.value = preset.negative
-  size.value = preset.size
-  steps.value = preset.steps
-  count.value = preset.count
+  // 配方来自 localStorage，可能是旧版本/损坏数据：逐字段校验并回退默认值
+  prompt.value = typeof preset.prompt === 'string' ? preset.prompt : ''
+  negative.value = typeof preset.negative === 'string' ? preset.negative : ''
+  size.value = sizePresets.some((item) => item.value === preset.size) ? preset.size : '1024x1024'
+  steps.value = normalizeSteps(preset.steps)
+  count.value = normalizeCount(preset.count)
   // 配方存的是生成方式，载入时换成对应档位（改款档位都没就绪就退回文生图档位）
   selectModelByKind(preset.kind === 'i2i' && i2iReady.value ? 'i2i' : 't2i')
   Message.success(`已载入配方「${preset.name}」`)
@@ -417,7 +447,23 @@ async function onPreviewPrompt() {
   previewing.value = true
   try {
     const text = await props.promptFrom(ids)
-    if (text) prompt.value = text
+    if (!text) return
+    // 描述非空时先确认，避免用户手写内容被一键覆盖
+    if (prompt.value.trim() && prompt.value.trim() !== text.trim()) {
+      const replace = await new Promise<boolean>((resolve) => {
+        Modal.confirm({
+          title: '覆盖当前描述？',
+          content: '反推结果会替换你当前已写的描述，是否继续？',
+          okText: '覆盖',
+          cancelText: '取消',
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        })
+      })
+      if (!replace) return
+    }
+    prompt.value = text
+    lastAutoPrompt.value = ''
   } finally {
     previewing.value = false
   }
@@ -431,7 +477,7 @@ const canSubmit = computed(
     !props.active &&
     modelReady.value &&
     (isArk.value
-      ? cloudPoses.value.length >= 1 && refIdsList.value.length === 1
+      ? cloudPoses.value.length >= 1 && refIdsList.value.length === maxRefs.value
       : kind.value === 't2i' || refCountOk.value),
 )
 
@@ -440,6 +486,12 @@ const privacyVisible = ref(false)
 const privacyAgree = ref(false)
 const pendingPayloads = ref<CreateRunPayload[]>([])
 const ARK_PRIVACY_KEY = 'fashion-inspo:ark-upload-confirmed'
+
+function clearPrivacyPending(): void {
+  privacyVisible.value = false
+  privacyAgree.value = false
+  pendingPayloads.value = []
+}
 
 function needsPrivacyConfirm(): boolean {
   // 用档位能力声明判断，而不是硬编码 isArk：以后新增需要上传的档位自动走隐私确认
@@ -459,6 +511,7 @@ function confirmPrivacy(): void {
     /* 隐私模式忽略 */
   }
   privacyVisible.value = false
+  privacyAgree.value = false
   const payloads = pendingPayloads.value
   pendingPayloads.value = []
   if (payloads.length === 1) emit('submit', payloads[0])
@@ -468,14 +521,16 @@ function confirmPrivacy(): void {
 const activePreset = computed(() => sizePresets.find((p) => p.value === size.value))
 
 function onSubmit() {
+  // 按钮 disabled 只是 UI 保护；onQuickRun 会直接调用这里，必须在入口再校验一次
+  if (!canSubmit.value || !props.ready || props.submitting || props.active) return
   if (!isArk.value && !prompt.value.trim()) return
   if (isArk.value) {
     if (cloudPoses.value.length === 0) {
       Message.warning('云端出图需要先从姿势图库选择至少 1 个姿态')
       return
     }
-    if (refIdsList.value.length !== 1) {
-      Message.warning('云端出图一期需要恰好 1 张素材图作参考')
+    if (refIdsList.value.length !== maxRefs.value) {
+      Message.warning(`云端出图一期需要恰好 ${maxRefs.value} 张素材图作参考`)
       return
     }
     // P1-5：双人姿态在单人物模板 + 1 张素材图下必然失败；历史带入的也要拦住
@@ -522,14 +577,15 @@ function onSubmit() {
   emit('submit', {
     kind: kind.value,
     prompt: prompt.value.trim(),
-    negative: negative.value.trim() || undefined,
-    width: width.value,
-    height: height.value,
-    steps: steps.value,
-    count: count.value,
-    seed: seed.value,
-    // 只有拿到档位表且是图生图时才显式指定；否则交给后端按 kind 取默认
-    model_key: kind.value === 'i2i' && modelKey.value ? modelKey.value : undefined,
+    // 隐藏字段不提交：切到不支持负向/seed 的档位后，旧值不应继续生效
+    negative: supportsNegative.value ? negative.value.trim() || undefined : undefined,
+    width: kind.value === 't2i' ? width.value : undefined,
+    height: kind.value === 't2i' ? height.value : undefined,
+    steps: normalizeSteps(steps.value),
+    count: normalizeCount(count.value),
+    seed: supportsSeed.value ? seed.value : undefined,
+    // 文生图也可能有多档（普通/未审查）；始终带当前选中的档位，避免界面选的和后端跑的不一致
+    model_key: modelKey.value || undefined,
     reference_ids: kind.value === 'i2i' ? refIdsList.value : undefined,
     // 姿势两种模式都带 id：文生图用于历史可追溯，图生图额外把线稿作为最后一张参考
     pose_id: selectedPose.value ? selectedPose.value.id : undefined,
@@ -543,7 +599,10 @@ function onSubmit() {
  * （否则历史里的旧档位会把表单切到一个不存在的选项上）。
  */
 function applyRunPayload(payload: RunPayload): void {
-  if (typeof payload.prompt === 'string') prompt.value = payload.prompt
+  if (typeof payload.prompt === 'string') {
+    prompt.value = payload.prompt
+    lastAutoPrompt.value = ''
+  }
   if (typeof payload.negative === 'string') negative.value = payload.negative
   // 姿势：历史里没有姿势就清空（避免把上一个批次的姿势带进新批次）
   selectedPose.value = payload.pose ?? null
@@ -561,9 +620,9 @@ function applyRunPayload(payload: RunPayload): void {
     if (sizePresets.some((item) => item.value === preset)) size.value = preset
   }
   const n = num('steps')
-  if (n) steps.value = n
+  if (n !== null) steps.value = normalizeSteps(n)
   const c = num('count')
-  if (c) count.value = c
+  if (c !== null) count.value = normalizeCount(c)
   const s = num('seed_base')
   if (s !== null) seed.value = s
 
@@ -598,8 +657,14 @@ function applyRunPayload(payload: RunPayload): void {
       payload.model_key &&
       allModels.value.some((m) => m.key === payload.model_key && m.kind === 'i2i')
     )
+    // 抑制 poseMode watcher：它会在下一轮微任务里 applyPoseMode，把刚还原的
+    // model_key 切到姿势默认档位（云端历史批次会被悄悄换成本地档位）。
+    suppressPoseModeWatch = true
     poseMode.value = historyI2i ? 'lineart' : 'text'
     if (!payload.model_key) applyPoseMode(poseMode.value)
+    queueMicrotask(() => {
+      suppressPoseModeWatch = false
+    })
   }
   Message.success('已带入历史参数，可继续修改后生成')
 }
@@ -841,8 +906,9 @@ onMounted(() => {
       >
         <template v-if="!isArk">
           <div class="gen-row gen-row--multi">
-            <a-select v-model="size" :options="sizePresets" style="flex: 1" />
-            <a-input-number v-model="count" :min="1" :max="4" style="width: 100px">
+            <a-select v-if="kind === 't2i'" v-model="size" :options="sizePresets" style="flex: 1" />
+            <span v-else class="gen-hint">图生图的出图比例跟随参考图，尺寸不在此设置</span>
+            <a-input-number v-model="count" :min="1" :max="4" :precision="0" style="width: 100px">
               <template #prefix>张数</template>
             </a-input-number>
           </div>
@@ -851,10 +917,16 @@ onMounted(() => {
             <a-input v-model="negative" placeholder="例：模糊、变形、多余手指" allow-clear />
           </template>
           <div class="gen-row">
-            <a-input-number v-model="steps" :min="1" :max="30" style="width: 110px">
+            <a-input-number v-model="steps" :min="1" :max="30" :precision="0" style="width: 110px">
               <template #prefix>步数</template>
             </a-input-number>
-            <a-input-number v-if="supportsSeed" v-model="seed" :min="0" style="width: 180px">
+            <a-input-number
+              v-if="supportsSeed"
+              v-model="seed"
+              :min="0"
+              :precision="0"
+              style="width: 180px"
+            >
               <template #prefix>seed</template>
             </a-input-number>
           </div>
@@ -895,7 +967,10 @@ onMounted(() => {
         :key="p.name"
         closable
         class="gen-preset-tag"
+        role="button"
+        tabindex="0"
         @click="onApplyPreset(p.name)"
+        @keydown.enter="onApplyPreset(p.name)"
         @close="removePreset(p.name)"
       >
         {{ p.name }}
@@ -913,7 +988,9 @@ onMounted(() => {
           个姿态）
         </span>
         <span v-else class="gen-hint">
-          本地 · {{ activePreset?.label || size }} · {{ count }} 张
+          本地 ·
+          {{ kind === 'i2i' ? '尺寸跟随参考图' : activePreset?.label || size }} ·
+          {{ normalizeCount(count) }} 张
         </span>
       </div>
       <div class="gen-actions-buttons">
@@ -923,7 +1000,7 @@ onMounted(() => {
           :disabled="!canSubmit || !ready"
           @click="onSubmit"
         >
-          生成 {{ isArk ? Math.max(1, cloudPoses.length) : count }} 张
+          生成 {{ isArk ? Math.max(1, cloudPoses.length) : normalizeCount(count) }} 张
         </a-button>
         <a-button v-if="active" status="warning" @click="emit('cancel')">取消</a-button>
       </div>
@@ -953,13 +1030,18 @@ onMounted(() => {
     ok-text="继续生成"
     cancel-text="取消"
     @ok="confirmPrivacy"
+    @cancel="clearPrivacyPending"
   >
     <p>
-      本次生成会把「素材图」和「姿态图」上传到火山引擎方舟（cn-beijing）用于推理。
+      本次生成会把「素材图」和「姿态图」上传到当前云端服务用于推理。
       素材涉及人物/人脸时，请确认你有权上传并接受云端处理。
     </p>
+    <p>
+      确认后，<b>本浏览器会话内</b>的后续云端提交不再重复询问；本次共
+      {{ pendingPayloads.length }} 个计费批次，预计 ¥{{ cloudCost.toFixed(2) }}。
+    </p>
     <p>云端接口可能触发内容审核；被拦截时会给出提示，不会自动绕过。</p>
-    <a-checkbox v-model="privacyAgree">我已知晓，本次允许上传</a-checkbox>
+    <a-checkbox v-model="privacyAgree">我已知晓，本浏览器会话内允许上传</a-checkbox>
   </a-modal>
 </template>
 
