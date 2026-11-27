@@ -166,6 +166,7 @@ const modalStub = defineComponent({
     visible: { type: Boolean, default: false },
     title: { type: String, default: '' },
     okText: { type: String, default: '确定' },
+    onBeforeOk: { type: Function, default: null },
   },
   emits: ['update:visible', 'ok'],
   render() {
@@ -173,7 +174,18 @@ const modalStub = defineComponent({
     return h('div', { class: 'f2l-modal' }, [
       h('div', { class: 'f2l-modal-title' }, this.title),
       this.$slots.default?.(),
-      h('button', { class: 'f2l-modal-ok', onClick: () => this.$emit('ok') }, this.okText),
+      h(
+        'button',
+        {
+          class: 'f2l-modal-ok',
+          onClick: async () => {
+            const ok = this.onBeforeOk ? await this.onBeforeOk() : true
+            this.$emit('ok')
+            if (ok !== false) this.$emit('update:visible', false)
+          },
+        },
+        this.okText,
+      ),
     ])
   },
 })

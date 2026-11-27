@@ -43,7 +43,7 @@ const copy = computed(() =>
         listName: '收藏列表',
         speedTip:
           'f2 的收藏分页没有「遇到已下载就停」（POST + 纯 cookie 翻页），每页还固定等一次 ' +
-          'timeout（本机 10 秒），全量时零新增也要空翻几分钟。代价：两次运行之间新增收藏' +
+          'timeout，全量时零新增也要空翻几分钟。代价：两次运行之间新增收藏' +
           '超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。按收藏夹下载时，它是' +
           '「每个夹」的上限（每个夹各取最近 N 条）。',
         collectTip:
@@ -57,7 +57,7 @@ const copy = computed(() =>
         listName: '点赞列表',
         speedTip:
           'f2 的点赞分页没有「遇到已下载就停」，从最新一路翻到底、每页还固定等一次 ' +
-          'timeout（本机 10 秒），全量时零新增也要空翻几分钟。代价：两次运行之间新增点赞' +
+          'timeout，全量时零新增也要空翻几分钟。代价：两次运行之间新增点赞' +
           '超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。',
         collectTip: '入库不做标签分析（素材为未打标状态）。',
       },
@@ -110,7 +110,7 @@ watch(
 const savedLikeUser = computed(() => status.value?.like_user ?? '')
 const savedLikeMax = computed(() => status.value?.like_max_counts ?? 0)
 const dirty = computed(() => likeUser.value.trim() !== savedLikeUser.value)
-const maxDirty = computed(() => (likeMaxCounts.value || 0) !== savedLikeMax.value)
+const maxDirty = computed(() => safeMaxCounts.value !== savedLikeMax.value)
 
 /** 当前模式的可用性与原因（点赞与收藏的前提相同，但字段分开，便于各自提示） */
 const available = computed(() =>
@@ -190,6 +190,11 @@ function onToggleAll(checked: boolean | (string | number | boolean)[]) {
 
 /** 「先扫描收藏夹」：只读拉清单 → 打开弹窗（**有上次选择就恢复，否则默认全选**） */
 async function onScanFolders() {
+  // 扫描接口不接收 like_user：先把输入框里的主页链接保存，避免“扫描旧账号、下载新账号”
+  if (dirty.value) {
+    await onSaveUser()
+    if (dirty.value) return
+  }
   const data = await scanCollects()
   if (!data) return
   if (!data.folders.length) {
@@ -211,41 +216,39 @@ async function onScanFolders() {
   folderModalOpen.value = true
 }
 
-/** 弹窗确认：只下载勾选的收藏夹 */
-async function onDownloadCheckedFolders() {
-  if (!checkedFolderIds.value.length) {
-    Message.warning('至少勾选一个收藏夹（不想要的取消勾选即可）')
-    return
-  }
-  const taskId = await submit({
+/** 三个提交入口共用的 payload，避免以后加字段只改一处 */
+function buildPayload(extra: Record<string, unknown> = {}) {
+  return {
     fetch: true,
-    mode: 'collection',
     like_user: likeUser.value.trim() || undefined,
     register_bloggers: registersBloggers.value,
     like_max_counts: safeMaxCounts.value,
-    collect_ids: checkedFolderIds.value,
-  })
-  if (taskId) {
-    // 只有真的按这个选择下了任务才记：只扫描不下载不该覆盖上次的选择
-    saveFolderSelection(checkedFolderIds.value)
-    folderModalOpen.value = false
-    emit('submitted')
-    await loadStatus({ silent: true })
+    ...extra,
   }
+}
+
+/** 弹窗确认：只下载勾选的收藏夹；返回 false 时 Arco 不关闭弹窗 */
+async function onDownloadCheckedFolders(): Promise<boolean> {
+  if (!checkedFolderIds.value.length) {
+    Message.warning('至少勾选一个收藏夹（不想要的取消勾选即可）')
+    return false
+  }
+  const taskId = await submit(
+    buildPayload({ mode: 'collection', collect_ids: checkedFolderIds.value }),
+  )
+  if (!taskId) return false
+  // 只有真的按这个选择下了任务才记：只扫描不下载不该覆盖上次的选择
+  saveFolderSelection(checkedFolderIds.value)
+  emit('submitted')
+  await loadStatus({ silent: true })
+  return true
 }
 
 /** 收藏模式的「一键下载全部收藏」：平铺收藏列表（含未勾选的所有收藏夹）。
  *  后端默认**拒绝**平铺导入（那正是「只想要 19 个夹却进了 31 个夹」的成因），
  *  只有用户在确认弹窗上确认后，才显式带 allow_all_collect=true。 */
 async function onDownloadAllCollects() {
-  const taskId = await submit({
-    fetch: true,
-    mode: 'collection',
-    like_user: likeUser.value.trim() || undefined,
-    register_bloggers: registersBloggers.value,
-    like_max_counts: safeMaxCounts.value,
-    allow_all_collect: true,
-  })
+  const taskId = await submit(buildPayload({ mode: 'collection', allow_all_collect: true }))
   if (taskId) {
     emit('submitted')
     await loadStatus({ silent: true })
@@ -253,14 +256,10 @@ async function onDownloadAllCollects() {
 }
 
 async function onSubmit() {
-  const taskId = await submit({
-    fetch: true,
-    mode: props.mode,
-    like_user: likeUser.value.trim() || undefined,
-    register_bloggers: registersBloggers.value,
+  const taskId = await submit(
     // 0 = 全量（显式传，表示本次就要全量，别被配置顶掉）
-    like_max_counts: safeMaxCounts.value,
-  })
+    buildPayload({ mode: props.mode }),
+  )
   if (taskId) {
     emit('submitted')
     await loadStatus({ silent: true })
@@ -317,6 +316,7 @@ async function onSubmit() {
         :min="0"
         :max="100000"
         :step="50"
+        :precision="0"
         placeholder="0"
         style="width: 130px"
         @input="likeMaxTouched = true"
@@ -326,7 +326,7 @@ async function onSubmit() {
         保存
       </a-button>
       <span class="f2l-option-tip">
-        <b>0 = 全量翻到底</b>（默认）。填 100~200 可把日常增量降到一两页： {{ copy.speedTip }}
+        <b>0 = 全量翻到底</b>（默认）。填 100~200 可把日常增量降到一两页：{{ copy.speedTip }}
       </span>
     </div>
 
@@ -361,10 +361,9 @@ async function onSubmit() {
         <template v-if="isCollect">（与「我的喜欢」共用同一个配置）</template>。
       </div>
       <div>
-        · 慢的原因不是「按发布时间过滤会漏」，而是 f2 的{{ isCollect ? '收藏' : '点赞' }}模式
-        <b>根本不读 <code>-i</code></b
-        >（源码实测），且分页没有「遇到已下载就停」——所以提速只能靠上面的
-        「每次最多翻」；已下载过的文件 f2 会跳过，入库还有五层判重，重复点击安全。
+        · f2 的{{ isCollect ? '收藏' : '点赞' }}模式 <b>根本不读 <code>-i</code></b
+        >，且分页没有「遇到已下载就停」——所以提速只能靠上面的 「每次最多翻」；已下载过的文件 f2
+        会跳过，入库还有五层判重，重复点击安全。
       </div>
       <div v-if="isCollect">
         · <b>先扫描、后下载</b>：点「先扫描收藏夹」会列出你的收藏夹（名字 + 件数），
@@ -386,10 +385,15 @@ async function onSubmit() {
       ok-text="只下载勾选的"
       cancel-text="取消"
       :width="640"
-      @ok="onDownloadCheckedFolders"
+      :on-before-ok="onDownloadCheckedFolders"
     >
       <div class="f2l-collect-head">
-        <a-checkbox :model-value="allChecked" @change="onToggleAll">全选 / 全不选</a-checkbox>
+        <a-checkbox
+          :model-value="allChecked"
+          :indeterminate="checkedFolderIds.length > 0 && !allChecked"
+          @change="onToggleAll"
+          >全选 / 全不选</a-checkbox
+        >
         <span class="f2l-option-tip">
           {{ selectionHint }}
           本次将下载 <b>{{ checkedFolders.length }}</b> / {{ folderList.length }} 个夹，约
@@ -398,7 +402,7 @@ async function onSubmit() {
       </div>
       <a-checkbox-group v-model="checkedFolderIds" class="f2l-collect-list">
         <a-checkbox v-for="f in folderList" :key="f.id" :value="f.id">
-          {{ f.name || '未命名收藏夹' }}（{{ f.total }} 件）
+          {{ f.name || '未命名收藏夹' }}（{{ f.total || 0 }} 件）
         </a-checkbox>
       </a-checkbox-group>
       <div class="f2l-option-tip f2l-collect-foot">
@@ -492,7 +496,7 @@ async function onSubmit() {
   max-height: 320px;
   overflow-y: auto;
   padding: 8px 10px;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
 }
 .f2l-collect-foot {
