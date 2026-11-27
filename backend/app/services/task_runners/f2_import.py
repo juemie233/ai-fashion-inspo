@@ -86,8 +86,9 @@ async def create_f2_import_task(
             ``settings.f2_like_user``）——两种模式都要**你自己**的主页链接
             （点赞与收藏列表都只有本人可见）。
         register_bloggers: 「我的列表」入库后是否把未登记的来源作者补建成抖音博主
-            并绑定本批素材（默认 True；**只对 like 生效**：collection 由
-            :func:`personal_registers_bloggers` 强制关闭，见那里的说明）。补建的博主
+            并绑定本批素材（默认 True；**like / collection 都尊重此开关**，post 恒不生效）。
+            2026-11-27 用户口径覆盖旧的「收藏不补建」：collection 现与 like 一致默认登记，
+            显式传 False 仍可关闭（原因见 :func:`personal_registers_bloggers`）。补建的博主
             标记为「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
         like_max_counts: 「我的列表」最多翻多少条（None 表示执行时取
             ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。两种模式通用；
@@ -575,7 +576,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # _fetch_collects_by_folder_stage），空列表保持老口径（平铺收藏）
     collect_ids = [str(c).strip() for c in (opts.get("collect_ids") or []) if str(c).strip()]
     # 同一个纯函数在建任务时也用过：直接构造的任务（测试/旧记录）在这里再兜一层，
-    # 保证「收藏不补建博主」这条口径不依赖调用方
+    # 保证 like/collection 的「是否登记」口径不依赖调用方（post 恒 False）
     register_bloggers = personal_registers_bloggers(
         fetch_mode, bool(opts.get("register_bloggers", True))
     )

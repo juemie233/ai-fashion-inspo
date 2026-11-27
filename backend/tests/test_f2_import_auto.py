@@ -822,9 +822,12 @@ def test_f2_like_user_endpoint_persists_and_rejects_bad_input(client, auto_setti
 
 
 def test_personal_registers_bloggers_truth_table():
-    """「我的列表」是否补建博主：**只有 like 可能为 True**（纯函数口径）。
+    """「我的列表」是否补建博主：like/collection 尊重开关，post 恒 False（纯函数口径）。
 
-    - collection：恒不补建（2026-10-01 口径，显式要求也不生效）；
+    - like：True / False 原样返回；
+    - collection：**2026-11-27 用户口径覆盖旧「收藏恒不补建」**——任务 #905 收藏导入的
+      素材没有博主归属，用户要求收藏也绑定来源作者、新作者进入人物管理库，因此改为
+      与 like 一致：请求 True 时登记，False 仍可关闭；
     - post：那条链路的作者本来就受白名单约束，不建号（口径不同不混用）——这一格曾经是
       True，只靠调用点的 personal_mode 兜着，太容易踩，改成显式 False。
     """
@@ -832,7 +835,7 @@ def test_personal_registers_bloggers_truth_table():
 
     assert personal_registers_bloggers("like", True) is True
     assert personal_registers_bloggers("like", False) is False
-    assert personal_registers_bloggers("collection", True) is False
+    assert personal_registers_bloggers("collection", True) is True
     assert personal_registers_bloggers("collection", False) is False
     assert personal_registers_bloggers("post", True) is False
     assert personal_registers_bloggers("post", False) is False

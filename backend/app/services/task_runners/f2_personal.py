@@ -69,13 +69,23 @@ UNCLASSIFIED_COLLECTION_NAME = "未分类收藏"
 def personal_registers_bloggers(fetch_mode: str, requested: bool) -> bool:
     """本次「我的列表」导入是否补建来源作者博主（纯函数，唯一口径）。
 
-    **收藏模式永远不补建**（2026-10-01 用户口径）：收藏是个「先收起来」的池子，天然跨主题
-    （实测夹里有股票/哲学/公考/游戏），自动建号只会在库里堆出与穿搭无关的空壳——实测
-    451 位自动登记博主里只有 1% 名字与穿搭相关，用户还得手工清理一遍。**「我的喜欢」保留**
-    自动登记：那是主要素材来源，素材需要归属人。
+    规则（2026-11-27 用户口径覆盖后）：
 
-    收藏批次若确实要归属人，仍可在「抖音采集历史」的结果面板手工点「登记博主」补
-    （见 ``POST /api/scraper/f2-tasks/{id}/results/register-bloggers``）。
+    - ``like``（我的喜欢）与 ``collection``（我的收藏）都**尊重调用方要求**
+      （``requested=True`` 时登记，默认 True；``False`` 仍可显式关闭）；
+    - ``post``（博主主页作品）恒 False——那条链路的作者本来就受「已登记博主」
+      白名单约束（不建号），两条链路口径不同、不混用。
+
+    **2026-11-27 用户口径覆盖（重要）**：旧版对 collection 恒返回 False
+    （2026-10-01「收藏不补建」），导致任务 #905 收藏导入的 354 条素材没有博主归属。
+    用户明确要求**收藏素材也要绑定来源作者、新来源作者要进入人物管理库**，因此
+    collection 改为与 like 一致按开关登记；旧「收藏恒不补建」的注释/文档已全部
+    同步更新。自动登记规则本身不变（按归一化名复用已有 douyin 博主、新建博主
+    ``source=AUTO_BLOGGER_SOURCE`` 不进下载白名单、已绑定素材跳过、幂等），
+    见 ``services/scraper/f2_bloggers.py``。
+
+    收藏批次若当时显式关闭了登记，仍可在「抖音采集历史」结果面板手工点「登记博主」
+    补（见 ``POST /api/scraper/f2-tasks/{id}/results/register-bloggers``）。
 
     Args:
         fetch_mode: ``post`` / ``like`` / ``collection``。
@@ -83,10 +93,9 @@ def personal_registers_bloggers(fetch_mode: str, requested: bool) -> bool:
 
     Returns:
         归一化后的开关；建任务与执行都用它，保证任务记录与实际行为一致。
-        **只有 like 可能为 True**：发布模式那条链路的作者本来就受白名单约束（不建号，
-        两条链路口径不同不混用），收藏恒不补建（见上）。
+        **like / collection 可能为 True**；post 恒 False。
     """
-    return fetch_mode == "like" and bool(requested)
+    return fetch_mode in PERSONAL_FETCH_MODES and bool(requested)
 
 
 def _personal_scan_root(f2: ModuleType, fetch_mode: str) -> Path:

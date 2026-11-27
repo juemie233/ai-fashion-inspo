@@ -457,8 +457,8 @@ describe('F2LikeCard', () => {
       fetch: true,
       mode: 'collection',
       like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-      // 收藏恒不补建博主（2026-10-01 口径）：开关不出现，值也恒为 false
-      register_bloggers: false,
+      // 2026-11-27 起收藏模式也默认自动登记/绑定来源作者（开关默认勾选）
+      register_bloggers: true,
       like_max_counts: 0,
       // 确认弹窗通过后才带的显式许可：后端默认拒绝平铺导入（含未勾选的夹）
       allow_all_collect: true,
@@ -466,16 +466,42 @@ describe('F2LikeCard', () => {
     expect(wrapper.emitted('submitted')).toBeTruthy()
   })
 
-  it('收藏模式不显示「同时登记穿搭博主」开关（该机制对收藏已取消）', async () => {
+  it('收藏模式也显示「同时登记穿搭博主」开关，默认勾选且文案通用', async () => {
     const collectWrapper = await mountCard(READY_COLLECT_STATUS(), 'collection')
-    expect(collectWrapper.text()).not.toContain('同时登记穿搭博主')
-    // 但要说清为什么，以及去哪里手工补登记
-    expect(collectWrapper.text()).toContain('自动补建博主')
-    expect(collectWrapper.text()).toContain('登记博主')
+    expect(collectWrapper.text()).toContain('同时登记穿搭博主')
+    const checkbox = collectWrapper.find('.f2l-options input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+    // 通用说明：自动登记不进下载白名单、可去博主管理纳入追踪
+    expect(collectWrapper.text()).toContain('自动登记')
+    expect(collectWrapper.text()).toContain('纳入追踪')
+    // 旧的「收藏不会自动补建」口径已删除
+    expect(collectWrapper.text()).not.toContain('收藏不会自动补建博主')
 
-    // 点赞模式保持不变
+    // 点赞模式同样显示且默认勾选
     const likeWrapper = await mountCard()
     expect(likeWrapper.text()).toContain('同时登记穿搭博主')
+    expect(
+      (likeWrapper.find('.f2l-options input[type="checkbox"]').element as HTMLInputElement).checked,
+    ).toBe(true)
+  })
+
+  it('收藏模式取消勾选「同时登记」后按 false 下发', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection')
+    mocks.post.mockResolvedValue({ data: { task_id: 72, message: '已提交' } })
+
+    const checkbox = wrapper.find('.f2l-options input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+    await checkbox.setValue(false)
+
+    await buttons(wrapper, '一键下载全部收藏').submit.trigger('click')
+    await flushPromises()
+    await wrapper.find('button.popconfirm-ok').trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledWith(
+      '/scraper/f2-import',
+      expect.objectContaining({ mode: 'collection', register_bloggers: false }),
+    )
   })
 
   it('收藏模式：收藏不可用时提交按钮禁用（不借用点赞的可用性）', async () => {
@@ -546,7 +572,7 @@ describe('F2LikeCard', () => {
       fetch: true,
       mode: 'collection',
       like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-      register_bloggers: false, // 收藏恒不补建博主（见上一条用例）
+      register_bloggers: true, // 收藏默认自动登记/绑定（2026-11-27 口径）
       like_max_counts: 0,
       // JSON body 原生数组：不拆逗号、不再走 query
       collect_ids: ['111', '333'],

@@ -773,24 +773,24 @@ async def test_execute_f2_import_like_mode_can_skip_blogger_registration(
 
 
 
-async def test_execute_f2_import_collect_mode_does_not_register_bloggers(
+async def test_execute_f2_import_collect_mode_registers_bloggers(
     client, f2_like_tree, auto_settings, monkeypatch
 ):
-    """「我的收藏」入库后**不补建博主**：素材照常入库，博主库一个不动。
+    """「我的收藏」入库后默认也补建来源作者博主并绑定素材（2026-11-27 用户口径）。
 
-    背景（2026-10-01）：收藏是「先收起来」的池子，天然跨主题（股票/哲学/公考/游戏），
-    自动建号只在库里堆与穿搭无关的空壳（实测 451 位自动登记博主里只有 1% 与穿搭相关）。
-    「我的喜欢」保持自动登记，所以这里同时断言任务记录里的开关被归一成 False——
-    口径由 ``personal_registers_bloggers`` 一处说了算。
+    覆盖旧 2026-10-01「收藏不补建」：任务 #905 收藏导入的 354 条素材没有博主归属，
+    用户明确要求收藏素材也绑定来源作者、新来源作者进入人物管理库。自动登记规则与
+    「我的喜欢」一致：按归一化名复用已有 douyin 博主、新建博主 source=auto_collect
+    （不进下载白名单）、已绑定素材跳过、幂等。
     """
     from sqlalchemy import select
 
-    from app.models.person import Blogger
+    from app.models.person import Blogger, InspirationBlogger
     from app.models.task import TaskQueue
 
     auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
     _stub_collect_fetch(monkeypatch)
-    # 收藏产物根指向同一棵树（文件名同样带原作者前缀，具备补建博主的一切条件）
+    # 收藏产物根指向同一棵假树（文件名同样带原作者前缀，具备补建博主的一切条件）
     patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", f2_like_tree)
 
     async with async_session() as db:
@@ -798,8 +798,51 @@ async def test_execute_f2_import_collect_mode_does_not_register_bloggers(
             db,
             fetch=True,
             fetch_mode="collection",
-            register_bloggers=True,  # 显式要求也无效：收藏恒不补建
             allow_all_collect=True,
+            # 不传 register_bloggers → 默认 True；任务记录必须真实写 True 并执行登记
+        )
+        task_id = task.id
+        assert task.result["register_bloggers"] is True
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        stats = stored.result["bloggers"]
+        assert stats["created"] == 1 and stats["linked"] == 2
+        bloggers = (await db.execute(select(Blogger))).scalars().all()
+        assert [(b.name, b.platform, b.source) for b in bloggers] == [
+            ("不养羊", "douyin", "auto_collect")
+        ]
+        links = (await db.execute(select(InspirationBlogger))).scalars().all()
+        assert {link.blogger_id for link in links} == {bloggers[0].id}
+        assert len(links) == 2
+
+    # 自动登记的博主不算「已登记博主」→ 不会进一键获取素材的下载名单
+    assert f2.load_douyin_bloggers() == {}
+    assert "不养羊" in f2.load_douyin_bloggers(include_auto=True)
+
+
+
+async def test_execute_f2_import_collect_mode_can_skip_blogger_registration(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """收藏批次显式 register_bloggers=False：素材照常入库，博主库一个不动。"""
+    from sqlalchemy import select
+
+    from app.models.person import Blogger
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_collect_fetch(monkeypatch)
+    patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", f2_like_tree)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db,
+            fetch=True,
+            fetch_mode="collection",
+            allow_all_collect=True,
+            register_bloggers=False,
         )
         task_id = task.id
         assert task.result["register_bloggers"] is False
@@ -807,8 +850,8 @@ async def test_execute_f2_import_collect_mode_does_not_register_bloggers(
 
     async with async_session() as db:
         stored = await db.get(TaskQueue, task_id)
-        assert "bloggers" not in stored.result  # 登记阶段没有跑
-        assert stored.result["import"]["imported"] == 2  # 素材照常入库
+        assert "bloggers" not in stored.result
+        assert stored.result["import"]["imported"] == 2
         assert (await db.execute(select(Blogger))).scalars().all() == []
 
 
