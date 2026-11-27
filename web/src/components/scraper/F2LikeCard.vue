@@ -14,6 +14,7 @@
 
 import { computed, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import { IconCheckCircleFill, IconExclamationCircleFill } from '@arco-design/web-vue/es/icon'
 import { useF2Import } from '@/composables/useF2Import'
 import {
   loadFolderSelection,
@@ -329,10 +330,12 @@ async function onSubmit() {
       </span>
     </div>
 
-    <div v-if="status" class="f2l-status" :class="{ 'is-bad': !available }">
+    <div v-if="status" class="f2l-status" :class="available ? 'is-ok' : 'is-bad'">
       <a-spin v-if="statusLoading" :size="12" />
-      <span>{{ available ? '' : '' }} {{ availabilityReason }}</span>
-      <a-link @click="loadStatus()">刷新状态</a-link>
+      <IconCheckCircleFill v-if="available" class="f2l-status-icon" />
+      <IconExclamationCircleFill v-else class="f2l-status-icon" />
+      <span>{{ availabilityReason }}</span>
+      <a-button type="text" size="mini" @click="loadStatus()">刷新状态</a-button>
     </div>
 
     <div class="f2l-options">
@@ -438,13 +441,16 @@ async function onSubmit() {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: var(--pine-soft);
-  color: #2f7d31;
+  color: var(--jade);
   font-size: 13px;
   flex-wrap: wrap;
 }
+.f2l-status-icon {
+  flex-shrink: 0;
+}
 .f2l-status.is-bad {
   background: var(--sheet-2);
-  color: #a86a00;
+  color: var(--amber);
 }
 .f2l-options {
   display: flex;

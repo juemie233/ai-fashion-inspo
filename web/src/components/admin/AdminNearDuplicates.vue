@@ -384,7 +384,7 @@ function fmtTime(iso: string | null): string {
 
 /** 收藏标记展示 */
 function favoriteLabel(f: NearDuplicateFile): string {
-  return f.is_favorite ? '' : ''
+  return f.is_favorite ? '★ 已收藏' : ''
 }
 </script>
 
@@ -571,7 +571,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
           >保留右边</a-button
         >
         <a-button type="text" :disabled="deletingBoth || decisionLocked" @click="skipGroup"
-          >都保留（跳过本组）{{ currentDecision === 'skip' ? '' : '' }}</a-button
+          >都保留（跳过本组）{{ currentDecision === 'skip' ? '（已跳过）' : '' }}</a-button
         >
         <a-popconfirm
           :ok-button-props="{ type: 'primary', status: 'danger' }"

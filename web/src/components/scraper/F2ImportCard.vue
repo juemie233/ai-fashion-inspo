@@ -11,8 +11,9 @@
 
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import type { TableColumnData } from '@arco-design/web-vue'
-import { useF2Import } from '@/composables/useF2Import'
+import { Message, type TableColumnData } from '@arco-design/web-vue'
+import { IconCheckCircleFill, IconExclamationCircleFill } from '@arco-design/web-vue/es/icon'
+import { useF2Import, type F2ImportOptions } from '@/composables/useF2Import'
 import type { F2PreviewResult } from '@/types/scraper'
 import { usePolling } from '@/composables/usePolling'
 import { useDouyinBloggerPicker } from '@/composables/useDouyinBloggerPicker'
@@ -50,8 +51,9 @@ const showAdvanced = ref(false)
 // ── 入库前预览（「宁缺毋滥、手动确认」）：先看新增/跳过明细，再决定是否入库 ──
 const previewVisible = ref(false)
 const previewResult = ref<F2PreviewResult | null>(null)
-/** 当前提交参数（预览与确认入库共用同一份，避免确认时参数被改过） */
-function currentOptions() {
+/** 预览时的参数快照：确认入库必须提交它，而不是重新读当前表单 */
+const previewSnapshot = ref<F2ImportOptions | null>(null)
+function currentOptions(): F2ImportOptions {
   return {
     fetch: fetchFirst.value,
     authors: authorsText.value.trim() || undefined,
@@ -65,8 +67,10 @@ function currentOptions() {
 }
 
 async function onPreview() {
-  const data = await preview(currentOptions())
+  const opts = currentOptions()
+  const data = await preview(opts)
   if (!data) return
+  previewSnapshot.value = opts
   previewResult.value = data
   previewVisible.value = true
 }
@@ -78,18 +82,6 @@ const unknownAuthors = computed(() => status.value?.unknown_authors ?? [])
  *  初值取后端配置（F2_FETCH_SINCE_DAYS），不在前端硬编码——否则改 .env 不生效：
  *  前端总把写死的默认值随请求下发，会把后端配置顶掉。留空表示「用后端配置」。 */
 const sinceDays = ref<number | undefined>(undefined)
-
-// 只在首次拿到状态时填充默认窗口；之后轮询不回写，用户改过的值不被覆盖
-let sinceDaysFilled = false
-watch(
-  () => status.value?.fetch_since_days,
-  (value) => {
-    if (sinceDaysFilled || value == null) return
-    sinceDays.value = value
-    sinceDaysFilled = true
-  },
-  { immediate: true },
-)
 
 // ── 进行中任务的实时说明：让「1% 挂好几分钟」有解释 ──
 // 只在确实有任务在跑时轮询（5 秒一次），没有任务时立即停，避免无意义请求。
@@ -124,18 +116,26 @@ const { start: startStatusPolling, stop: stopStatusPolling } = usePolling({
 
 watch(
   () => status.value?.auto?.running_task_id ?? null,
-  (taskId) => {
+  async (taskId, previousTaskId) => {
     stopStatusPolling()
-    if (taskId !== null) startStatusPolling()
+    if (taskId !== null) {
+      startStatusPolling()
+      return
+    }
+    // 从「有任务」变为「无任务」：提示结束、刷新清单并让父级重载历史
+    if (previousTaskId !== null && previousTaskId !== undefined) {
+      Message.success('f2 导入任务已结束，正在刷新状态')
+      if (showAuthors.value) await loadAuthors()
+      emit('submitted')
+    }
   },
 )
 
-onMounted(loadStatus)
-
-async function onSubmit() {
-  const taskId = await submit(currentOptions())
+async function onSubmit(options: F2ImportOptions | undefined = undefined) {
+  const taskId = await submit(options ?? currentOptions())
   if (taskId) {
     previewVisible.value = false
+    previewSnapshot.value = null
     emit('submitted')
     await loadStatus()
   }
@@ -153,19 +153,40 @@ async function onSubmit() {
  */
 const profileText = ref('')
 
-/** 手填的标识（逗号/空白分隔 → 数组；过滤空项） */
+/** 手填的标识（中英文逗号/顿号/空白分隔 → 数组；过滤空项） */
 const manualProfileList = computed(() =>
   profileText.value
-    .split(/[,\s]+/)
+    .split(/[,，、\s]+/)
     .map((s) => s.trim())
     .filter(Boolean),
 )
+
+/** 合法抖音主页链接或 sec_user_id；短链/抖音号/分享文案一律判为非法。 */
+const DOUYIN_PROFILE_RE = /^https?:\/\/(?:www\.)?douyin\.com\/user\/[A-Za-z0-9_-]{5,}\/?$/i
+const SEC_USER_ID_RE = /^MS4wLj[A-Za-z0-9_-]{10,}$/
+function isValidProfileKey(value: string): boolean {
+  return DOUYIN_PROFILE_RE.test(value) || SEC_USER_ID_RE.test(value)
+}
+const invalidManualProfiles = computed(() =>
+  manualProfileList.value.filter((item) => !isValidProfileKey(item)),
+)
+const validManualProfiles = computed(() => manualProfileList.value.filter(isValidProfileKey))
+const safeProfileUrl = (value: string): string | undefined => {
+  if (!/^https?:\/\//i.test(value)) return undefined
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? value : undefined
+  } catch {
+    return undefined
+  }
+}
 
 // 博主选择器：打开卡片就取一次「素材数最多的前 N 位抖音博主」，之后按关键字远程搜索
 const {
   selectOptions: pickerOptions,
   loading: pickerLoading,
   selectedIds: pickerSelectedIds,
+  selected: pickerSelected,
   selectedKeys: pickerSelectedKeys,
   missing: pickerMissing,
   resolving: pickerResolving,
@@ -185,18 +206,33 @@ onMounted(async () => {
 
 /** 最终提交的标识：选择器选中的博主 + 手填链接，去重 */
 const profileList = computed(() =>
-  mergeProfileKeys(pickerSelectedKeys.value, manualProfileList.value),
+  mergeProfileKeys(pickerSelectedKeys.value, validManualProfiles.value),
 )
-const canSubmitProfile = computed(() => profileList.value.length > 0)
+const canSubmitProfile = computed(
+  () => profileList.value.length > 0 && invalidManualProfiles.value.length === 0,
+)
+const profileConfirmVisible = ref(false)
+const profileConfirmNames = computed(() => {
+  const selectedNames = pickerSelected.value.map((p) => p.name)
+  return [...selectedNames, ...validManualProfiles.value]
+})
 
-async function onSubmitProfile() {
+/** 打开确认框；真正提交在 confirmProfileSubmit。 */
+function askSubmitProfile() {
+  if (!canSubmitProfile.value) return
+  profileConfirmVisible.value = true
+}
+
+async function confirmProfileSubmit() {
   const taskId = await submit({
     fetch: true,
     profiles: profileList.value,
-    // 点名博主只下她，不套「已登记博主」白名单（后端已保证），也不带其他筛选条件
+    // 点名博主不套「已登记博主」白名单；「跳过 live」与「清理源文件」只在
+    // 增量入库链路生效，这里不传，界面上明确标注不适用。
     make_thumbnails: makeThumbnails.value,
   })
   if (taskId) {
+    profileConfirmVisible.value = false
     profileText.value = ''
     clearPicker()
     emit('submitted')
@@ -259,12 +295,12 @@ async function toggleAuthors() {
       </div>
       <a-space>
         <!-- 先预览再确认：CLI 缺省就是这个行为（只出计划、不入库） -->
-        <a-button :loading="previewing" @click="onPreview">预览</a-button>
+        <a-button :loading="previewing" :disabled="submitting" @click="onPreview">预览</a-button>
         <a-button
           type="primary"
           :loading="submitting"
-          :disabled="!status?.available && !includeUnknown"
-          @click="onSubmit"
+          :disabled="previewing || (fetchFirst && !status?.available && !includeUnknown)"
+          @click="onSubmit()"
         >
           {{ fetchFirst ? '一键获取素材' : '仅入库已下载' }}
         </a-button>
@@ -292,18 +328,26 @@ async function toggleAuthors() {
         <a-button
           type="outline"
           :loading="submitting"
-          :disabled="!canSubmitProfile"
-          @click="onSubmitProfile"
+          :disabled="!canSubmitProfile || invalidManualProfiles.length > 0"
+          @click="askSubmitProfile"
         >
-          下载她全部作品
+          下载该博主全部作品
         </a-button>
       </div>
-      <div class="f2-profile-row" style="margin-top: 8px">
+      <div class="f2-profile-row f2-profile-row--spaced">
         <a-input
           v-model="profileText"
-          placeholder="也可直接粘贴主页链接 / sec_user_id（库外博主，多个用逗号分隔）"
+          placeholder="粘贴主页链接 / sec_user_id（中英文逗号、顿号或空格分隔）"
           allow-clear
+          :disabled="profileConfirmVisible"
         />
+      </div>
+      <div v-if="invalidManualProfiles.length" class="f2-profile-warn">
+        以下内容不是受支持的博主标识，请改成 douyin.com/user/… 链接或 sec_user_id：
+        {{ invalidManualProfiles.join('、') }}
+      </div>
+      <div class="f2-profile-options-note">
+        此入口只使用「生成缩略图」；「跳过 live」「清理下载源文件」只在增量入库入口生效。
       </div>
       <!-- 选中的博主缺主页标识：先解析再提交（否则后端点名不到她） -->
       <div v-if="pickerMissing.length" class="f2-profile-warn">
@@ -313,14 +357,19 @@ async function toggleAuthors() {
           }}
           还没有主页链接/sec_user_id，提交时会被跳过：</span
         >
-        <a-link :loading="pickerResolving" @click="resolveMissingProfiles()">
+        <a-button
+          type="text"
+          size="mini"
+          :loading="pickerResolving"
+          @click="resolveMissingProfiles()"
+        >
           {{
             pickerResolving && pickerProgress.total
               ? `解析中 ${pickerProgress.done}/${pickerProgress.total}…`
               : '自动解析主页'
           }}
-        </a-link>
-        <span class="f2-tip">（用她的素材作品 ID 反查，约 20~40 秒/人）</span>
+        </a-button>
+        <span class="f2-tip">（用其素材作品 ID 反查，约 20~40 秒/人）</span>
       </div>
       <div class="f2-profile-tip">
         从「我的喜欢」里发现一个没订阅过的博主？用这里。f2 只认它自己见过的账号，
@@ -332,24 +381,53 @@ async function toggleAuthors() {
       </div>
     </div>
 
+    <!-- 按博主全量下载确认：全量翻页很慢，先明确要下谁、耗时与磁盘成本 -->
+    <a-modal
+      v-model:visible="profileConfirmVisible"
+      title="确认按博主全量下载"
+      :footer="false"
+      :width="520"
+      unmount-on-close
+    >
+      <div class="f2-profile-confirm">
+        <p>将为以下 {{ profileConfirmNames.length }} 位博主首次翻全量作品：</p>
+        <ul>
+          <li v-for="name in profileConfirmNames" :key="name">{{ name }}</li>
+        </ul>
+        <p class="f2-confirm-warn">
+          全量翻页固定每页等待，作者作品多时可能持续数十分钟到数小时；会占用下载目录磁盘空间。
+        </p>
+      </div>
+      <div class="f2-preview-actions">
+        <a-button @click="profileConfirmVisible = false">取消</a-button>
+        <a-button type="primary" :loading="submitting" @click="confirmProfileSubmit">
+          确认下载
+        </a-button>
+      </div>
+    </a-modal>
+
     <!-- 可用性状态：不可用时说明原因（f2 未装 / 目录缺失 / 用户库为空 / 对不上博主） -->
-    <a-spin :loading="statusLoading" style="display: block">
-      <div v-if="status" class="f2-status" :class="{ 'is-bad': !status.available }">
-        <span>{{ status.available ? '' : '' }} {{ status.reason }}</span>
-        <a-link @click="loadStatus()">刷新状态</a-link>
+    <a-spin :loading="statusLoading" class="f2-status-spin">
+      <div v-if="status" class="f2-status" :class="status.available ? 'is-ok' : 'is-bad'">
+        <IconCheckCircleFill v-if="status.available" class="f2-status-icon" />
+        <IconExclamationCircleFill v-else class="f2-status-icon" />
+        <span>{{ status.reason }}</span>
+        <a-button type="text" size="mini" @click="loadStatus()">刷新状态</a-button>
       </div>
     </a-spin>
 
     <!-- 已登记博主清单：白名单里有谁、各自已入库多少条素材（展开时才拉取） -->
     <div class="f2-authors-bar">
-      <a-link @click="toggleAuthors">
+      <a-button type="text" size="mini" @click="toggleAuthors">
         {{ showAuthors ? '收起已登记博主' : `查看已登记博主（${status?.authors ?? 0}）` }}
-      </a-link>
+      </a-button>
       <span class="f2-tip">看一下白名单里到底有谁、各自带来多少条素材</span>
-      <a-link v-if="showAuthors" @click="loadAuthors()">刷新清单</a-link>
+      <a-button v-if="showAuthors" type="text" size="mini" @click="loadAuthors()">
+        刷新清单
+      </a-button>
     </div>
 
-    <a-spin v-if="showAuthors" :loading="authorsLoading" style="display: block">
+    <a-spin v-if="showAuthors" :loading="authorsLoading" class="f2-status-spin">
       <div v-if="f2Authors" class="f2-authors">
         <a-table
           v-if="f2Authors.registered.length"
@@ -361,7 +439,12 @@ async function toggleAuthors() {
           :scroll="{ x: 540 }"
         >
           <template #nickname="{ record }">
-            <a-link v-if="record.profile_url" :href="record.profile_url" target="_blank">
+            <a-link
+              v-if="safeProfileUrl(record.profile_url)"
+              :href="safeProfileUrl(record.profile_url)"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               {{ record.nickname || `${record.sec_user_id.slice(0, 12)}…` }}
             </a-link>
             <span v-else>{{ record.nickname || '（无昵称）' }}</span>
@@ -385,17 +468,24 @@ async function toggleAuthors() {
     <div v-if="runningText" class="f2-running">
       <a-spin :size="14" />
       <span>{{ runningText }}</span>
-      <a-link @click="router.push('/tasks')">去任务中心看进度</a-link>
+      <a-button type="text" size="mini" @click="router.push('/tasks')"> 去任务中心看进度 </a-button>
     </div>
 
     <div class="f2-options">
-      <a-checkbox v-model="fetchFirst">先调用 f2 增量下载（只下新作品）</a-checkbox>
-      <a-checkbox v-model="makeThumbnails">生成缩略图</a-checkbox>
-      <a-checkbox v-model="skipLive">跳过 live 实况分段视频</a-checkbox>
-      <a-checkbox v-model="pruneDownloads">入库后清理下载目录源文件</a-checkbox>
-      <a-link @click="showAdvanced = !showAdvanced">
+      <a-checkbox v-model="fetchFirst" :disabled="previewing">
+        先调用 f2 增量下载（只下新作品）
+      </a-checkbox>
+      <a-checkbox v-model="makeThumbnails" :disabled="previewing">生成缩略图</a-checkbox>
+      <a-checkbox v-model="skipLive" :disabled="previewing">跳过 live 实况分段视频</a-checkbox>
+      <a-checkbox v-model="pruneDownloads" :disabled="previewing">
+        入库后清理下载目录源文件
+      </a-checkbox>
+      <a-button type="text" size="mini" @click="showAdvanced = !showAdvanced">
         {{ showAdvanced ? '收起高级选项' : '高级选项' }}
-      </a-link>
+      </a-button>
+    </div>
+    <div v-if="pruneDownloads" class="f2-danger-note">
+      会删除下载目录里的源文件，删除后不可恢复；仅对本次成功入库的文件生效。
     </div>
 
     <div v-if="showAdvanced" class="f2-advanced">
@@ -403,12 +493,14 @@ async function toggleAuthors() {
         v-model="authorsText"
         placeholder="只处理指定博主（逗号分隔，如：里香,娜娜瑜；留空=全部）"
         allow-clear
+        :disabled="previewing"
       />
       <a-input-number
         v-model="limit"
         :min="1"
         placeholder="最多导入作品数（留空=不限）"
-        style="width: 220px"
+        class="f2-input-limit"
+        :disabled="previewing"
       />
       <span class="f2-tip">只翻最近</span>
       <a-input-number
@@ -416,18 +508,24 @@ async function toggleAuthors() {
         :min="0"
         :max="3650"
         size="small"
-        style="width: 100px"
-        placeholder="用配置"
+        class="f2-input-since"
+        :placeholder="`用配置（${status?.fetch_since_days ?? '—'} 天）`"
+        :disabled="previewing"
       />
       <span class="f2-tip">
-        天的作品（默认取后端配置 {{ status?.fetch_since_days ?? '—' }} 天；0=翻全历史）。f2
-        翻页固定每页等 10 秒， 窗口越小越快；按作者上次下载时间会自动放大，长时间不跑也不漏。
+        天的作品（留空=后端配置；0=翻全历史）。f2
+        翻页固定每页等待，窗口越小越快；按作者上次下载时间会自动放大，长时间不跑也不漏。
       </span>
+      <div v-if="sinceDays === 0" class="f2-danger-note">
+        0 = 全历史：会从第一页翻到最后一页，可能非常慢；建议先点「预览」确认范围。
+      </div>
       <span class="f2-tip">
         下载目录：{{ status?.root || '—' }}；已登记博主来自 f2 用户库，共
         {{ status?.authors ?? 0 }} 个
       </span>
-      <a-checkbox v-model="includeUnknown">包含 f2 里未登记到博主库的账号</a-checkbox>
+      <a-checkbox v-model="includeUnknown" :disabled="previewing">
+        包含 f2 里未登记到博主库的账号
+      </a-checkbox>
       <span class="f2-tip">
         {{
           unknownAuthors.length
@@ -446,9 +544,30 @@ async function toggleAuthors() {
       unmount-on-close
     >
       <template v-if="previewResult">
+        <div v-if="previewSnapshot" class="f2-preview-params">
+          <div>
+            <b>本次提交参数：</b>
+            {{ previewSnapshot.fetch ? '先调用 f2 增量下载' : '仅入库已下载文件' }}
+            · {{ previewSnapshot.make_thumbnails ? '生成缩略图' : '不生成缩略图' }}
+          </div>
+          <div v-if="previewSnapshot.prune_downloads" class="f2-confirm-warn">
+            入库后将删除下载目录源文件，不可恢复。
+          </div>
+          <div v-if="previewSnapshot.include_unknown_authors" class="f2-confirm-warn">
+            包含 f2 用户库里未登记到博主库的账号。
+          </div>
+          <div v-if="previewSnapshot.since_days === 0" class="f2-confirm-warn">
+            日期窗口为 0：将翻全历史，耗时可能很长。
+          </div>
+        </div>
         <div v-if="!previewResult.has_any" class="f2-preview-empty">
           下载目录里没有可识别的 f2 产物（{{ previewResult.root }}）。<br />
-          勾选「先调用 f2 增量下载」再点「一键获取素材」才会去下载。
+          <template v-if="previewSnapshot?.fetch">
+            任务会先调用 f2 增量下载，再把新作品入库。
+          </template>
+          <template v-else>
+            请先勾选「先调用 f2 增量下载」再提交，或把已下载文件放进该目录。
+          </template>
         </div>
         <template v-else>
           <div class="f2-preview-sum">
@@ -477,7 +596,13 @@ async function toggleAuthors() {
       </template>
       <div class="f2-preview-actions">
         <a-button @click="previewVisible = false">取消</a-button>
-        <a-button type="primary" :loading="submitting" @click="onSubmit">确认入库</a-button>
+        <a-button
+          type="primary"
+          :loading="submitting"
+          @click="onSubmit(previewSnapshot ?? undefined)"
+        >
+          确认入库
+        </a-button>
       </div>
     </a-modal>
   </a-card>
@@ -486,8 +611,8 @@ async function toggleAuthors() {
 <style scoped>
 .f2-card {
   margin-bottom: 16px;
-  background: linear-gradient(180deg, #f5f7ff 0%, #ffffff 100%);
-  border: 1px solid #e5e9f5;
+  background: linear-gradient(180deg, var(--sheet) 0%, var(--sheet) 100%);
+  border: 1px solid var(--line);
 }
 
 .f2-head {
@@ -523,15 +648,27 @@ async function toggleAuthors() {
   gap: 12px;
 }
 
+.f2-status-spin {
+  display: block;
+}
+
+.f2-status.is-ok {
+  color: var(--jade);
+}
+
 .f2-status.is-bad {
   color: var(--amber);
+}
+
+.f2-status-icon {
+  flex-shrink: 0;
 }
 
 .f2-running {
   margin-top: 10px;
   padding: 8px 12px;
   border-radius: var(--radius-sm);
-  background: #f2f6ff;
+  background: var(--pine-soft);
   font-size: 13px;
   color: var(--ink);
   display: flex;
@@ -586,8 +723,8 @@ async function toggleAuthors() {
 .f2-profile {
   margin-top: 12px;
   padding: 10px 12px;
-  border-left: 3px solid var(--color-primary-light-3, #94bfff);
-  background: #f8faff;
+  border-left: 3px solid var(--pine);
+  background: var(--sheet-2);
   border-radius: var(--radius-sm);
 }
 .f2-profile-title {
@@ -602,6 +739,9 @@ async function toggleAuthors() {
   gap: 8px;
   flex-wrap: wrap;
 }
+.f2-profile-row--spaced {
+  margin-top: 8px;
+}
 .f2-profile-row :deep(.arco-input-wrapper) {
   flex: 1;
   min-width: 260px;
@@ -610,6 +750,11 @@ async function toggleAuthors() {
 .f2-profile-picker {
   flex: 1;
   min-width: 320px;
+}
+.f2-profile-options-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-3);
 }
 /* 已选博主缺主页标识：橙色提示行（不阻断提交，但要说清谁会掉队） */
 .f2-profile-warn {
@@ -632,8 +777,52 @@ async function toggleAuthors() {
   border-radius: 3px;
   background: var(--sheet-2);
 }
+.f2-profile-confirm p {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+.f2-profile-confirm ul {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  max-height: 180px;
+  overflow: auto;
+}
+.f2-profile-confirm li {
+  color: var(--ink);
+  line-height: 1.8;
+}
+.f2-confirm-warn {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--seal-soft);
+  color: var(--seal);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.f2-danger-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--seal);
+}
+.f2-input-limit {
+  width: 220px;
+}
+.f2-input-since {
+  width: 150px;
+}
 
 /* ── 入库前预览弹窗 ── */
+.f2-preview-params {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.8;
+}
 .f2-preview-sum {
   font-size: 14px;
   color: var(--ink);

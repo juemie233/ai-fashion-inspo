@@ -88,6 +88,14 @@ const checkboxStub = defineComponent({
   },
 })
 
+const modalStub = defineComponent({
+  name: 'AModal',
+  props: { visible: { type: Boolean, default: false } },
+  render() {
+    return this.visible ? h('div', { class: 'modal-stub' }, this.$slots.default?.()) : null
+  },
+})
+
 /** 表格桩件：按列的 slotName 渲染每一行的作用域插槽，便于断言单元格内容 */
 const tableStub = defineComponent({
   name: 'ATable',
@@ -153,6 +161,7 @@ const STUBS = {
   'a-spin': spinStub,
   'a-link': linkStub,
   'a-checkbox': checkboxStub,
+  'a-modal': modalStub,
   'a-table': tableStub,
 }
 
@@ -227,7 +236,7 @@ async function mountCardWithAuthors(
 
 /** 按文案定位链接 */
 function linkByText(wrapper: VueWrapper, text: string) {
-  return wrapper.findAll('a').find((a) => a.text().includes(text))!
+  return wrapper.findAll('a,button').find((el) => el.text().includes(text))!
 }
 
 const SEC = 'MS4wLjABAAAACyG6qmWLGt5BbCvwkAfMpEf3nhGwlQqSG1MjwDIGokuUHJnIkwJzxDPu-1RRrfvk'
@@ -242,9 +251,34 @@ const PICKER_BLOGGER = {
   inspiration_count: 12,
 }
 
-/** 卡片里「下载她全部作品」按钮（按文案定位） */
+/** 卡片里「下载该博主全部作品」按钮（按文案定位） */
 function profileButton(wrapper: VueWrapper) {
-  return wrapper.findAll('button').find((b) => b.text().includes('下载她全部作品'))!
+  return wrapper.findAll('button').find((b) => b.text().includes('下载该博主全部作品'))!
+}
+
+/** 点击博主下载并在确认框里点「确认下载」。 */
+async function submitProfile(wrapper: VueWrapper) {
+  await profileButton(wrapper).trigger('click')
+  await flushPromises()
+  const confirm = wrapper.findAll('button').find((b) => b.text().includes('确认下载'))
+  if (!confirm) throw new Error('未找到确认下载按钮')
+  await confirm.trigger('click')
+  await flushPromises()
+}
+
+/** 预览结果（后端 GET /api/scraper/f2-preview） */
+function makePreview(over: Record<string, unknown> = {}) {
+  return {
+    root: 'C:/f2/Download/douyin/post',
+    files: 3,
+    files_to_import: 2,
+    works: 2,
+    skipped: {},
+    deferred_works: 0,
+    authors_scope: null,
+    has_any: true,
+    ...over,
+  }
 }
 
 describe('F2ImportCard · 按博主全量下载', () => {
@@ -257,8 +291,7 @@ describe('F2ImportCard · 按博主全量下载', () => {
     mocks.post.mockResolvedValue({ data: { task_id: 77, message: '已提交' } })
 
     await wrapper.find('.f2-profile input').setValue(`https://www.douyin.com/user/${SEC}`)
-    await profileButton(wrapper).trigger('click')
-    await flushPromises()
+    await submitProfile(wrapper)
 
     expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
       params: {
@@ -278,8 +311,7 @@ describe('F2ImportCard · 按博主全量下载', () => {
     await wrapper
       .find('.f2-profile input')
       .setValue(`${SEC}, https://www.douyin.com/user/MS4wLjABAAAAother0000`)
-    await profileButton(wrapper).trigger('click')
-    await flushPromises()
+    await submitProfile(wrapper)
 
     // **逗号分隔字符串**而不是数组：数组会被 axios 序列化成 `profiles[]=…`，
     // 后端按 profiles 取值 → 收到空，「按博主全量下载」会静默退化成普通增量
@@ -303,8 +335,7 @@ describe('F2ImportCard · 按博主全量下载', () => {
 
     const input = wrapper.find('.f2-profile input')
     await input.setValue(SEC)
-    await profileButton(wrapper).trigger('click')
-    await flushPromises()
+    await submitProfile(wrapper)
 
     expect((input.element as HTMLInputElement).value).toBe('')
   })
@@ -317,8 +348,7 @@ describe('F2ImportCard · 按博主全量下载', () => {
 
     const input = wrapper.find('.f2-profile input')
     await input.setValue(SEC)
-    await profileButton(wrapper).trigger('click')
-    await flushPromises()
+    await submitProfile(wrapper)
 
     // reused 也返回 task_id → 仍算提交成功（走同一轮轮询）
     expect(wrapper.emitted('submitted')).toBeTruthy()
@@ -333,8 +363,7 @@ describe('F2ImportCard · 按博主全量下载', () => {
     // 选择器桩：模拟用户选中「唐思瑶ya」
     wrapper.findComponent({ name: 'ASelect' }).vm.$emit('change', [PICKER_BLOGGER.id])
     await flushPromises()
-    await profileButton(wrapper).trigger('click')
-    await flushPromises()
+    await submitProfile(wrapper)
 
     const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
     expect(params.profiles).toBe(`https://www.douyin.com/user/${SEC}`)
@@ -351,8 +380,7 @@ describe('F2ImportCard · 按博主全量下载', () => {
     await wrapper
       .find('.f2-profile input')
       .setValue(`https://www.douyin.com/user/${SEC}, MS4wLjABAAAAother0000`)
-    await profileButton(wrapper).trigger('click')
-    await flushPromises()
+    await submitProfile(wrapper)
 
     const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
     // 选择器在前、手填在后；重复的那一个只提交一次
@@ -474,5 +502,66 @@ describe('F2ImportCard · 已登记博主清单', () => {
 
     expect(wrapper.find('table').exists()).toBe(false)
     expect(wrapper.text()).toContain('白名单里暂无账号')
+  })
+})
+
+describe('F2ImportCard · 预览参数快照与博主确认', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('预览后改动选项，确认入库仍提交预览时的参数', async () => {
+    const wrapper = await mountWithResponses((url) => {
+      if (url === '/scraper/f2-preview') return Promise.resolve({ data: makePreview() })
+      if (url === '/bloggers') return Promise.resolve({ data: makePickerBloggers() })
+      return Promise.resolve({ data: makeStatus() })
+    })
+    mocks.post.mockResolvedValue({ data: { task_id: 91, message: '已提交' } })
+
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('预览'))!
+      .trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('本次提交参数')
+
+    // 预览快照是 fetch=true；弹窗打开后把表单改成 false，确认时不能跟着变
+    wrapper.findAllComponents({ name: 'ACheckbox' })[0].vm.$emit('update:modelValue', false)
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('确认入库'))!
+      .trigger('click')
+    await flushPromises()
+
+    const params = (mocks.post.mock.calls[0][2] as { params: { fetch: boolean } }).params
+    expect(params.fetch).toBe(true)
+  })
+
+  it('博主下载必须先确认，确认前不提交', async () => {
+    const wrapper = await mountCard()
+    mocks.post.mockResolvedValue({ data: { task_id: 92, message: '已提交' } })
+
+    await wrapper.find('.f2-profile input').setValue(SEC)
+    await profileButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(wrapper.findAll('button').some((b) => b.text().includes('确认下载'))).toBe(true)
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('确认下载'))!
+      .trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalled()
+  })
+
+  it('手填短链/抖音号判为非法并禁用提交', async () => {
+    const wrapper = await mountCard()
+    await wrapper.find('.f2-profile input').setValue('https://v.douyin.com/abc123, 72906514384')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('不是受支持的博主标识')
+    expect(profileButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(mocks.post).not.toHaveBeenCalled()
   })
 })
