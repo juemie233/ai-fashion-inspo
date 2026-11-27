@@ -45,7 +45,7 @@
 | `GET` | `/api/admin/stats` | `admin_stats` | 素材总览仪表盘数据（聚合逻辑在 app.services.admin_stats_service）。 |
 | `GET` | `/api/admin/backup/status` | `backup_status` | 数据备份状态（只读）：开关/最近成功备份/历史/运行锁/日志尾部。 |
 | `GET` | `/api/admin/largest-files` | `largest_files` | 列出占用空间最大的前 N 个文件；扫描在 ``admin_stats_service``。 |
-| `GET` | `/api/admin/integrity-check` | `integrity_check` | 数据完整性检查（缺文件 / 孤立文件）；扫描在 ``admin_stats_service``。 |
+| `GET` | `/api/admin/integrity-check` | `integrity_check` | 数据完整性检查（缺文件 / 孤立文件）；默认短 TTL 缓存，force=true 强制重扫。 |
 | `POST` | `/api/admin/cleanup-orphans` | `cleanup_orphan_files` | 删除所有孤立文件（磁盘上有但数据库无记录的文件）。 |
 | `POST` | `/api/admin/batch-delete` | `batch_delete` | 批量删除素材（已改造为任务队列，创建任务后返回 task_id）。 |
 | `POST` | `/api/admin/batch-unmark-ai` | `batch_unmark_ai` | 批量将疑似 AI 素材重新标记为非 AI（人工复核翻案）。 |

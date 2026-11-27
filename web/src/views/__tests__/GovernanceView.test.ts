@@ -124,6 +124,63 @@ describe('GovernanceView 编排', () => {
     expect(mocks.resumeAdminTask).toHaveBeenCalled() // 刷新页面后继续看进度
   })
 
+  it('stats 慢不阻塞 largest-files：两块独立 loading/数据', async () => {
+    let resolveStats!: (value: unknown) => void
+    mocks.get.mockImplementation((url: string) => {
+      if (url.startsWith('/admin/stats')) {
+        return new Promise((resolve) => {
+          resolveStats = resolve
+        })
+      }
+      if (url.startsWith('/admin/largest-files')) {
+        return Promise.resolve({ data: [{ file_path: 'storage/a.jpg', size_bytes: 10 }] })
+      }
+      return Promise.resolve({ data: {} })
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      stats: unknown
+      largestFiles: unknown[]
+      statsLoading: boolean
+      largestLoading: boolean
+    }
+    // stats 还挂着，但 largest-files 已独立完成展示
+    expect(vm.largestFiles).toHaveLength(1)
+    expect(vm.largestLoading).toBe(false)
+    expect(vm.statsLoading).toBe(true)
+    expect(vm.stats).toBeNull()
+
+    resolveStats(statsPayload())
+    await flushPromises()
+    expect(vm.stats).toEqual(statsPayload().data)
+    expect(vm.statsLoading).toBe(false)
+  })
+
+  it('largest-files 失败不阻塞 stats：只提示对应错误', async () => {
+    mocks.get.mockImplementation((url: string) => {
+      if (url.startsWith('/admin/stats')) return Promise.resolve(statsPayload())
+      if (url.startsWith('/admin/largest-files')) return Promise.reject(new Error('timeout'))
+      return Promise.resolve({ data: {} })
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      stats: unknown
+      statsLoading: boolean
+      largestLoading: boolean
+      largestError: boolean
+    }
+    expect(vm.stats).toEqual(statsPayload().data)
+    expect(vm.statsLoading).toBe(false)
+    expect(vm.largestLoading).toBe(false)
+    expect(vm.largestError).toBe(true)
+    expect(mocks.message.error).toHaveBeenCalledWith('加载最大文件失败')
+    expect(mocks.message.error).not.toHaveBeenCalledWith('加载统计数据失败')
+  })
+
   it('加载统计失败给出提示且不崩', async () => {
     mocks.get.mockRejectedValue(new Error('500'))
 

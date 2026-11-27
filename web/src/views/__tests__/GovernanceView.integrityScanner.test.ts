@@ -126,7 +126,7 @@ function integrityChild(wrapper: ViewWrapper) {
   return wrapper.findComponent(IntegrityStub)
 }
 
-/** 模拟子组件点「重新检查」→ 父组件 loadIntegrity。 */
+/** 模拟子组件点「重新检查」→ 父组件 loadIntegrity(force=true)。 */
 async function clickRecheck(wrapper: ViewWrapper) {
   const child = integrityChild(wrapper)
   expect(child.exists()).toBe(true)
@@ -214,6 +214,23 @@ describe('GovernanceView 完整性检查扫描器来源回填', () => {
     expect(integrityChild(wrapper).props('scanner')).toBe('rust')
   })
 
+  it('首次进入 Tab 巡检不带 force；手动「重新检查」才带 force=true', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const integrityUrls = () =>
+      mocks.get.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.startsWith('/admin/integrity-check'))
+
+    // 首次懒加载：普通请求（允许后端走缓存），避免每次切 Tab 强制全扫
+    expect(integrityUrls()).toEqual(['/admin/integrity-check'])
+
+    await clickRecheck(wrapper)
+    expect(integrityUrls()).toHaveLength(2)
+    expect(integrityUrls().at(-1)).toBe('/admin/integrity-check?force=true')
+  })
+
   it('重新检查返回 scanner=rust：回填并透传给完整性卡片', async () => {
     mocks.get.mockImplementation((url: string) => {
       if (url.startsWith('/admin/integrity-check')) {
@@ -233,7 +250,7 @@ describe('GovernanceView 完整性检查扫描器来源回填', () => {
     await flushPromises()
     await clickRecheck(wrapper)
 
-    expect(mocks.get).toHaveBeenCalledWith('/admin/integrity-check')
+    expect(mocks.get).toHaveBeenCalledWith('/admin/integrity-check?force=true')
     const child = integrityChild(wrapper)
     expect(child.props('scanner')).toBe('rust')
     // 巡检结果同样要回填给卡片，且 loading 已复位

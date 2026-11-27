@@ -704,3 +704,165 @@ async def test_integrity_check_python_healthy_library(client, monkeypatch):
     assert result["orphan_count"] == 0
     assert result["orphan_total_size_bytes"] == 0
     assert result["trash_invariants"] == []
+
+
+# ═══════════════════════════════════════════════════════════════
+#  2026-11-27 性能优化：largest_files 候选 stat / 扫描缓存
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_largest_files_uses_file_size_candidates(client, monkeypatch):
+    """有 file_size 时只对候选池 stat（limit*10），不全库逐条 stat；按实际大小排序。"""
+    total = 200
+    expected_sizes: dict[str, int] = {}
+    objects = []
+    for index in range(total):
+        rel = f"images/cand-{index:03d}.jpg"
+        size = (index + 1) * 10
+        expected_sizes[rel] = size
+        objects.append(
+            _insp(
+                file_path=rel,
+                file_size=size,
+                created_at=datetime(2026, 1, 1, 0, 0, index % 60),
+            )
+        )
+    await _add(*objects)
+
+    calls = {"n": 0}
+
+    def _fake_size_and_exists(storage_root, relative_path):
+        calls["n"] += 1
+        return expected_sizes.get(relative_path or "", 0), True
+
+    monkeypatch.setattr(stats, "_file_size_and_exists", _fake_size_and_exists)
+
+    async with async_session() as db:
+        files = await stats.largest_files(db, limit=5)
+
+    assert [f["size_bytes"] for f in files] == [2000, 1990, 1980, 1970, 1960]
+    assert set(files[0]) == {
+        "id",
+        "file_path",
+        "source_type",
+        "created_at",
+        "size_bytes",
+        "exists",
+    }
+    # 候选池 = limit*10 = 50，远小于 200 条；只对候选做 stat
+    assert calls["n"] == 50
+
+
+async def test_largest_files_null_file_size_fallback(client, monkeypatch):
+    """file_size 为 NULL 的旧数据逐条 stat 兜底，参与按实际大小的排名。"""
+    await _add(
+        _insp(file_path="images/known.jpg", file_size=100),
+        _insp(file_path="images/legacy-big.jpg"),
+        _insp(file_path="images/legacy-small.jpg"),
+        _insp(file_path="images/legacy-missing.jpg"),
+    )
+    actual = {
+        "images/known.jpg": 100,
+        "images/legacy-big.jpg": 500,
+        "images/legacy-small.jpg": 50,
+    }
+
+    def _fake_size_and_exists(storage_root, relative_path):
+        if relative_path in actual:
+            return actual[relative_path], True
+        return 0, False
+
+    monkeypatch.setattr(stats, "_file_size_and_exists", _fake_size_and_exists)
+
+    async with async_session() as db:
+        files = await stats.largest_files(db, limit=10)
+
+    assert [f["file_path"] for f in files] == [
+        "images/legacy-big.jpg",
+        "images/known.jpg",
+        "images/legacy-small.jpg",
+        "images/legacy-missing.jpg",
+    ]
+    assert [f["size_bytes"] for f in files] == [500, 100, 50, 0]
+    assert [f["exists"] for f in files] == [True, True, True, False]
+
+
+async def test_collect_stats_storage_scan_cache_hit_and_root_key(
+    client, monkeypatch, tmp_path
+):
+    """collect_stats 复用 storage 扫描结果；cache key 含 storage root，换根必重扫。"""
+    stats.clear_admin_scan_caches()
+    calls = {"n": 0}
+
+    def _fake_scan(include_trash: bool = False) -> dict[str, int]:
+        calls["n"] += 1
+        return {"images/a.jpg": 10, "thumbnails/t.jpg": 2}
+
+    monkeypatch.setattr(stats, "scan_storage_files", _fake_scan)
+
+    async with async_session() as db:
+        first = await stats.collect_stats(db)
+        second = await stats.collect_stats(db)
+
+    assert calls["n"] == 1  # 第二次命中缓存，没有重新扫描 storage
+    assert first["total_size_bytes"] == second["total_size_bytes"] == 12
+    assert first["thumbnail_size_bytes"] == 2
+    assert first["images_size_bytes"] == 10
+
+    # cache key 含 storage root：换根后必须重新扫描
+    monkeypatch.setattr(stats.settings, "storage_root", tmp_path / "other-storage")
+    async with async_session() as db:
+        third = await stats.collect_stats(db)
+    assert calls["n"] == 2
+    assert third["total_size_bytes"] == 12
+
+
+async def test_collect_stats_storage_scan_cache_ttl_expiry(client, monkeypatch):
+    """缓存超过 TTL 后失效，重新扫描 storage。"""
+    stats.clear_admin_scan_caches()
+    calls = {"n": 0}
+
+    def _fake_scan(include_trash: bool = False) -> dict[str, int]:
+        calls["n"] += 1
+        return {"images/a.jpg": 10}
+
+    monkeypatch.setattr(stats, "scan_storage_files", _fake_scan)
+    monkeypatch.setattr(stats, "_STORAGE_SCAN_TTL_SECONDS", 0.0)
+
+    async with async_session() as db:
+        await stats.collect_stats(db)
+        await stats.collect_stats(db)
+
+    assert calls["n"] == 2
+
+
+async def test_integrity_check_cache_hit_and_force_bypass(client, monkeypatch):
+    """integrity_check 默认命中缓存；force=True 必须重新扫描并刷新缓存。"""
+    from app.services import storage_audit_service
+
+    stats.clear_admin_scan_caches()
+    calls = {"n": 0}
+
+    async def _fake_audit(paths):
+        calls["n"] += 1
+        return {"missing": [], "orphans": []}
+
+    monkeypatch.setattr(storage_audit_service, "run_storage_audit", _fake_audit)
+
+    async with async_session() as db:
+        first = await stats.integrity_check(db)
+        second = await stats.integrity_check(db)
+    assert calls["n"] == 1
+    assert first == second
+    assert first["scanner"] == "rust"
+
+    async with async_session() as db:
+        forced = await stats.integrity_check(db, force=True)
+    assert calls["n"] == 2  # force 绕缓存，重新扫描
+    assert forced["scanner"] == "rust"
+
+    # force 已刷新缓存：再次普通调用仍命中，不再扫描
+    async with async_session() as db:
+        again = await stats.integrity_check(db)
+    assert calls["n"] == 2
+    assert again["scanner"] == "rust"

@@ -55,9 +55,18 @@ async def largest_files(
 
 
 @router.get("/integrity-check")
-async def integrity_check(db: AsyncSession = Depends(get_db)) -> dict:
-    """数据完整性检查（缺文件 / 孤立文件）；扫描在 ``admin_stats_service``。"""
-    return await admin_stats_service.integrity_check(db)
+async def integrity_check(
+    db: AsyncSession = Depends(get_db),
+    force: bool = Query(
+        False,
+        description=(
+            "强制重新扫描（跳过 30s 短 TTL 缓存）；治理页「重新检查」按钮传 true。"
+            "默认 false 时命中缓存，返回结构不变"
+        ),
+    ),
+) -> dict:
+    """数据完整性检查（缺文件 / 孤立文件）；默认短 TTL 缓存，force=true 强制重扫。"""
+    return await admin_stats_service.integrity_check(db, force=force)
 
 
 @router.post("/cleanup-orphans")

@@ -66,7 +66,11 @@ const integrityScanner = ref('')
 const duplicates = ref<DuplicateGroup[]>([])
 const dupCount = ref(0)
 const dupSize = ref(0)
-const loading = ref(true)
+/** 首屏两块数据独立加载：大库下 /admin/stats 可能很慢，不能拖住其它块 */
+const statsLoading = ref(true)
+const largestLoading = ref(true)
+const statsError = ref(false)
+const largestError = ref(false)
 const checking = ref(false)
 
 // ── 批量删除 / 去重 ──
@@ -119,30 +123,55 @@ function handleAdminTaskDone() {
 }
 
 // ── 数据加载 ──
+//
+// /admin/stats 与 /admin/largest-files 各自独立 loading/失败：真实大库 stats 慢时，
+// largest-files 仍能先展示；任一失败也只影响自己那块，不会因为 Promise.all 整块失败
+// 把另一边的成功数据一起丢掉。
 
-async function loadAll() {
-  loading.value = true
+/** 加载顶部统计（慢接口，独立错误） */
+async function loadStats(): Promise<void> {
+  statsLoading.value = true
+  statsError.value = false
   try {
-    const [sRes, lRes] = await Promise.all([
-      apiClient.get('/admin/stats'),
-      apiClient.get('/admin/largest-files?limit=20'),
-    ])
-    stats.value = sRes.data
-    largestFiles.value = lRes.data
+    const res = await apiClient.get('/admin/stats')
+    stats.value = res.data
   } catch {
+    statsError.value = true
     Message.error('加载统计数据失败')
   } finally {
-    loading.value = false
+    statsLoading.value = false
   }
+}
+
+/** 加载最大文件列表（与 stats 并行、互不阻塞） */
+async function loadLargestFiles(): Promise<void> {
+  largestLoading.value = true
+  largestError.value = false
+  try {
+    const res = await apiClient.get('/admin/largest-files?limit=20')
+    largestFiles.value = res.data
+  } catch {
+    largestError.value = true
+    Message.error('加载最大文件失败')
+  } finally {
+    largestLoading.value = false
+  }
+}
+
+/** 首屏/任务完成后刷新两块数据（并行但各自独立收尾） */
+async function loadAll() {
+  await Promise.all([loadStats(), loadLargestFiles()])
 }
 
 /** 完整性巡检结果是否已加载过：懒加载去重，避免来回切 Tab 重复扫描全库 */
 let integrityLoaded = false
 
-async function loadIntegrity() {
+async function loadIntegrity(force = false) {
   checking.value = true
   try {
-    const res = await apiClient.get('/admin/integrity-check')
+    // 首次/懒加载走普通请求（后端可走缓存）；只有用户手动「重新检查」才 force 全扫
+    const url = force ? '/admin/integrity-check?force=true' : '/admin/integrity-check'
+    const res = await apiClient.get(url)
     missingFiles.value = res.data.missing_files
     orphanFiles.value = res.data.orphan_files
     orphanSize.value = res.data.orphan_total_size_bytes
@@ -153,6 +182,11 @@ async function loadIntegrity() {
   } finally {
     checking.value = false
   }
+}
+
+/** 手动「重新检查」：强制后端重新扫描（首次进入 Tab 不强制） */
+function recheckIntegrity() {
+  void loadIntegrity(true)
 }
 
 /** 进入「数据完整性」Tab 时懒加载一次巡检（挂载时初始 Tab 就是 integrity 也触发） */
@@ -332,7 +366,7 @@ onUnmounted(() => {
           :orphan-bytes="orphanSize"
           :checking="checking"
           :scanner="integrityScanner"
-          @recheck="loadIntegrity"
+          @recheck="recheckIntegrity"
           @clean-orphans="cleanOrphans"
         />
       </a-tab-pane>

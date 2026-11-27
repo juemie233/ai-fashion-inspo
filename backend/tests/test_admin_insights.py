@@ -72,9 +72,9 @@ def test_audit_log_empty_trash(client, upload):
     client.delete("/api/inspirations/trash")
 
     logs = client.get("/api/admin/audit-logs").json()
-    actions = [l["action"] for l in logs]
+    actions = [log["action"] for log in logs]
     assert "empty_trash" in actions
-    empty = next(l for l in logs if l["action"] == "empty_trash")
+    empty = next(log for log in logs if log["action"] == "empty_trash")
     assert empty["count"] == 1
     assert empty["freed_bytes"] > 0
 
@@ -260,3 +260,20 @@ async def test_near_duplicate_scan_backfill_visibility(client):
     assert res2["backfilled"] == 0
     assert res2["scanned"] == N
     assert res2["truncated"] is False
+
+
+def test_integrity_check_force_query_passthrough(client, monkeypatch):
+    """治理页「重新检查」按钮：force=true 透传到 service，默认 false。"""
+    from app.services import admin_stats_service as stats
+
+    calls: list[bool] = []
+
+    async def _fake(db, force=False):
+        calls.append(force)
+        return {"missing_files": [], "force": force}
+
+    monkeypatch.setattr(stats, "integrity_check", _fake)
+
+    assert client.get("/api/admin/integrity-check").json()["force"] is False
+    assert client.get("/api/admin/integrity-check?force=true").json()["force"] is True
+    assert calls == [False, True]
