@@ -92,7 +92,7 @@ describe('useImageGen', () => {
       { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p2' },
       { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p3' },
     ])
-    expect(out).toEqual({ succeeded: 3, failed: 0 })
+    expect(out).toEqual({ succeeded: 3, failed: 0, failures: [] })
     expect(mocks.createRun).toHaveBeenCalledTimes(3)
     expect(gen.runId.value).toBe(103)
     expect(success).toHaveBeenCalled()
@@ -111,7 +111,59 @@ describe('useImageGen', () => {
     const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
     const gen = useImageGen()
     const out = await gen.submitBatch([{ prompt: 'x' }, { prompt: 'x' }, { prompt: 'x' }])
-    expect(out).toEqual({ succeeded: 2, failed: 1 })
+    expect(out).toMatchObject({ succeeded: 2, failed: 1 })
+    expect(out.failures[0]).toMatchObject({ index: 1, error: '方舟限流' })
+    expect(error).toHaveBeenCalled()
+    success.mockRestore()
+    error.mockRestore()
+  })
+
+  it('submit 创建成功但刷新失败：仍返回 runId，不误报「提交失败」', async () => {
+    mocks.createRun.mockResolvedValue({
+      run_id: 8,
+      task_id: 4,
+      seed: 1,
+      batch_dir: 'x',
+      total: 1,
+    })
+    mocks.fetchRun.mockRejectedValue(new Error('网络抖动'))
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
+    const gen = useImageGen()
+
+    const id = await gen.submit({ prompt: 'x' })
+
+    expect(id).toBe(8)
+    expect(gen.runId.value).toBe(8)
+    expect(success).toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    success.mockRestore()
+    error.mockRestore()
+  })
+
+  it('confirm 部分批次失败：返回已入库数量，不用整体失败抹掉成功批次', async () => {
+    let seq = 0
+    mocks.createRun.mockImplementation(async () => {
+      seq += 1
+      return { run_id: 100 + seq, task_id: 200 + seq, seed: 1, batch_dir: 'x', total: 1 }
+    })
+    mocks.fetchRun.mockImplementation(async (id: number) => ({
+      ...RUN_DETAIL,
+      run: { ...RUN_DETAIL.run, id, status: 'done', total: 1, done: 1 },
+      items: [{ ...RUN_DETAIL.items[0], imported: false, url: `/u/${id}` }],
+    }))
+    mocks.confirmImport.mockResolvedValueOnce({ imported: 1, skipped: 0, ids: ['i'] })
+    mocks.confirmImport.mockRejectedValueOnce(new Error('第二批坏了'))
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
+    const gen = useImageGen()
+
+    await gen.submitBatch([{ prompt: 'x' }, { prompt: 'x' }])
+    gen.selectAll()
+    const imported = await gen.confirm()
+
+    expect(imported).toBe(1)
+    expect(success).toHaveBeenCalled()
     expect(error).toHaveBeenCalled()
     success.mockRestore()
     error.mockRestore()
@@ -313,13 +365,21 @@ describe('档位目录缓存（探测 4.4 秒，先把档位列出来）', () =>
     expect(readCachedModelsMeta()).toEqual(META)
   })
 
+  it('缓存形状不对（缺 label/kind）返回 null，不让坏数据喂给档位 UI', () => {
+    localStorage.setItem(
+      'fashion-inspo:generate:models-meta:v1',
+      JSON.stringify({ old_model: { label: 1 } }),
+    )
+    expect(readCachedModelsMeta()).toBeNull()
+  })
+
   it('没有缓存 / 缓存损坏 / 空目录都返回 null（退回「正在读取」而不是报错）', () => {
     expect(readCachedModelsMeta()).toBeNull()
 
-    localStorage.setItem('fashion-inspo:generate:models-meta', '{不是 json')
+    localStorage.setItem('fashion-inspo:generate:models-meta:v1', '{不是 json')
     expect(readCachedModelsMeta()).toBeNull()
 
-    localStorage.setItem('fashion-inspo:generate:models-meta', '[1,2]')
+    localStorage.setItem('fashion-inspo:generate:models-meta:v1', '[1,2]')
     expect(readCachedModelsMeta()).toBeNull()
 
     writeCachedModelsMeta({})

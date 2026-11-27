@@ -37,16 +37,25 @@ import {
 import { usePolling } from '@/composables/usePolling'
 
 /** 非终态集合：只有这些状态才需要继续轮询。 */
-const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting_vram'])
+type RunStatus = GenerationRun['status']
+const ACTIVE_STATUSES = new Set<RunStatus>(['queued', 'running', 'waiting_vram'])
+/** 生成历史每页条数（模块级：不必每次 useImageGen 都重建） */
+const HISTORY_PAGE_SIZE = 20
 
 /** 多姿态组的聚合状态（与后端列表口径一致：有在跑就显示在跑）。 */
-function _mergedStatus(runs: GenerationRun[]): string {
+function _mergedStatus(runs: GenerationRun[]): RunStatus {
   const statuses = runs.map((run) => run.status)
   for (const active of ['running', 'waiting_vram', 'queued']) {
     if (statuses.includes(active)) return active
   }
-  if (statuses.length && statuses.every((status) => status === 'failed')) return 'failed'
   if (statuses.length && statuses.every((status) => status === 'cancelled')) return 'cancelled'
+  if (statuses.length && statuses.every((status) => status === 'failed')) return 'failed'
+  if (
+    statuses.length &&
+    statuses.every((status) => status === 'failed' || status === 'cancelled')
+  ) {
+    return 'failed'
+  }
   return 'done'
 }
 
@@ -54,6 +63,11 @@ function _mergedStatus(runs: GenerationRun[]): string {
 function _newGroupId(): string {
   const uuid = globalThis.crypto?.randomUUID?.()
   if (uuid) return uuid.replace(/-/g, '').toLowerCase()
+  const bytes = new Uint8Array(16)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  }
   const fallback = `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`
   return fallback.padEnd(32, '0').slice(0, 32)
 }
@@ -67,7 +81,7 @@ function _newGroupId(): string {
  * 所以把**档位目录**（label / kind / uncensored / notice，来自后端 MODEL_SPECS，是静态目录）
  * 缓存下来：进页面先用它渲染档位，就绪状态仍等探测结果（`ready` 一律先按未就绪处理）。
  */
-const MODELS_META_CACHE_KEY = 'fashion-inspo:generate:models-meta'
+const MODELS_META_CACHE_KEY = 'fashion-inspo:generate:models-meta:v1'
 
 /** 读缓存的档位目录（无缓存/损坏返回 null） */
 export function readCachedModelsMeta(): GenerateStatus['models_meta'] | null {
@@ -76,7 +90,17 @@ export function readCachedModelsMeta(): GenerateStatus['models_meta'] | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-    return parsed as GenerateStatus['models_meta']
+    const entries = Object.values(parsed as Record<string, unknown>)
+    if (!entries.length) return null
+    // 形状校验：旧缓存/后端字段改名时宁可重探测，也不能把坏数据喂给档位 UI
+    const valid = entries.every(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        typeof (item as { label?: unknown }).label === 'string' &&
+        typeof (item as { kind?: unknown }).kind === 'string',
+    )
+    return valid ? (parsed as GenerateStatus['models_meta']) : null
   } catch {
     return null
   }
@@ -96,6 +120,7 @@ export function useImageGen() {
   const status = ref<GenerateStatus | null>(null)
   const statusLoading = ref(false)
   const submitting = ref(false)
+  const importing = ref(false)
   const runId = ref<number | null>(null)
   const detail = ref<GenerationRunDetail | null>(null)
   /** 多姿态提交：同一次提交的多个独立批次 id（按姿态提交顺序；空 = 单批次） */
@@ -104,10 +129,15 @@ export function useImageGen() {
   const groupDetails = ref<GenerationRunDetail[]>([])
   const lastSeed = ref<number | null>(null)
   const selected = ref<Set<string>>(new Set())
+  /** 详情请求序号：切换/重置后丢弃旧响应，避免旧批次覆盖新批次 */
+  let detailSeq = 0
+  let pollFailures = 0
 
   /** 清空当前批次。删除批次后必须调用：`run`/`candidates` 都是 `detail` 的 computed，
    * 不清就会让详情区停在一个已不存在的批次上，用户还能点「确认入库」「同参重跑」。 */
   function reset() {
+    detailSeq += 1
+    stopPoll()
     detail.value = null
     groupDetails.value = []
     groupRunIds.value = []
@@ -126,14 +156,13 @@ export function useImageGen() {
   const historyLoading = ref(false)
   const historyTotal = ref(0)
   const historyPage = ref(1)
-  /** 每页条数（历史区一屏约 10 行 + 分页，20 条足够且请求轻） */
-  const HISTORY_PAGE_SIZE = 20
   /** 筛选条件：档位 / 状态 / 只看已入库 / 关键字（后端执行，前端不二次过滤） */
   const historyFilters = ref<GenerationHistoryQuery>({})
   /** 近 30 天统计（历史区顶部数字卡；收起时不拉） */
   const historyStats = ref<GenerationRunStats | null>(null)
   /** 候选保留天数（后端给，前端算「图还剩 N 天」） */
   const historyKeepDays = ref(0)
+  let historySeq = 0
 
   const run = computed<GenerationRun | null>(() => {
     if (groupRunIds.value.length) {
@@ -142,7 +171,8 @@ export function useImageGen() {
       const last = runs[runs.length - 1]
       return {
         ...last,
-        // 合成一个「组批次」给现有组件用（进度/状态/文案），底层批次仍各自独立
+        // 合成一个「组批次」给现有组件用（进度/状态/文案），底层批次仍各自独立。
+        // 注意：id/seed 仍是最后一个姿态的，调用方不能拿合成 run 的 id 去 retry。
         status: _mergedStatus(runs),
         total: runs.reduce((sum, item) => sum + item.total, 0),
         done: runs.reduce((sum, item) => sum + item.done, 0),
@@ -187,7 +217,7 @@ export function useImageGen() {
     const result = taskInfo.value?.result
     return {
       stage: typeof result?.stage === 'string' ? result.stage : '',
-      waited: Number(result?.waited_seconds ?? 0),
+      waited: Number.isFinite(Number(result?.waited_seconds)) ? Number(result?.waited_seconds) : 0,
       vramFree: typeof result?.vram_free_gib === 'number' ? result.vram_free_gib : null,
     }
   })
@@ -196,7 +226,7 @@ export function useImageGen() {
   const stageText = computed(() => {
     const r = run.value
     if (!r) return ''
-    if (groupRunIds.value.length > 1) {
+    if (isGroup.value) {
       const runs = groupDetails.value.map((item) => item.run)
       if (!runs.length) return '正在读取多姿态结果…'
       const pending = runs.filter((item) => ACTIVE_STATUSES.has(item.status)).length
@@ -233,7 +263,33 @@ export function useImageGen() {
         ? []
         : [runId.value]
     if (!ids.length) return
-    const details = await Promise.all(ids.map((id) => fetchRun(id)))
+    const seq = ++detailSeq
+    // 已终态的批次不再变化：多姿态轮询时只重拉仍在活跃的批次，减少请求；
+    // 单批次没有缓存也照常拉。失败的批次保留上一次详情，不整体丢弃。
+    const previous = new Map(groupDetails.value.map((item) => [item.run.id, item]))
+    const results = await Promise.allSettled(
+      ids.map((id) => {
+        const cached = previous.get(id)
+        if (cached && !ACTIVE_STATUSES.has(cached.run.status)) return Promise.resolve(cached)
+        return fetchRun(id)
+      }),
+    )
+    if (seq !== detailSeq) return // 期间已切换/重置：旧响应不能复活旧批次
+    const details: GenerationRunDetail[] = []
+    for (let i = 0; i < ids.length; i += 1) {
+      const result = results[i]
+      if (result.status === 'fulfilled') {
+        details.push(result.value)
+        continue
+      }
+      const cached = previous.get(ids[i])
+      if (cached) {
+        details.push(cached)
+        continue
+      }
+      // 首次拉取就失败：本轮跳过，轮询会继续重试
+    }
+    if (!details.length) return
     groupDetails.value = details
     detail.value = details[details.length - 1] ?? null
   }
@@ -245,9 +301,16 @@ export function useImageGen() {
       if (groupRunIds.value.length === 0 && runId.value === null) return
       try {
         await refreshCurrentDetails()
+        pollFailures = 0
         if (!active.value) stopPoll()
       } catch {
-        stopPoll()
+        // 网络抖动不应永久停止：连续 5 次才停并提示一次
+        pollFailures += 1
+        if (pollFailures >= 5) {
+          stopPoll()
+          pollFailures = 0
+          Message.error('获取生成状态多次失败，已停止轮询，请稍后刷新')
+        }
       }
     },
   })
@@ -271,14 +334,15 @@ export function useImageGen() {
    * （候选区一次显示多个姿态的结果）；底层每批仍独立排队/执行/计费。
    * 失败项列在提示里，用户可单独重试；已成功的不会重复提交。
    */
-  async function submitBatch(
-    payloads: CreateRunPayload[],
-  ): Promise<{ succeeded: number; failed: number }> {
+  async function submitBatch(payloads: CreateRunPayload[]): Promise<{
+    succeeded: number
+    failed: number
+    failures: Array<{ index: number; payload: CreateRunPayload; error: string }>
+  }> {
+    if (submitting.value) return { succeeded: 0, failed: 0, failures: [] }
     submitting.value = true
-    selected.value = new Set()
-    clearGroup()
     const succeeded: Array<{ run_id: number; seed: number | null }> = []
-    const failures: string[] = []
+    const failures: Array<{ index: number; payload: CreateRunPayload; error: string }> = []
     // 同一次「多姿态提交」的批次共用一个 group_id：历史列表与候选区据此合并展示
     const groupId = payloads.length > 1 ? _newGroupId() : null
     const groupedPayloads = payloads.map((payload) =>
@@ -288,43 +352,60 @@ export function useImageGen() {
       for (let i = 0; i < groupedPayloads.length; i += 2) {
         const chunk = groupedPayloads.slice(i, i + 2)
         const results = await Promise.allSettled(chunk.map((payload) => createRun(payload)))
-        results.forEach((result) => {
+        results.forEach((result, j) => {
           if (result.status === 'fulfilled') succeeded.push(result.value)
-          else failures.push(getApiErrorMessage(result.reason, '提交失败'))
+          else {
+            failures.push({
+              index: i + j,
+              payload: chunk[j],
+              error: getApiErrorMessage(result.reason, '提交失败'),
+            })
+          }
         })
       }
       if (succeeded.length > 0) {
-        groupRunIds.value = succeeded.map((item) => item.run_id)
-        runId.value = succeeded[succeeded.length - 1].run_id
+        // 创建成功后再清旧选择/旧分组：失败时保留用户现场
+        selected.value = new Set()
+        clearGroup()
+        if (succeeded.length > 1) {
+          groupRunIds.value = succeeded.map((item) => item.run_id)
+          runId.value = succeeded[succeeded.length - 1].run_id
+        } else {
+          // 单批（含只成功 1 个姿态）走普通单批路径，避免「1 个批次的组」口径分叉
+          runId.value = succeeded[0].run_id
+        }
         lastSeed.value = null
-        await refreshCurrentDetails()
+        await refreshCurrentDetails().catch(() => {})
         startPoll()
         Message.success(`已提交 ${succeeded.length} 个云端批次，正在逐个生成`)
       }
       if (failures.length > 0) {
         Message.error(
-          `${failures.length} 个批次提交失败：${failures[0]}${failures.length > 1 ? '（等）' : ''}`,
+          `${failures.length} 个批次提交失败：${failures[0].error}${failures.length > 1 ? '（等）' : ''}`,
         )
       }
-      return { succeeded: succeeded.length, failed: failures.length }
+      return { succeeded: succeeded.length, failed: failures.length, failures }
     } finally {
       submitting.value = false
     }
   }
 
   async function submit(payload: CreateRunPayload): Promise<number | null> {
+    if (submitting.value) return null
     submitting.value = true
-    selected.value = new Set()
-    clearGroup()
     try {
       const out = await createRun(payload)
+      // 创建成功后才清现场：参数校验/网络失败时保留用户勾选与姿态分组
+      selected.value = new Set()
+      clearGroup()
       runId.value = out.run_id
       lastSeed.value = out.seed
       // 云端档位无 seed（每次随机），不要把 null 打印成「seed null」
       const seedSuffix = out.seed === null ? '（云端每次随机）' : `（seed ${out.seed}）`
       Message.success(`已提交：正在生成 ${out.total} 张${seedSuffix}`)
-      await refreshCurrentDetails()
       startPoll()
+      // 收尾刷新失败不能报成「提交失败」（任务已在跑，误报会诱导重复计费）
+      await refreshCurrentDetails().catch(() => {})
       return out.run_id
     } catch (e) {
       Message.error(getApiErrorMessage(e, '提交出图任务失败'))
@@ -357,7 +438,8 @@ export function useImageGen() {
   }
 
   async function confirm(): Promise<number> {
-    if (selected.value.size === 0) return 0
+    if (selected.value.size === 0 || importing.value) return 0
+    importing.value = true
     // 选中的可能来自多个独立批次（多姿态合并）：按 run_id 分组逐批调用确认入库接口
     const byRun = new Map<number, string[]>()
     for (const candidate of candidates.value) {
@@ -368,26 +450,60 @@ export function useImageGen() {
       filenames.push(candidate.filename)
       byRun.set(batchRunId, filenames)
     }
-    if (!byRun.size) return 0
+    if (!byRun.size) {
+      importing.value = false
+      return 0
+    }
+    let imported = 0
+    let skipped = 0
+    const failedBatches: Array<{ runId: number; error: string }> = []
+    const succeededRunIds = new Set<number>()
     try {
-      let imported = 0
-      let skipped = 0
+      // 逐批 try：第 2 批失败不能抹掉第 1 批已入库的事实
       for (const [batchRunId, filenames] of byRun) {
-        const out = await confirmImport(batchRunId, filenames)
-        imported += out.imported ?? 0
-        skipped += out.skipped ?? 0
+        try {
+          const out = await confirmImport(batchRunId, filenames)
+          imported += out.imported ?? 0
+          skipped += out.skipped ?? 0
+          succeededRunIds.add(batchRunId)
+        } catch (e) {
+          failedBatches.push({
+            runId: batchRunId,
+            error: getApiErrorMessage(e, '确认入库失败'),
+          })
+        }
       }
       if (imported > 0) {
         Message.success(`已入库 ${imported} 张${skipped ? `（跳过 ${skipped} 张已存在）` : ''}`)
+      } else if (skipped > 0) {
+        Message.info(`选中的 ${skipped} 张都已在库中`)
       } else {
-        Message.info('选中的图都已在库中')
+        Message.info('没有可入库的图（可能候选文件已失效）')
       }
-      await refreshCurrentDetails()
-      selected.value = new Set()
+      if (failedBatches.length > 0) {
+        Message.error(
+          `${failedBatches.length} 个批次入库失败：${failedBatches[0].error}${
+            failedBatches.length > 1 ? '（等）' : ''
+          }`,
+        )
+      }
+      // 刷新失败只影响界面同步，不能把已成功的入库报成失败
+      await refreshCurrentDetails().catch(() => {})
+      // 只清成功批次的勾选，失败批次保留供用户重试
+      if (failedBatches.length === 0) {
+        selected.value = new Set()
+      } else {
+        selected.value = new Set(
+          [...selected.value].filter((key) => {
+            const candidate = candidates.value.find((c) => _candidateKey(c) === key)
+            const batchId = candidate?.run_id ?? runId.value
+            return batchId !== null && !succeededRunIds.has(batchId)
+          }),
+        )
+      }
       return imported
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '确认入库失败'))
-      return 0
+    } finally {
+      importing.value = false
     }
   }
 
@@ -401,25 +517,22 @@ export function useImageGen() {
     try {
       for (const id of ids) await cancelRun(id)
       Message.info('已请求取消（已生成的图会保留在候选区）')
-      await refreshCurrentDetails()
-      stopPoll()
+      await refreshCurrentDetails().catch(() => {})
+      // 取消是异步收尾：仍在跑就继续轮询，由轮询在终态时自己停
+      if (active.value) startPoll()
+      else stopPoll()
     } catch (e) {
       Message.error(getApiErrorMessage(e, '取消失败'))
     }
   }
 
   /**
-   * 从素材反推 prompt（读标签/正文/主色），返回拼好的描述串。
-   *
-   * 放在 composable 里而不是 view 里：视图只做编排，且 ts-prune 看不到 .vue 引用，
-   * 直接在视图里调 api 会被误判成死代码（项目死代码门禁对 .vue 是盲的）。
-   */
-  /**
    * 拉当前页历史。筛选与分页都由后端执行（`total` 与 `items` 同口径，否则分页会飘）。
    *
    * 注意：调用方（视图）在历史区收起时不调它——收起时连请求都不该发。
    */
   async function loadHistory(): Promise<void> {
+    const seq = ++historySeq
     historyLoading.value = true
     try {
       const out = await listRuns({
@@ -427,13 +540,15 @@ export function useImageGen() {
         size: HISTORY_PAGE_SIZE,
         ...historyFilters.value,
       })
+      if (seq !== historySeq) return
       history.value = out.items ?? []
       historyTotal.value = out.total ?? 0
       historyKeepDays.value = out.keep_days ?? 0
     } catch (e) {
+      if (seq !== historySeq) return
       Message.error(getApiErrorMessage(e, '读取生成历史失败'))
     } finally {
-      historyLoading.value = false
+      if (seq === historySeq) historyLoading.value = false
     }
   }
 
@@ -443,7 +558,6 @@ export function useImageGen() {
     await loadHistory()
   }
 
-  /** 改筛选条件：一律回到第 1 页（否则停在旧页会看到空列表） */
   /** 拉统计卡（与列表分开：统计不随筛选变化，只跟时间窗口走） */
   async function loadHistoryStats(days = 30): Promise<void> {
     try {
@@ -458,10 +572,13 @@ export function useImageGen() {
    *
    * 成功后**原地替换**列表里那一行，避免整页刷新导致分页位置与展开状态丢失。
    */
-  async function updateRunMeta(runId: number, patch: GenerationRunMetaPatch): Promise<boolean> {
+  async function updateRunMeta(
+    targetRunId: number,
+    patch: GenerationRunMetaPatch,
+  ): Promise<boolean> {
     try {
-      const updated = await updateRunMetaApi(runId, patch)
-      const idx = history.value.findIndex((item) => item.id === runId)
+      const updated = await updateRunMetaApi(targetRunId, patch)
+      const idx = history.value.findIndex((item) => item.id === targetRunId)
       if (idx >= 0) {
         // 多姿态合并行的标注落在代表批次上：接口返回的是单批次摘要，必须保留
         // run_ids/candidates 等合并字段，否则列表会把整组「打散成一张图」。
@@ -491,8 +608,10 @@ export function useImageGen() {
     }
   }
 
+  /** 改筛选条件：一律回到第 1 页（否则停在旧页会看到空列表） */
   async function setHistoryFilters(next: GenerationHistoryQuery): Promise<void> {
-    historyFilters.value = next
+    // 存副本：调用方之后再改对象不能悄悄改变筛选
+    historyFilters.value = { ...next }
     historyPage.value = 1
     await loadHistory()
   }
@@ -504,10 +623,12 @@ export function useImageGen() {
    * 「这批参数产出了哪张图」就查不清了。
    */
   async function retry(sourceRunId: number, seed = 0): Promise<number | null> {
+    if (submitting.value) return null
     submitting.value = true
-    clearGroup()
     try {
       const out = await retryRun(sourceRunId, seed)
+      selected.value = new Set()
+      clearGroup()
       runId.value = out.run_id
       lastSeed.value = out.seed
       Message.success(
@@ -515,9 +636,9 @@ export function useImageGen() {
           ? '已按原参数重新生成（云端每次随机）'
           : `已按原参数重跑（seed ${out.seed}）`,
       )
-      await refreshCurrentDetails()
       startPoll()
-      await loadHistory()
+      await refreshCurrentDetails().catch(() => {})
+      await loadHistory().catch(() => {})
       return out.run_id
     } catch (e) {
       Message.error(getApiErrorMessage(e, '重跑失败'))
@@ -537,22 +658,25 @@ export function useImageGen() {
   async function regenerate(item: GenerationCandidate): Promise<number | null> {
     const sourceRunId = item.run_id ?? runId.value
     if (sourceRunId === null) return null
+    if (submitting.value) return null
     submitting.value = true
-    clearGroup()
     try {
       const out = await regenerateCandidate(sourceRunId, item.filename)
+      // 创建成功后再清旧选择/旧分组
+      selected.value = new Set()
+      clearGroup()
       // 云端无 seed：文案改「重新生成」，不要打印 new/original seed
       Message.success(
         out.seed === null
           ? '已按同一素材/姿势重新生成一张（云端每次随机）'
-          : `已用新 seed ${out['seed']} 重出（原 seed ${out['original_seed']}）`,
+          : `已用新 seed ${out.seed} 重出（原 seed ${out.original_seed}）`,
       )
       // 切到新批次（只含 1 张），原批次仍留在历史里
       runId.value = out.run_id
       lastSeed.value = out.seed
-      await refreshCurrentDetails()
       startPoll()
-      await loadHistory()
+      await refreshCurrentDetails().catch(() => {})
+      await loadHistory().catch(() => {})
       return out.run_id
     } catch (e) {
       Message.error(getApiErrorMessage(e, '重出失败'))
@@ -562,6 +686,12 @@ export function useImageGen() {
     }
   }
 
+  /**
+   * 从素材反推 prompt（读标签/正文/主色），返回拼好的描述串。
+   *
+   * 放在 composable 里而不是 view 里：视图只做编排，且 ts-prune 看不到 .vue 引用，
+   * 直接在视图里调 api 会被误判成死代码（项目死代码门禁对 .vue 是盲的）。
+   */
   async function promptFrom(ids: string[]): Promise<string | null> {
     if (!ids.length) return null
     try {

@@ -33,6 +33,18 @@ export function usePolling(options: UsePollingOptions) {
 
   const running = ref(false)
   let timer: ReturnType<typeof setInterval> | null = null
+  /** 上一次 tick 还没结束时跳过本次：避免慢请求叠加成并发风暴 */
+  let inFlight = false
+
+  async function tick(): Promise<void> {
+    if (inFlight) return
+    inFlight = true
+    try {
+      await callback()
+    } finally {
+      inFlight = false
+    }
+  }
 
   function resolveInterval(): number {
     return typeof intervalMs === 'function' ? intervalMs() : intervalMs
@@ -52,9 +64,9 @@ export function usePolling(options: UsePollingOptions) {
     running.value = true
     if (immediate) {
       // 不 await：与既有实现一致，轮询回调失败由调用方自行处理
-      void callback()
+      void tick()
     }
-    timer = setInterval(() => void callback(), resolveInterval())
+    timer = setInterval(() => void tick(), resolveInterval())
   }
 
   // 仅在组件 setup 内注册卸载清理；在组件外（如单元测试直接调用）无实例可挂，

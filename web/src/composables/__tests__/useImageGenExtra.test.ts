@@ -238,7 +238,7 @@ describe('useImageGen（历史区与周边动作）', () => {
   })
 
   describe('取消', () => {
-    it('单批次：请求取消、刷新详情并停止轮询', async () => {
+    it('单批次：请求取消、刷新详情；仍在跑就继续轮询，由终态回调停', async () => {
       const gen = useImageGen()
       gen.runId.value = 5
 
@@ -247,7 +247,7 @@ describe('useImageGen（历史区与周边动作）', () => {
       expect(mocks.cancelRun).toHaveBeenCalledWith(5)
       expect(mocks.message.info).toHaveBeenCalledWith('已请求取消（已生成的图会保留在候选区）')
       expect(mocks.fetchRun).toHaveBeenCalledWith(5) // 刷新当前详情
-      expect(mocks.polling.stop).toHaveBeenCalled()
+      expect(mocks.polling.start).toHaveBeenCalled()
     })
 
     it('多姿态组：逐个批次取消', async () => {
