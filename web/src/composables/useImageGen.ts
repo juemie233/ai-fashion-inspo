@@ -42,6 +42,22 @@ const ACTIVE_STATUSES = new Set<RunStatus>(['queued', 'running', 'waiting_vram']
 /** 生成历史每页条数（模块级：不必每次 useImageGen 都重建） */
 const HISTORY_PAGE_SIZE = 20
 
+/** submitBatch 的单个失败批次（保留原始 payload，供用户手动重试） */
+interface ImageGenBatchFailure {
+  /** 在本次提交 payloads 里的下标 */
+  index: number
+  /** 原样保留的提交参数（重试只重发它） */
+  payload: CreateRunPayload
+  error: string
+}
+
+/** submitBatch 结果 */
+interface ImageGenBatchSubmitResult {
+  succeeded: number
+  failed: number
+  failures: ImageGenBatchFailure[]
+}
+
 /** 多姿态组的聚合状态（与后端列表口径一致：有在跑就显示在跑）。 */
 function _mergedStatus(runs: GenerationRun[]): RunStatus {
   const statuses = runs.map((run) => run.status)
@@ -129,6 +145,8 @@ export function useImageGen() {
   const groupDetails = ref<GenerationRunDetail[]>([])
   const lastSeed = ref<number | null>(null)
   const selected = ref<Set<string>>(new Set())
+  /** 最近一次 submitBatch 的失败批次（只用于用户手动「重试失败批次」，绝不自动重发） */
+  const lastBatchFailures = ref<ImageGenBatchFailure[]>([])
   /** 详情请求序号：切换/重置后丢弃旧响应，避免旧批次覆盖新批次 */
   let detailSeq = 0
   let pollFailures = 0
@@ -334,15 +352,11 @@ export function useImageGen() {
    * （候选区一次显示多个姿态的结果）；底层每批仍独立排队/执行/计费。
    * 失败项列在提示里，用户可单独重试；已成功的不会重复提交。
    */
-  async function submitBatch(payloads: CreateRunPayload[]): Promise<{
-    succeeded: number
-    failed: number
-    failures: Array<{ index: number; payload: CreateRunPayload; error: string }>
-  }> {
+  async function submitBatch(payloads: CreateRunPayload[]): Promise<ImageGenBatchSubmitResult> {
     if (submitting.value) return { succeeded: 0, failed: 0, failures: [] }
     submitting.value = true
     const succeeded: Array<{ run_id: number; seed: number | null }> = []
-    const failures: Array<{ index: number; payload: CreateRunPayload; error: string }> = []
+    const failures: ImageGenBatchFailure[] = []
     // 同一次「多姿态提交」的批次共用一个 group_id：历史列表与候选区据此合并展示
     const groupId = payloads.length > 1 ? _newGroupId() : null
     const groupedPayloads = payloads.map((payload) =>
@@ -363,6 +377,9 @@ export function useImageGen() {
           }
         })
       }
+      // 记录本次失败批次，供 UI 展示「重试失败批次」；无论成功多少都覆盖旧列表，
+      // 避免重试成功后还提示上一轮的历史失败。这里只记录，不自动调用重试。
+      lastBatchFailures.value = failures
       if (succeeded.length > 0) {
         // 创建成功后再清旧选择/旧分组：失败时保留用户现场
         selected.value = new Set()
@@ -388,6 +405,20 @@ export function useImageGen() {
     } finally {
       submitting.value = false
     }
+  }
+
+  /**
+   * 重试上次提交失败的批次：只重发 failures 里的原始 payload。
+   *
+   * 必须由用户显式触发（UI 按钮），不在任何失败回调里自动调用——云端批次会计费，
+   * 自动重试可能连续扣费且掩盖真实错误。重试结果会再次写入 `lastBatchFailures`：
+   * 成功的部分从失败列表移除，仍失败的继续保留供下次重试。
+   */
+  async function retryFailedBatches(): Promise<ImageGenBatchSubmitResult> {
+    if (submitting.value) return { succeeded: 0, failed: 0, failures: [] }
+    const payloads = lastBatchFailures.value.map((item) => item.payload)
+    if (!payloads.length) return { succeeded: 0, failed: 0, failures: [] }
+    return submitBatch(payloads)
   }
 
   async function submit(payload: CreateRunPayload): Promise<number | null> {
@@ -662,16 +693,25 @@ export function useImageGen() {
     submitting.value = true
     try {
       const out = await regenerateCandidate(sourceRunId, item.filename)
-      // 创建成功后再清旧选择/旧分组
+      // 多姿态合并视图：regenerate 只是给组里补一张新批次，不能把用户切到「只含 1 张」
+      // 的新批次（否则刚对比的整组消失）。单批次场景仍是原来的「替换为新批次」。
+      const appendToGroup = groupRunIds.value.length > 1
       selected.value = new Set()
-      clearGroup()
+      if (appendToGroup) {
+        if (!groupRunIds.value.includes(out.run_id)) {
+          groupRunIds.value = [...groupRunIds.value, out.run_id]
+        }
+      } else {
+        clearGroup()
+      }
       // 云端无 seed：文案改「重新生成」，不要打印 new/original seed
       Message.success(
         out.seed === null
           ? '已按同一素材/姿势重新生成一张（云端每次随机）'
           : `已用新 seed ${out.seed} 重出（原 seed ${out.original_seed}）`,
       )
-      // 切到新批次（只含 1 张），原批次仍留在历史里
+      // 单批次：切到新批次（只含 1 张），原批次仍留在历史里；
+      // 多姿态：新批次已追加进 groupRunIds，runId 记录最后一批供单批兜底逻辑使用。
       runId.value = out.run_id
       lastSeed.value = out.seed
       startPoll()
@@ -753,6 +793,8 @@ export function useImageGen() {
     loadStatus,
     submit,
     submitBatch,
+    retryFailedBatches,
+    lastBatchFailures,
     toggle,
     selectAll,
     clearSelection,

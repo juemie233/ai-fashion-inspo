@@ -806,3 +806,170 @@ def test_f2_import_profiles_not_blocked_by_f2_user_library(
     assert created["task_id"] is not None, created
     assert created["message"].startswith("已提交")
 
+
+
+# ── JSON body 支持（2026-11-27）：body 优先、query 兼容 ──
+
+
+def _task_result(client, task_id: int) -> dict:
+    """取任务 result（执行参数快照）。"""
+    return client.get(f"/api/tasks/{task_id}").json()["result"]
+
+
+def test_f2_import_accepts_json_body_all_params(client):
+    """body-only：全部参数用 JSON 原生类型传入（数组不拆逗号），落进任务参数。"""
+    resp = client.post(
+        "/api/scraper/f2-import",
+        json={
+            "fetch": False,
+            "authors": "里香,娜娜瑜",
+            "limit": 30,
+            "skip_live": True,
+            "fetch_limit": 2,
+            "make_thumbnails": False,
+            "prune_downloads": True,
+            "since_days": 7,
+            "include_unknown_authors": True,
+            "mode": "like",
+            "like_user": "https://www.douyin.com/user/self",
+            "register_bloggers": False,
+            "like_max_counts": 66,
+            "profiles": [
+                "https://www.douyin.com/user/sec1",
+                "MS4wLjABAAAAother",
+            ],
+            "collect_ids": ["111", "222"],
+            "allow_all_collect": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["task_id"], body
+    opts = _task_result(client, body["task_id"])
+    assert opts["authors"] == ["里香", "娜娜瑜"]
+    assert opts["limit"] == 30
+    assert opts["skip_live"] is True
+    assert opts["fetch"] is False
+    assert opts["fetch_limit"] == 2
+    assert opts["make_thumbnails"] is False
+    assert opts["prune_downloads"] is True
+    assert opts["since_days"] == 7
+    assert opts["include_unknown_authors"] is True
+    assert opts["fetch_mode"] == "like"
+    assert opts["like_user"] == "https://www.douyin.com/user/self"
+    assert opts["register_bloggers"] is False
+    assert opts["like_max_counts"] == 66
+    assert opts["profiles"] == [
+        "https://www.douyin.com/user/sec1",
+        "MS4wLjABAAAAother",
+    ]
+    assert opts["collect_ids"] == ["111", "222"]
+    assert opts["allow_all_collect"] is True
+
+
+def test_f2_import_json_body_overrides_query(client):
+    """body 与 query 同时出现时以 body 为准（含布尔 false 覆盖 query true）。"""
+    resp = client.post(
+        "/api/scraper/f2-import"
+        "?fetch=true&authors=旧作者&limit=10&skip_live=true&mode=post"
+        "&profiles=old-profile&collect_ids=999",
+        json={
+            # fetch: query=true（会触发可用性预检）→ body=false 覆盖后跳过预检
+            "fetch": False,
+            "authors": "新作者",
+            "limit": 20,
+            "skip_live": False,
+            "mode": "like",
+            "profiles": ["new-profile"],
+            "collect_ids": ["111"],
+            "allow_all_collect": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["task_id"], body
+    opts = _task_result(client, body["task_id"])
+    assert opts["fetch"] is False
+    assert opts["authors"] == ["新作者"]
+    assert opts["limit"] == 20
+    assert opts["skip_live"] is False
+    assert opts["fetch_mode"] == "like"
+    assert opts["profiles"] == ["new-profile"]
+    assert opts["collect_ids"] == ["111"]
+    assert "old-profile" not in opts["profiles"]
+    assert "999" not in opts["collect_ids"]
+    assert opts["allow_all_collect"] is True
+
+
+def test_f2_import_query_only_still_compatible(client):
+    """无 body 时旧 query 行为完全不变（逗号数组、布尔、分页参数）。"""
+    resp = client.post(
+        "/api/scraper/f2-import"
+        "?fetch=false&authors=甲,乙&limit=5&skip_live=true&collect_ids=111,222"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["task_id"], body
+    opts = _task_result(client, body["task_id"])
+    assert opts["fetch"] is False
+    assert opts["authors"] == ["甲", "乙"]
+    assert opts["limit"] == 5
+    assert opts["skip_live"] is True
+    assert opts["collect_ids"] == ["111", "222"]
+
+
+def test_f2_import_body_profiles_comma_rejected(client):
+    """profiles 元素含逗号 → 422 中文提示（body 数组不拆逗号，避免静默误用）。"""
+    resp = client.post(
+        "/api/scraper/f2-import",
+        json={"fetch": False, "profiles": ["a,b"]},
+    )
+    assert resp.status_code == 422
+    assert "逗号" in resp.text
+
+
+def test_f2_import_body_collect_ids_must_be_numeric(client):
+    """collect_ids 元素必须是纯数字字符串 → 非数字 422 中文提示。"""
+    resp = client.post(
+        "/api/scraper/f2-import",
+        json={"fetch": False, "collect_ids": ["111", "abc"]},
+    )
+    assert resp.status_code == 422
+    assert "纯数字" in resp.text
+
+
+def test_f2_import_body_validation_ranges_and_mode(client):
+    """body 的 mode/分页范围沿用 query 的校验口径（422）。"""
+    assert (
+        client.post(
+            "/api/scraper/f2-import",
+            json={"fetch": False, "mode": "bogus"},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/scraper/f2-import",
+            json={"fetch": False, "limit": 0},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/scraper/f2-import",
+            json={"fetch": False, "like_max_counts": -1},
+        ).status_code
+        == 422
+    )
+
+
+def test_f2_import_body_reuses_running_task(client):
+    """并发保护/reused 语义在 body 路径同样生效。"""
+    first = client.post(
+        "/api/scraper/f2-import", json={"fetch": False, "limit": 3}
+    ).json()
+    second = client.post(
+        "/api/scraper/f2-import", json={"fetch": False, "authors": "另一位"}
+    ).json()
+    assert first["task_id"] and second["task_id"] == first["task_id"]
+    assert second.get("reused") is True

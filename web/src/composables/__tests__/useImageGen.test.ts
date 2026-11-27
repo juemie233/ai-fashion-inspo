@@ -322,9 +322,121 @@ describe('useImageGen', () => {
     expect(newId).toBe(9)
     expect(mocks.regenerateCandidate).toHaveBeenCalledWith(7, '01_seed-11.png')
     expect(gen.runId.value).toBe(9)
+    // 单批次场景保持替换：不残留多姿态分组
+    expect(gen.groupRunIds.value).toEqual([])
+    expect(gen.isGroup.value).toBe(false)
     expect(gen.lastSeed.value).toBe(88888)
     expect(success).toHaveBeenCalledWith(expect.stringContaining('88888'))
     success.mockRestore()
+  })
+
+  it('多姿态合并视图下 regenerate 并入当前分组，不切走整组', async () => {
+    let seq = 0
+    mocks.createRun.mockImplementation(async () => {
+      seq += 1
+      return { run_id: 100 + seq, task_id: 200 + seq, seed: null, batch_dir: 'x', total: 1 }
+    })
+    mocks.fetchRun.mockImplementation(async (id: number) => ({
+      run: {
+        ...RUN_DETAIL.run,
+        id,
+        status: 'done',
+        total: 1,
+        done: 1,
+        model_key: 'seedream_5_0_flash',
+        group_id: 'group',
+      },
+      items: [
+        {
+          filename: '01_seed-0.png',
+          index: 1,
+          seed: 0,
+          size_bytes: 1,
+          imported: false,
+          url: `/u/${id}`,
+        },
+      ],
+      task: null,
+    }))
+    mocks.regenerateCandidate.mockResolvedValue({
+      run_id: 9,
+      task_id: 99,
+      seed: null,
+      original_seed: 0,
+    })
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+
+    const gen = useImageGen()
+    await gen.submitBatch([
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p1' },
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p2' },
+    ])
+    expect(gen.groupRunIds.value).toEqual([101, 102])
+
+    const target = gen.candidates.value[0]
+    const newId = await gen.regenerate(target)
+
+    expect(mocks.regenerateCandidate).toHaveBeenCalledWith(101, '01_seed-0.png')
+    expect(newId).toBe(9)
+    // 新批次追加进当前组，候选区 3 张仍合并展示（而不是只剩新批次 1 张）
+    expect(gen.groupRunIds.value).toEqual([101, 102, 9])
+    expect(gen.isGroup.value).toBe(true)
+    expect(gen.candidates.value).toHaveLength(3)
+    expect(gen.candidates.value.map((item) => item.run_id)).toEqual([101, 102, 9])
+    expect(gen.runId.value).toBe(9)
+    success.mockRestore()
+  })
+
+  it('submitBatch 失败仅记录不自动重试；retryFailedBatches 只重发失败 payload', async () => {
+    let seq = 0
+    mocks.createRun.mockImplementation(async () => {
+      seq += 1
+      if (seq === 2) throw new Error('方舟限流')
+      return { run_id: 100 + seq, task_id: 200 + seq, seed: null, batch_dir: 'x', total: 1 }
+    })
+    mocks.fetchRun.mockResolvedValue(RUN_DETAIL)
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
+
+    const gen = useImageGen()
+    const out = await gen.submitBatch([
+      { prompt: 'x', pose_id: 'p1' },
+      { prompt: 'x', pose_id: 'p2' },
+      { prompt: 'x', pose_id: 'p3' },
+    ])
+    expect(out.failures).toHaveLength(1)
+    expect(gen.lastBatchFailures.value).toHaveLength(1)
+    expect(gen.lastBatchFailures.value[0].payload.pose_id).toBe('p2')
+
+    // 用户没点重试前不会自动补发：仍是原来 3 次提交
+    await Promise.resolve()
+    expect(mocks.createRun).toHaveBeenCalledTimes(3)
+
+    // 手动重试：只有失败 payload（p2）被重发一次
+    mocks.createRun.mockClear()
+    mocks.createRun.mockResolvedValue({
+      run_id: 201,
+      task_id: 301,
+      seed: null,
+      batch_dir: 'x',
+      total: 1,
+    })
+    const retry = await gen.retryFailedBatches()
+
+    expect(mocks.createRun).toHaveBeenCalledTimes(1)
+    expect(mocks.createRun.mock.calls[0][0]).toMatchObject({ pose_id: 'p2', prompt: 'x' })
+    expect(retry.succeeded).toBe(1)
+    // 重试成功后失败列表清空，不再展示旧失败
+    expect(gen.lastBatchFailures.value).toEqual([])
+    success.mockRestore()
+    error.mockRestore()
+  })
+
+  it('没有失败批次时 retryFailedBatches 不请求后端', async () => {
+    const gen = useImageGen()
+    const out = await gen.retryFailedBatches()
+    expect(out).toEqual({ succeeded: 0, failed: 0, failures: [] })
+    expect(mocks.createRun).not.toHaveBeenCalled()
   })
 
   it('discard 清空当前批次状态', async () => {

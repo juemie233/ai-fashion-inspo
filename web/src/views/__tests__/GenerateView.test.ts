@@ -13,8 +13,11 @@ import GenerateView from '../GenerateView.vue'
 
 const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
+  retryFailedBatches: vi.fn(),
   loadStatus: vi.fn(),
   loadHistory: vi.fn(),
+  /** 失败批次（ref）：测试里可整体替换，验证「有失败才显示重试入口」 */
+  lastBatchFailuresRef: { value: [] as unknown[] },
   /** 出图页读到的就绪状态（ref）：测试可整体替换，用来模拟「多档位 / 未审查档位」 */
   statusRef: { value: {} as Record<string, unknown> | null },
   /** 初始状态快照：每个用例开始前还原，避免用例之间互相污染 */
@@ -43,6 +46,8 @@ vi.mock('@/composables/useImageGen', async () => {
   // 含 null：用例里要模拟「探测还没返回」（statusRef.value = null）
   mocks.statusRef = status as unknown as { value: Record<string, unknown> | null }
   mocks.defaultStatus = JSON.parse(JSON.stringify(status.value))
+  const lastBatchFailures = ref([] as unknown[])
+  mocks.lastBatchFailuresRef = lastBatchFailures as unknown as { value: unknown[] }
   return {
     // 档位目录缓存：让测试能模拟「上次探测过 → 进页面就有目录」
     readCachedModelsMeta: () => mocks.cachedModelsMeta,
@@ -73,6 +78,10 @@ vi.mock('@/composables/useImageGen', async () => {
       setHistoryFilters: vi.fn(),
       loadStatus: mocks.loadStatus,
       submit: mocks.submit,
+      submitBatch: vi.fn(),
+      regenerate: vi.fn(),
+      retryFailedBatches: mocks.retryFailedBatches,
+      lastBatchFailures,
       toggle: vi.fn(),
       selectAll: vi.fn(),
       clearSelection: vi.fn(),
@@ -96,6 +105,9 @@ describe('GenerateView 参数透传', () => {
     mocks.submit.mockReset()
     mocks.submit.mockResolvedValue(1)
     mocks.loadHistory.mockReset()
+    mocks.retryFailedBatches.mockReset()
+    mocks.retryFailedBatches.mockResolvedValue({ succeeded: 1, failed: 0, failures: [] })
+    mocks.lastBatchFailuresRef.value = []
     mocks.cachedModelsMeta = null
     mocks.statusRef.value = JSON.parse(JSON.stringify(mocks.defaultStatus))
     mocks.routeQuery = {}
@@ -342,6 +354,30 @@ describe('GenerateView 参数透传', () => {
 
     expect(wrapper.text()).toContain('云端 Seedream 就绪')
     expect(wrapper.text()).not.toContain('undefined')
+    wrapper.unmount()
+  })
+
+  it('失败批次：只有用户点「重试失败批次」才重发，不自动重试', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    // 没有失败时不给入口
+    expect(wrapper.text()).not.toContain('重试失败批次')
+    expect(mocks.retryFailedBatches).not.toHaveBeenCalled()
+
+    // 模拟上一轮 submitBatch 留下 1 个失败批次
+    mocks.lastBatchFailuresRef.value = [
+      { index: 1, payload: { prompt: 'x', pose_id: 'p2' }, error: '方舟限流' },
+    ]
+    await flushPromises()
+    expect(wrapper.text()).toContain('有 1 个批次提交失败')
+    expect(wrapper.text()).toContain('方舟限流')
+
+    const retryBtn = wrapper.findAll('button').find((b) => b.text().includes('重试失败批次'))
+    expect(retryBtn).toBeTruthy()
+    await retryBtn!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.retryFailedBatches).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

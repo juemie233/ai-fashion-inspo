@@ -2,12 +2,13 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.scraper import ScraperSchedule
 from app.schemas.scraper import (
+    F2ImportRequest,
     ScraperScheduleCreate,
     ScraperScheduleOut,
     ScraperScheduleUpdate,
@@ -140,9 +141,21 @@ async def create_f2_import(
             "只有前端在确认弹窗后才置 true"
         ),
     ),
+    body: F2ImportRequest | None = Body(
+        None,
+        description=(
+            "可选 JSON 请求体（新前端）：字段与 query 同名，非 null 时覆盖 query；"
+            "profiles/collect_ids 用原生数组（不拆逗号）。不传 body 时行为与旧版完全一致"
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
+
+    请求体（可选，2026-11-27）：可传与 query 同名的 JSON body
+    （``F2ImportRequest``），字段非 null 时**覆盖同名 query**；``profiles`` /
+    ``collect_ids`` 用原生数组、不拆逗号。不传 body 时完全沿用旧 query 行为
+    （旧前端无需改动）；body 与 query 同时出现时以 body 为准。
 
     与 CLI（``python -m scripts.import_f2_downloads --fetch --apply``）同一条链路，
     区别是走任务队列：创建任务后立即返回 task_id，由独立 worker 异步执行，
@@ -191,9 +204,52 @@ async def create_f2_import(
     """
     from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
+    # ── JSON body 优先、query 兜底（2026-11-27）──
+    # 字段为 None = 请求体未提供 → 回落同名 query；显式 false / 空数组同样覆盖
+    # （布尔字段因此不能用 False 默认值）。旧前端不传 body 时全部走 query，
+    # 行为与改动前完全一致。
+    body = body or F2ImportRequest()
+    fetch = body.fetch if body.fetch is not None else fetch
+    authors = body.authors if body.authors is not None else authors
+    limit = body.limit if body.limit is not None else limit
+    skip_live = body.skip_live if body.skip_live is not None else skip_live
+    fetch_limit = body.fetch_limit if body.fetch_limit is not None else fetch_limit
+    make_thumbnails = (
+        body.make_thumbnails if body.make_thumbnails is not None else make_thumbnails
+    )
+    prune_downloads = (
+        body.prune_downloads if body.prune_downloads is not None else prune_downloads
+    )
+    since_days = body.since_days if body.since_days is not None else since_days
+    include_unknown_authors = (
+        body.include_unknown_authors
+        if body.include_unknown_authors is not None
+        else include_unknown_authors
+    )
+    mode = body.mode if body.mode is not None else mode
+    like_user = body.like_user if body.like_user is not None else like_user
+    register_bloggers = (
+        body.register_bloggers
+        if body.register_bloggers is not None
+        else register_bloggers
+    )
+    like_max_counts = (
+        body.like_max_counts if body.like_max_counts is not None else like_max_counts
+    )
+    allow_all_collect = (
+        body.allow_all_collect
+        if body.allow_all_collect is not None
+        else allow_all_collect
+    )
+
     # 参数解析放在可用性判定之前：profiles 的可用性口径与发布模式不同（见下）
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
-    profile_list = _split_multi(profiles, profiles_array)
+    # body 的数组是原生的（不拆逗号）；query 仍认逗号/重复键/axios `arr[]` 三种旧写法
+    profile_list = (
+        body.profiles
+        if body.profiles is not None
+        else _split_multi(profiles, profiles_array)
+    )
 
     if fetch:
         status = f2_import_status()
@@ -220,7 +276,11 @@ async def create_f2_import(
         if not ready:
             return {"message": reason, "task_id": None}
 
-    collect_id_list = _split_multi(collect_ids, collect_ids_array)
+    collect_id_list = (
+        body.collect_ids
+        if body.collect_ids is not None
+        else _split_multi(collect_ids, collect_ids_array)
+    )
 
     # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
     # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。「查进行中 + 创建」

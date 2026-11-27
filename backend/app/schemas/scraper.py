@@ -105,3 +105,100 @@ class ScraperScheduleOut(BaseModel):
     @field_serializer('next_run_at', 'last_run_at', 'created_at')
     def serialize_datetime(self, dt: datetime | None, _info: Any) -> str | None:
         return format_utc(dt)
+
+
+class F2ImportRequest(BaseModel):
+    """``POST /api/scraper/f2-import`` 的可选 JSON 请求体（2026-11-27）。
+
+    与同名 query 参数一一对应，解析优先级为「请求体字段非 None 时覆盖 query」：
+
+    - 字段为 ``None`` 表示「请求体未提供」，回落到同名 query；显式 ``false`` /
+      空数组同样会覆盖 query（所以布尔字段不能用 ``False`` 默认值）；
+    - ``profiles`` / ``collect_ids`` 按**原生数组**使用、不做逗号拆分，便于前端
+      去掉手工 ``join(',')``；旧前端不传 body 时仍走原有 query 解析，行为不变。
+
+    校验口径与 query 一致（mode 枚举、分页范围），另外对数组元素做显式校验：
+    profiles 元素不能含逗号、collect_ids 元素必须是纯数字字符串。
+    """
+
+    fetch: bool | None = Field(
+        None, description="是否先调 f2 增量下载（否则只入库已下载文件）"
+    )
+    authors: str | None = Field(
+        None, description="只处理这些作者（逗号分隔，归一化名）"
+    )
+    limit: int | None = Field(None, ge=1, description="最多导入多少个作品")
+    skip_live: bool | None = Field(None, description="跳过 live 实况的分段视频")
+    fetch_limit: int | None = Field(
+        None, ge=1, description="下载阶段最多处理多少个作者"
+    )
+    make_thumbnails: bool | None = Field(None, description="是否生成缩略图")
+    prune_downloads: bool | None = Field(
+        None, description="入库成功后是否删除 f2 下载目录里的源文件"
+    )
+    since_days: int | None = Field(
+        None, ge=0, le=3650, description="f2 日期窗口天数（0=全历史）"
+    )
+    include_unknown_authors: bool | None = Field(
+        None, description="是否连未登记到博主库的 f2 账号一起处理"
+    )
+    mode: str | None = Field(
+        None,
+        pattern="^(post|like|collection)$",
+        description="post=博主主页作品；like=我的喜欢；collection=我的收藏",
+    )
+    like_user: str | None = Field(
+        None, description="mode=like/collection 时用的我的主页链接 / sec_user_id"
+    )
+    register_bloggers: bool | None = Field(
+        None, description="mode=like 时是否把未登记的来源作者补建成抖音博主"
+    )
+    like_max_counts: int | None = Field(
+        None, ge=0, le=100000, description="「我的列表」最多翻多少条（0=全量）"
+    )
+    profiles: list[str] | None = Field(
+        None,
+        description="按博主全量下载：主页链接 / sec_user_id 原生数组（不拆逗号）",
+    )
+    collect_ids: list[str] | None = Field(
+        None, description="只下这些收藏夹：夹 ID 原生数组（不拆逗号）"
+    )
+    allow_all_collect: bool | None = Field(
+        None, description="没勾收藏夹时是否允许平铺导入全部收藏"
+    )
+
+    @field_validator("profiles")
+    @classmethod
+    def validate_profiles(cls, value: list[str] | None) -> list[str] | None:
+        """profiles 数组元素不能含逗号（显式数组后不再拆分，含逗号说明调用方仍按旧格式发）。"""
+        if value is None:
+            return None
+        cleaned: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if not text:
+                continue
+            if "," in text or "，" in text:
+                raise ValueError(
+                    "profiles 数组元素不能包含逗号；多个博主请用数组传多个元素"
+                )
+            cleaned.append(text)
+        return cleaned
+
+    @field_validator("collect_ids")
+    @classmethod
+    def validate_collect_ids(cls, value: list[str] | None) -> list[str] | None:
+        """collect_ids 数组元素必须是纯数字字符串（收藏夹 ID），不做逗号拆分。"""
+        if value is None:
+            return None
+        cleaned: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if not text:
+                continue
+            if not (text.isascii() and text.isdigit()):
+                raise ValueError(
+                    "collect_ids 数组元素必须是纯数字字符串（收藏夹 ID）"
+                )
+            cleaned.append(text)
+        return cleaned

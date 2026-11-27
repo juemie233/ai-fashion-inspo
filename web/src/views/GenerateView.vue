@@ -80,6 +80,8 @@ const {
   loadStatus,
   submit,
   submitBatch,
+  retryFailedBatches,
+  lastBatchFailures,
   toggle,
   selectAll,
   clearSelection,
@@ -103,6 +105,11 @@ function openLightbox(index: number): void {
   if (!candidates.value.length) return
   lightboxIndex.value = Math.max(0, Math.min(index, candidates.value.length - 1))
   lightboxVisible.value = true
+}
+
+/** 用户显式点击「重试失败批次」：只重发上次 submitBatch 失败的 payload */
+async function onRetryFailedBatches(): Promise<void> {
+  await retryFailedBatches()
 }
 
 /** 候选图 URL 由后端直接给出（/api/generate/...），不能再套素材库的 /api/files/ 前缀 */
@@ -477,6 +484,28 @@ onUnmounted(stopPoll)
 
       <!-- 右：进度与候选 -->
       <a-card class="gen-card" :bordered="false">
+        <!-- 失败批次保留现场，只让用户显式点重试（不自动重发、不重复计费） -->
+        <a-alert
+          v-if="lastBatchFailures.length"
+          type="warning"
+          class="gen-alert"
+          style="margin-bottom: 12px"
+        >
+          <template #title>
+            有 {{ lastBatchFailures.length }} 个批次提交失败（失败参数已保留）
+          </template>
+          <div class="gen-hint">首个失败：{{ lastBatchFailures[0]?.error }}</div>
+          <a-button
+            size="small"
+            type="primary"
+            :loading="submitting"
+            style="margin-top: 8px"
+            @click="onRetryFailedBatches"
+          >
+            重试失败批次（{{ lastBatchFailures.length }}）
+          </a-button>
+        </a-alert>
+
         <GenerateCandidatesPanel
           :run="run"
           :candidates="candidates"
