@@ -7,7 +7,7 @@ import ArcoVue from '@arco-design/web-vue'
 const mocks = vi.hoisted(() => ({ openInspiration: vi.fn() }))
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), resolve: () => ({ href: '/inspirations/insp-1' }) }),
   useRoute: () => ({ query: {} }),
 }))
 vi.mock('@/utils/openInspiration', () => ({ openInspiration: mocks.openInspiration }))
@@ -39,10 +39,10 @@ describe('InspirationCard 无障碍', () => {
   it('可聚焦、有读屏标签，回车打开详情', async () => {
     mocks.openInspiration.mockClear()
     const wrapper = mountCard()
-    const card = wrapper.find('.card')
+    const card = wrapper.find('.card-hit')
 
-    expect(card.attributes('role')).toBe('button')
-    expect(card.attributes('tabindex')).toBe('0')
+    expect(card.attributes('role')).toBeUndefined()
+    expect(card.attributes('href')).toContain('/inspirations/insp-1')
     expect(card.attributes('aria-label')).toContain('打开图片素材')
     expect(card.attributes('aria-label')).toContain('小葵')
 
@@ -52,7 +52,7 @@ describe('InspirationCard 无障碍', () => {
 
   it('批量选择模式暴露 checkbox 语义并响应空格', async () => {
     const wrapper = mountCard({ selectable: true, selected: true })
-    const card = wrapper.find('.card')
+    const card = wrapper.find('.card-hit')
 
     expect(card.attributes('role')).toBe('checkbox')
     expect(card.attributes('aria-checked')).toBe('true')

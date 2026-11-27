@@ -73,17 +73,16 @@ const emit = defineEmits<{
 const router = useRouter()
 const route = useRoute()
 
-/** 网格图片源：图片素材用原图保证清晰（缩略图仅 400x600，放大显示会发虚/有压缩感）；视频用首帧缩略图 */
+/** 网格图片源：优先缩略图（约 400×600 / 几 KB），避免瀑布流为每张卡片解码数 MB 原图；
+ *  悬停放大与详情页仍用原图。视频仍用首帧缩略图。 */
 const gridSrc = computed(() => {
   const { media_type: mt, file_path: fp, thumbnail_path: tp } = props.item
   if (mt === 'video') return tp || fp || ''
-  return fp || tp || ''
+  return tp || fp || ''
 })
 
-/** 获取首行展示的标签（最多 4 个） */
-function displayTags() {
-  return props.item.tags?.slice(0, 4).map((t) => t.tag) ?? []
-}
+/** 获取首行展示的标签（最多 4 个；computed 避免模板重复创建数组） */
+const displayTags = computed(() => props.item.tags?.slice(0, 4).map((t) => t.tag) ?? [])
 
 /** 说明区是否有可见内容：AI 生成素材的来源标签已由顶部徽标承担，
  *  若再没有作者/标签，说明区整块不渲染，样张直接收边（接触印样的留白更干净）。 */
@@ -91,22 +90,34 @@ const hasCaption = computed(
   () =>
     Boolean(props.item.source_type && !props.item.is_ai_generated) ||
     Boolean(props.item.source_author) ||
-    displayTags().length > 0 ||
+    displayTags.value.length > 0 ||
     // 收藏时间也是卡片说明的一部分（收藏中心用来交代「什么时候收藏的」）
     Boolean(props.item.favorited_at),
 )
 
-/** 分析状态标签 */
-function analysisStatusLabel(): string | null {
+/** 分析状态标签（computed：模板里多处使用不再重复计算） */
+const analysisStatusText = computed<string | null>(() => {
   if (props.item.analysis_status === 'analyzing') return '分析中...'
   if (props.item.analysis_status === 'error') return '分析失败'
   return null
-}
+})
+
+/** 卡片主操作的真实链接：支持 Ctrl/⌘/中键在新标签页打开，也保留路由偏好 */
+const detailHref = computed(() => {
+  // 测试/极简 router 桩可能只有 push，甚至没有 router：退回可聚焦的占位链接
+  if (!router || typeof router.resolve !== 'function') return '#'
+  return router.resolve({
+    name: 'detail',
+    params: { id: props.item.id },
+    query: route?.query ?? {},
+  }).href
+})
 
 function goToDetail() {
+  if (!router) return
   // 携带当前筛选 query 进入详情，便于删除/返回后恢复素材库筛选状态；
   // 新标签页 / 当前页由全局「素材打开模式」偏好决定（openInspiration 统一处理）
-  openInspiration(router, props.item.id, route.query)
+  openInspiration(router, props.item.id, route?.query ?? {})
 }
 
 /** 卡片点击：批量模式下切换勾选，否则跳转详情 */
@@ -115,15 +126,6 @@ function handleCardClick() {
     emit('toggleSelect')
   } else {
     goToDetail()
-  }
-}
-
-/** 卡片键盘操作：只在卡片自身获得焦点时响应，避免嵌套按钮的回车/空格冒泡触发打开详情 */
-function onCardKeydown(e: KeyboardEvent) {
-  if (e.target !== e.currentTarget) return
-  if (e.key === 'Enter' || e.key === ' ') {
-    e.preventDefault()
-    handleCardClick()
   }
 }
 
@@ -148,13 +150,20 @@ function openDetail() {
       'is-selected': selectable && selected,
       'is-rejected': item.quality_status === 'rejected',
     }"
-    :role="selectable ? 'checkbox' : 'button'"
-    :aria-checked="selectable ? selected : undefined"
-    :aria-label="cardAriaLabel"
-    tabindex="0"
     @click="handleCardClick"
-    @keydown="onCardKeydown"
   >
+    <!-- 主操作铺满整卡：真实 <a> 支持 Ctrl/⌘/中键新标签页；操作按钮是它的同级兄弟 -->
+    <a
+      class="card-hit"
+      :href="detailHref"
+      :role="selectable ? 'checkbox' : undefined"
+      :aria-checked="selectable ? selected : undefined"
+      :aria-label="cardAriaLabel"
+      @click.prevent="handleCardClick"
+      @keydown.enter.prevent="handleCardClick"
+      @keydown.space.prevent="selectable && handleCardClick()"
+    />
+
     <!-- 缩略图 / 视频首帧 -->
     <div class="card-image">
       <!-- 悬停放大预览：复用通用 HoverImagePreview（仅图片素材，停留 2s 弹出原图大图） -->
@@ -163,7 +172,7 @@ function openDetail() {
         :large-src="getFileUrl(item.file_path)"
         :delay="HOVER_ZOOM_DELAY"
       >
-        <img :src="getFileUrl(gridSrc)" :alt="item.source_author || '穿搭素材'" loading="lazy" />
+        <img :src="getFileUrl(gridSrc)" alt="" loading="lazy" decoding="async" />
       </HoverImagePreview>
       <template v-else>
         <video
@@ -176,8 +185,9 @@ function openDetail() {
         <img
           v-else-if="gridSrc"
           :src="getFileUrl(gridSrc)"
-          :alt="item.source_author || '穿搭素材'"
+          alt=""
           loading="lazy"
+          decoding="async"
         />
       </template>
 
@@ -201,6 +211,7 @@ function openDetail() {
         v-if="selectable"
         class="select-checkbox"
         :class="{ checked: selected }"
+        aria-hidden="true"
         @click.stop="emit('toggleSelect')"
       >
         <span v-if="selected">✓</span>
@@ -222,13 +233,10 @@ function openDetail() {
       </div>
 
       <!-- 悬浮操作层：showActions=false 时可只保留评分/收藏/删除（人物/合集详情） -->
-      <div
-        v-if="showActions !== false || showRating || showFavorite || showDelete"
-        class="card-overlay"
-      >
-        <template v-if="showActions !== false || showDelete">
+      <div v-if="showActions || showRating || showFavorite || showDelete" class="card-overlay">
+        <template v-if="showActions || showDelete">
           <a-button
-            v-if="showActions !== false && item.quality_status === 'rejected'"
+            v-if="showActions && item.quality_status === 'rejected'"
             size="mini"
             shape="circle"
             type="text"
@@ -279,14 +287,14 @@ function openDetail() {
           </a-button>
         </template>
         <a-button
-          v-if="(showActions !== false || showFavorite) && !item.deleted_at"
+          v-if="(showActions || showFavorite) && !item.deleted_at"
           size="mini"
           shape="circle"
           :type="item.is_favorite ? 'primary' : 'text'"
           :status="item.is_favorite ? 'danger' : undefined"
           :disabled="favoritePending"
           :loading="favoritePending"
-          title="收藏/取消收藏"
+          :title="item.is_favorite ? '取消收藏' : '收藏'"
           :aria-label="item.is_favorite ? '取消收藏' : '收藏'"
           @click.stop="emit('toggleFavorite')"
         >
@@ -297,7 +305,7 @@ function openDetail() {
         </a-button>
         <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
         <a-rate
-          v-if="showRating"
+          v-if="showRating && !item.deleted_at"
           :model-value="item.rating || 0"
           :aria-label="`评分，当前 ${item.rating || 0} 星，点击修改`"
           allow-clear
@@ -309,8 +317,8 @@ function openDetail() {
       </div>
 
       <!-- 分析状态 -->
-      <div v-if="analysisStatusLabel()" class="analysis-badge">
-        {{ analysisStatusLabel() }}
+      <div v-if="analysisStatusText" class="analysis-badge">
+        {{ analysisStatusText }}
       </div>
 
       <!-- 质量审核状态 + 疑似 AI 标记（正交，可同时显示；文案/颜色统一走 StatusTag） -->
@@ -353,13 +361,8 @@ function openDetail() {
       </div>
 
       <!-- 标签 -->
-      <div v-if="displayTags().length > 0" class="card-tags">
-        <CategoryTag
-          v-for="tag in displayTags()"
-          :key="tag.id"
-          :category="tag.category"
-          size="tiny"
-        >
+      <div v-if="displayTags.length > 0" class="card-tags">
+        <CategoryTag v-for="tag in displayTags" :key="tag.id" :category="tag.category" size="tiny">
           {{ tag.name }}
         </CategoryTag>
       </div>
@@ -384,13 +387,6 @@ function openDetail() {
     transform 0.15s,
     box-shadow 0.15s;
   border: 1px solid var(--color-border-2);
-}
-/* 悬停浮起只给鼠标设备：触摸端 :hover 会「粘住」，点过的卡片长期歪着 */
-@media (hover: hover) {
-  .card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  }
 }
 
 .card-image {
@@ -533,36 +529,6 @@ function openDetail() {
 
 /* 触摸端（iPad / 手机）：没有 hover，收藏/删除/评分等操作常显，
    否则这些按钮在触摸设备上永远不出现 —— 网格里等于无法操作素材 */
-@media (hover: none) {
-  .card-overlay {
-    opacity: 1;
-  }
-
-  .card-overlay :deep(.arco-btn-size-mini) {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
-  }
-
-  .card-rate {
-    font-size: 20px;
-    padding: 6px;
-  }
-
-  .view-detail-btn {
-    opacity: 1;
-    /* 手指点得准的最小尺寸（原 26px 偏小） */
-    width: 44px;
-    height: 44px;
-  }
-
-  .select-checkbox {
-    width: 44px;
-    height: 44px;
-  }
-}
-
 .quality-badges {
   position: absolute;
   top: 8px;
@@ -623,16 +589,6 @@ function openDetail() {
 
 .card-image {
   background: var(--sheet-2);
-}
-
-.card-image img,
-.card-image video {
-  filter: saturate(0.96);
-}
-
-.card:hover .card-image img,
-.card:hover .card-image video {
-  filter: saturate(1);
 }
 
 /* 留版裁切标记：四个角的朱砂角线，由渐变一次画成 */
@@ -797,5 +753,75 @@ function openDetail() {
   font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums lining-nums;
   white-space: nowrap;
+}
+
+/* ── 主操作：真实链接负责键盘/读屏，卡片容器负责鼠标点击（不覆盖图片，避免挡住悬停预览） ── */
+.card-hit {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.card:focus-within {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+
+.card:hover .card-overlay,
+.card:focus-within .card-overlay,
+.card:hover .view-detail-btn,
+.card:focus-within .view-detail-btn {
+  opacity: 1;
+}
+
+.card-overlay {
+  z-index: 3;
+  top: 46px;
+}
+.select-checkbox {
+  z-index: 5;
+}
+.sim-badge {
+  bottom: 42px;
+}
+.view-detail-btn {
+  z-index: 4;
+}
+.card.is-rejected .card-image {
+  opacity: 0.7;
+}
+.card.is-favorite,
+.card.is-selected {
+  border-color: var(--seal);
+}
+
+@media (hover: none) {
+  .card-overlay {
+    opacity: 1;
+  }
+  .card-overlay :deep(.arco-btn-size-mini) {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+  .card-rate {
+    font-size: 20px;
+    padding: 6px;
+  }
+  .view-detail-btn {
+    opacity: 1;
+    width: 44px;
+    height: 44px;
+  }
+  .select-checkbox {
+    width: 44px;
+    height: 44px;
+  }
 }
 </style>

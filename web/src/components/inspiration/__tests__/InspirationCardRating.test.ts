@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), resolve: () => ({ href: '/inspirations/insp-1' }) }),
   useRoute: () => ({ query: {} }),
 }))
 vi.mock('@/utils/openInspiration', () => ({ openInspiration: mocks.openInspiration }))

@@ -5,7 +5,7 @@ import { mount } from '@vue/test-utils'
 import ArcoVue from '@arco-design/web-vue'
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), resolve: () => ({ href: '/inspirations/insp-1' }) }),
   useRoute: () => ({ query: {} }),
 }))
 vi.mock('@/utils/openInspiration', () => ({ openInspiration: vi.fn() }))
