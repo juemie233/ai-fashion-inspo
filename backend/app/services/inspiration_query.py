@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, and_, case, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 
 from app.config import settings
 from app.models.inspiration import (
@@ -21,7 +21,7 @@ from app.models.inspiration import (
     analysis_log_filter,
     latest_analysis_log_subquery,
 )
-from app.models.person import InspirationBlogger, InspirationModel
+from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model
 from app.models.tag import InspirationTag, Tag
 
 logger = logging.getLogger(__name__)
@@ -92,10 +92,59 @@ def inspiration_load_options(*, full_analysis_logs: bool = False) -> tuple:
             AIAnalysisLog.log_type,
             AIAnalysisLog.error,
         )
+    # 只取序列化真正用到的列：列表/详情都不需要标签关联的额外字段，
+    # 也不要把人物表的完整资料（简介/粉丝数等）拉进来。
+    tag_loader = (
+        selectinload(Inspiration.tags)
+        .options(
+            load_only(
+                InspirationTag.inspiration_id,
+                InspirationTag.tag_id,
+                InspirationTag.confidence,
+                InspirationTag.source,
+            )
+        )
+        .selectinload(InspirationTag.tag)
+        .options(
+            load_only(
+                Tag.id,
+                Tag.name,
+                Tag.category,
+                Tag.is_legacy,
+                Tag.created_at,
+            )
+        )
+    )
+    blogger_loader = (
+        selectinload(Inspiration.bloggers)
+        .options(
+            load_only(
+                InspirationBlogger.inspiration_id,
+                InspirationBlogger.blogger_id,
+                InspirationBlogger.confidence,
+            )
+        )
+        .selectinload(InspirationBlogger.blogger)
+        .options(
+            load_only(Blogger.id, Blogger.name, Blogger.platform, Blogger.avatar_path)
+        )
+    )
+    model_loader = (
+        selectinload(Inspiration.models)
+        .options(
+            load_only(
+                InspirationModel.inspiration_id,
+                InspirationModel.model_id,
+                InspirationModel.confidence,
+            )
+        )
+        .selectinload(InspirationModel.model)
+        .options(load_only(Model.id, Model.name, Model.platform, Model.avatar_path))
+    )
     return (
-        selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-        selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-        selectinload(Inspiration.models).selectinload(InspirationModel.model),
+        tag_loader,
+        blogger_loader,
+        model_loader,
         analysis_loader,
     )
 
