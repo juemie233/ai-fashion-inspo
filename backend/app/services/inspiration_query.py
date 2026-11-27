@@ -50,8 +50,12 @@ def inclusive_date_upper_bound(value: str) -> str:
         return value
 
 
-def inspiration_load_options() -> tuple:
+def inspiration_load_options(*, full_analysis_logs: bool = False) -> tuple:
     """素材响应序列化所需的**链式**预加载选项（唯一出处，别再复制）。
+
+    ``analysis_logs`` 默认只取 ``inspiration_to_out`` 推断分析状态所需的三列
+    （id / log_type / error），避免列表/搜索为每个素材加载全部日志字段；
+    详情需要完整日志时传 ``full_analysis_logs=True``。
 
     为什么必须链式：`inspiration_to_out` 会读关联的**内层实体**——
     `t.tag` / `t.blogger` / `t.model`。模型里 `tags`/`bloggers`/`models` 是
@@ -68,10 +72,19 @@ def inspiration_load_options() -> tuple:
     ``task_runners/vector_backfill.py::_load_window_inspirations``。它们改叫本函数也安全，
     但那会为「整库回填」的每个窗口多两次无关查询——保持现状即可，别再新增第三处手写链。
     """
+    analysis_loader = selectinload(Inspiration.analysis_logs)
+    if not full_analysis_logs:
+        analysis_loader = analysis_loader.load_only(
+            AIAnalysisLog.id,
+            AIAnalysisLog.inspiration_id,
+            AIAnalysisLog.log_type,
+            AIAnalysisLog.error,
+        )
     return (
         selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
         selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
         selectinload(Inspiration.models).selectinload(InspirationModel.model),
+        analysis_loader,
     )
 
 
@@ -636,11 +649,7 @@ async def get_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:
     """获取单个灵感详情（包含完整标签和分析日志），不存在则抛出 404。"""
     result = await db.execute(
         select(Inspiration)
-        .options(
-            *inspiration_load_options(),
-            # 详情额外要分析日志（列表不需要，别放进公共选项）
-            selectinload(Inspiration.analysis_logs),
-        )
+        .options(*inspiration_load_options(full_analysis_logs=True))
         .where(Inspiration.id == inspiration_id)
     )
     inspiration = result.unique().scalar_one_or_none()
