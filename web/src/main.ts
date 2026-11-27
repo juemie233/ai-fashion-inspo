@@ -9,6 +9,8 @@ import '@/styles/responsive.css'
 import App from './App.vue'
 import router from './router'
 import { logger } from './utils/logger'
+import { fetchTaskTypes } from './api/tasks'
+import { applyTaskTypeContract } from './utils/taskPresentation'
 
 const app = createApp(App)
 
@@ -24,3 +26,8 @@ app.config.errorHandler = (err, _instance, info) => {
 }
 
 app.mount('#app')
+
+// 任务类型/动作契约以后端为准；接口失败时 taskPresentation 保留内置默认清单。
+void fetchTaskTypes()
+  .then(applyTaskTypeContract)
+  .catch((error) => logger.debug('[任务类型契约] 拉取失败，使用内置默认清单', error))

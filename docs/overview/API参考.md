@@ -1,6 +1,6 @@
 # API 参考（路由清单）
 
-> **状态**：自动生成（2026-11-27，共 26 个模块 / 354 个端点）。
+> **状态**：自动生成（2026-11-27，共 26 个模块 / 355 个端点）。
 > 由 `scripts/data/gen_docs_from_code.py` 从 `backend/app/routers/*.py` 抽取，**不要手改**——
 > 改了 router 就重跑脚本（`--check` 可校验是否过期）。
 > 参数与响应结构以代码和 `/docs`（FastAPI 自动 OpenAPI，后端在跑时 `http://127.0.0.1:18888/docs`）为准。
@@ -33,7 +33,7 @@
 | [scraper](#scraper) | `/api/scraper` | 44 |
 | [search](#search) | `/api/search` | 6 |
 | [tags](#tags) | `/api/tags` | 43 |
-| [tasks](#tasks) | `/api/tasks` | 8 |
+| [tasks](#tasks) | `/api/tasks` | 9 |
 | [ws](#ws) | `/ws` | 1 |
 
 ## admin
@@ -556,6 +556,7 @@
 | 方法 | 路径 | 函数 | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/api/tasks` | `list_tasks` | 分页查询任务列表，可按状态 / 类型筛选。 |
+| `GET` | `/api/tasks/types` | `get_task_types` | 返回任务类型与可暂停/可取消/GPU 互斥契约。 |
 | `GET` | `/api/tasks/{task_id}/result` | `get_task_result` | 返回任务完整 result（大字段按需加载；列表/详情默认不再返回）。 |
 | `GET` | `/api/tasks/{task_id}` | `get_task` | 查询单个任务状态（供前端轮询进度）。 |
 | `GET` | `/api/tasks/{task_id}/runs` | `list_task_runs` | 查询任务的运行台账：每次执行尝试一行（含重试），按开始时间升序。 |

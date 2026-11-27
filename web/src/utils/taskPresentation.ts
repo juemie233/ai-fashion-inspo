@@ -11,7 +11,7 @@
  * useTaskCenter 只负责加载/筛选/分页/轮询/操作，展示规则集中在此复用。
  */
 
-import type { UnifiedTask } from '@/types/task'
+import type { TaskTypeContract, UnifiedTask } from '@/types/task'
 import { TASK_TYPE_LABELS, SCRAPER_PLATFORM_LABELS, normalizeTaskStatus } from '@/utils/taskLabel'
 import { formatSize } from '@/utils/format'
 import { parseKeywords as parseKeywordsList } from '@/utils/scraperKeywords'
@@ -66,11 +66,6 @@ export const PAUSABLE_TASK_TYPES = [
   'vector_backfill',
 ] as const
 
-/** 判断任务类型是否支持暂停/恢复（任务列表与批量任务卡片的按钮显示统一走这里） */
-export function isPausableTaskType(type: string): boolean {
-  return (PAUSABLE_TASK_TYPES as readonly string[]).includes(type)
-}
-
 /** 支持「运行中取消」的任务类型（与后端 _CANCELABLE_RUNNING_TYPES 对齐）：
  * - face_scan / face_match：人脸扫描与匹配（增量语义，重跑自动跳过已扫部分）
  * - tag_network_analyze：标签网络分析（断点续算）
@@ -96,11 +91,6 @@ export const CANCELABLE_TASK_TYPES = [
   'image_gen',
 ] as const
 
-/** 判断任务类型是否支持运行中取消（任务列表的取消按钮显示走这里） */
-export function isCancelableTaskType(type: string): boolean {
-  return (CANCELABLE_TASK_TYPES as readonly string[]).includes(type)
-}
-
 /** 重负载任务类型（组内全局串行）：与后端 app/worker.py 的 GPU_EXCLUSIVE_TASK_TYPES 对齐。
  *
  * 组内任务都吃同一份稀缺资源（CLIP 图像编码 / VLM 视觉推理 / 人脸推理；face_match
@@ -121,9 +111,31 @@ export const GPU_EXCLUSIVE_TASK_TYPES = [
   'image_gen',
 ] as const
 
+/** 后端契约覆盖层：启动时拉取 /api/tasks/types；失败时保留上面的内置默认值。 */
+let pausableTypes: ReadonlySet<string> = new Set(PAUSABLE_TASK_TYPES)
+let cancelableTypes: ReadonlySet<string> = new Set(CANCELABLE_TASK_TYPES)
+let gpuExclusiveTypes: ReadonlySet<string> = new Set(GPU_EXCLUSIVE_TASK_TYPES)
+
+/** 应用后端任务类型契约（数组为空也视为有效覆盖，便于后端下线某类动作）。 */
+export function applyTaskTypeContract(contract: TaskTypeContract): void {
+  pausableTypes = new Set(contract.pausable)
+  cancelableTypes = new Set(contract.cancelable)
+  gpuExclusiveTypes = new Set(contract.gpu_exclusive)
+}
+
+/** 判断任务类型是否支持暂停/恢复（任务列表与批量任务卡片的按钮显示统一走这里） */
+export function isPausableTaskType(type: string): boolean {
+  return pausableTypes.has(type)
+}
+
+/** 判断任务类型是否支持运行中取消（任务列表的取消按钮显示走这里） */
+export function isCancelableTaskType(type: string): boolean {
+  return cancelableTypes.has(type)
+}
+
 /** 判断任务类型是否属重负载互斥组（排队文案据此解释「为什么还没开始」） */
 export function isGpuExclusiveTaskType(type: string): boolean {
-  return (GPU_EXCLUSIVE_TASK_TYPES as readonly string[]).includes(type)
+  return gpuExclusiveTypes.has(type)
 }
 
 /** 任务行可执行的动作（任务列表「操作」列按钮的唯一判据） */

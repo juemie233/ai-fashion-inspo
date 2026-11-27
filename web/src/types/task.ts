@@ -39,6 +39,15 @@ export interface TaskRunOut {
   error: string | null
 }
 
+/** 后端任务类型/动作契约（GET /api/tasks/types） */
+export interface TaskTypeContract {
+  statuses: string[]
+  types: string[]
+  cancelable: string[]
+  pausable: string[]
+  gpu_exclusive: string[]
+}
+
 /** 统一任务视图模型（前端聚合两类后端任务后归一化得到） */
 export interface UnifiedTask {
   id: number

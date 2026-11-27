@@ -16,6 +16,7 @@ import {
   CANCELABLE_TASK_TYPES,
   PAUSABLE_TASK_TYPES,
   GPU_EXCLUSIVE_TASK_TYPES,
+  applyTaskTypeContract,
   isCancelableTaskType,
   isGpuExclusiveTaskType,
   isPausableTaskType,
@@ -148,5 +149,31 @@ describe('三份白名单的内容（与后端常量逐条对齐）', () => {
     expect(isGpuExclusiveTaskType('image_gen')).toBe(true)
     expect(isGpuExclusiveTaskType('batch_analyze')).toBe(true)
     expect(isGpuExclusiveTaskType('batch_delete')).toBe(false)
+  })
+})
+
+describe('applyTaskTypeContract：后端契约覆盖', () => {
+  it('启动时拉到的清单覆盖内置默认值', () => {
+    try {
+      applyTaskTypeContract({
+        statuses: ['pending', 'running'],
+        types: ['batch_analyze', 'custom_task'],
+        cancelable: ['batch_analyze'],
+        pausable: [],
+        gpu_exclusive: ['custom_task'],
+      })
+      expect(isPausableTaskType('batch_analyze')).toBe(false)
+      expect(isCancelableTaskType('batch_analyze')).toBe(true)
+      expect(isGpuExclusiveTaskType('custom_task')).toBe(true)
+      expect(taskRowActions('paused', 'batch_analyze', 'queue').canResume).toBe(false)
+    } finally {
+      applyTaskTypeContract({
+        statuses: [],
+        types: [],
+        cancelable: [...CANCELABLE_TASK_TYPES],
+        pausable: [...PAUSABLE_TASK_TYPES],
+        gpu_exclusive: [...GPU_EXCLUSIVE_TASK_TYPES],
+      })
+    }
   })
 })

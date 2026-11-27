@@ -19,6 +19,7 @@ from app.schemas.task import (
     TaskOut,
     TaskResultOut,
     TaskRunOut,
+    TaskTypesOut,
 )
 from app.services.task_runners.common import _broadcast_task_event
 from app.utils.time import utcnow
@@ -204,6 +205,27 @@ async def list_tasks(
         "total": total,
         "page": page,
         "size": size,
+    }
+
+
+@router.get("/types", response_model=TaskTypesOut)
+async def get_task_types() -> dict:
+    """返回任务类型与可暂停/可取消/GPU 互斥契约。
+
+    前端不再手写三份类型清单；启动时拉取本接口并应用到展示层，
+    接口不可用时前端回退内置默认值。
+    """
+    from app.services.task_runner import (
+        GPU_EXCLUSIVE_TASK_TYPES,
+        TASK_TYPES,
+    )
+
+    return {
+        "statuses": [status.value for status in TaskStatus],
+        "types": sorted(TASK_TYPES),
+        "cancelable": sorted(set(_CANCELABLE_RUNNING_TYPES) & TASK_TYPES),
+        "pausable": sorted(set(_PAUSABLE_RUNNING_TYPES) & TASK_TYPES),
+        "gpu_exclusive": sorted(GPU_EXCLUSIVE_TASK_TYPES),
     }
 
 

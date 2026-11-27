@@ -67,6 +67,16 @@ class TaskResultOut(BaseModel):
     result: dict[str, Any] | None = None
 
 
+class TaskTypesOut(BaseModel):
+    """任务类型/动作契约（前端任务中心据此显示按钮，避免跨语言手写清单漂移）。"""
+
+    statuses: list[str]
+    types: list[str]
+    cancelable: list[str]
+    pausable: list[str]
+    gpu_exclusive: list[str]
+
+
 class TaskRunOut(BaseModel):
     """一次任务执行尝试的台账（``GET /api/tasks/{id}/runs``）。
 

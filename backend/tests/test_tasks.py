@@ -129,6 +129,19 @@ async def test_cancel_pending_task_physically_deletes(client):
         assert await db.get(PendingVectorBackfill, backfill_id) is not None
 
 
+async def test_task_types_contract_endpoint(client):
+    """任务类型契约端点：状态/类型/动作白名单一次返回，前端不再手写清单。"""
+    r = client.get("/api/tasks/types")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "pending" in data["statuses"] and "paused" in data["statuses"]
+    assert "batch_analyze" in data["types"]
+    assert "batch_analyze" in data["cancelable"]
+    assert "batch_analyze" in data["pausable"]
+    assert "face_scan" in data["gpu_exclusive"]
+    assert "deduplicate" not in data["gpu_exclusive"]
+
+
 async def test_list_tasks_rejects_unknown_status(client):
     """status 是枚举：拼错的状态返回 422，而不是静默查空列表。"""
     r = client.get("/api/tasks", params={"status": "pinding"})
