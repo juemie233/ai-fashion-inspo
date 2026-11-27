@@ -200,6 +200,26 @@ async def test_list_dominant_colors_counts_and_skips_invalid(client):
         ]
 
 
+async def test_list_dominant_colors_caches_until_updated(client, monkeypatch):
+    """同一 (count, max(updated_at)) 下第二次请求不再解析全表 JSON。"""
+    import app.services.inspiration_query as iq
+
+    await _insp("dc-cache-1", dominant_colors=json.dumps(["#ABCDEF"]))
+    calls = {"n": 0}
+    real_loads = iq.json.loads
+
+    def _counting_loads(raw):
+        calls["n"] += 1
+        return real_loads(raw)
+
+    monkeypatch.setattr(iq.json, "loads", _counting_loads)
+    async with async_session() as db:
+        first = await list_dominant_colors(db)
+        second = await list_dominant_colors(db)
+    assert first == second == [{"color": "#abcdef", "count": 1}]
+    assert calls["n"] == 1
+
+
 async def test_list_dominant_colors_empty_library(client):
     async with async_session() as db:
         assert await list_dominant_colors(db) == []

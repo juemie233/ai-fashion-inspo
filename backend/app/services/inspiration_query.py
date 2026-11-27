@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -24,6 +25,17 @@ from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
 
 logger = logging.getLogger(__name__)
+
+# 主色调统计缓存：key 为 (数据库, 未删除素材数, max(updated_at))。
+# 颜色只在分析/裁剪写回时变化，且会更新 updated_at；key 变了才重新解析全表。
+_DOMINANT_COLOR_CACHE: dict[tuple[str, int, str], tuple[float, list[dict]]] = {}
+_DOMINANT_COLOR_CACHE_TTL = 300.0
+_DOMINANT_COLOR_CACHE_TOP = 200
+
+
+def invalidate_dominant_color_cache() -> None:
+    """清空主色调统计缓存（测试/批量改色后调用）。"""
+    _DOMINANT_COLOR_CACHE.clear()
 
 
 _ISO_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -622,9 +634,34 @@ def build_filters_from_query_json(query_json: dict) -> list[ColumnElement[bool]]
 async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
     """统计库内实际出现的主色调（hex）及其出现次数，供颜色筛选使用。
 
-    从 dominant_colors 的 JSON 数组字符串解析去重计数，仅统计未删除素材；
-    返回按出现次数降序的颜色列表，避免前端硬编码可能不存在的色板。
+    从 dominant_colors 的 JSON 数组字符串解析去重计数，仅统计未删除素材。
+    全表 JSON 解析代价高：先取 (count, max(updated_at)) 做缓存键，未变化时直接
+    复用上次结果；新增/改色会改变 count 或 updated_at，自然失效。
     """
+    bind = db.get_bind()
+    bind_url = getattr(bind, "url", None)
+    db_key = (
+        bind_url.render_as_string(hide_password=False)
+        if bind_url is not None
+        else str(bind)
+    )
+    meta = (
+        await db.execute(
+            select(
+                func.count(Inspiration.id),
+                func.max(Inspiration.updated_at),
+            ).where(NOT_DELETED, Inspiration.dominant_colors.isnot(None))
+        )
+    ).one()
+    count, max_updated = int(meta[0] or 0), (
+        meta[1].isoformat() if meta[1] is not None else ""
+    )
+    cache_key = (db_key, count, max_updated)
+    now = time.monotonic()
+    cached = _DOMINANT_COLOR_CACHE.get(cache_key)
+    if cached and now - cached[0] < _DOMINANT_COLOR_CACHE_TTL:
+        return cached[1][:limit]
+
     result = await db.execute(
         select(Inspiration.dominant_colors).where(
             NOT_DELETED, Inspiration.dominant_colors.isnot(None)
@@ -643,8 +680,16 @@ async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
                     normalized = c.lower()
                     counter[normalized] = counter.get(normalized, 0) + 1
 
-    top = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
-    return [{"color": c, "count": n} for c, n in top]
+    top = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[
+        :_DOMINANT_COLOR_CACHE_TOP
+    ]
+    data = [{"color": c, "count": n} for c, n in top]
+    _DOMINANT_COLOR_CACHE[cache_key] = (now, data)
+    # 清理过期项，避免频繁变色的库把缓存字典撑大
+    if len(_DOMINANT_COLOR_CACHE) > 32:
+        _DOMINANT_COLOR_CACHE.clear()
+        _DOMINANT_COLOR_CACHE[cache_key] = (now, data)
+    return data[:limit]
 
 
 async def get_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:

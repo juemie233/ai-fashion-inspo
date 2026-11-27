@@ -139,6 +139,12 @@ def clean_state(client):
     """
     from app.config import settings
 
+    # 主色调统计缓存是模块级全局，跨用例清理数据后必须失效，
+    # 否则「空库」用例可能读到上一个用例的结果。
+    from app.services.inspiration_query import invalidate_dominant_color_cache
+
+    invalidate_dominant_color_cache()
+
     db_path = settings.storage_root.parent / "fashion_inspo.db"
     conn = sqlite3_connect(str(db_path))
     try:
