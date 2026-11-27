@@ -20,7 +20,7 @@ import type {
   GenerationRunStats,
 } from '@/api/generate'
 import { autoTitleRun, candidateUrl, fetchRun } from '@/api/generate'
-import { fetchInspirations } from '@/api/inspirations'
+import { fetchInspirations, getFileUrl } from '@/api/inspirations'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import GenerateImportDialog from '@/components/generate/GenerateImportDialog.vue'
 import GenerateHistoryStatsToolbar from '@/components/generate/GenerateHistoryStatsToolbar.vue'
@@ -59,7 +59,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'refresh'): void
   (e: 'retry', id: number): void
-  (e: 'remove', id: number): void
+  (e: 'remove', rowId: number, runIds: number[]): void
   (e: 'page-change', page: number): void
   (e: 'update:filters', filters: GenerationHistoryQuery): void
   /** 入库回抛：rowId=列表行 id；groups=按底层批次分组的文件名（多姿态合并行可能多批） */
@@ -68,8 +68,8 @@ const emit = defineEmits<{
     rowId: number,
     groups: Array<{ run_id: number; filenames: string[] }>,
   ): void
-  /** 切换收藏（收藏的批次不会被过期清理） */
-  (e: 'toggle-favorite', runId: number, favorite: boolean): void
+  /** 切换收藏（收藏的批次不会被过期清理）；多姿态组一次提交全部批次 */
+  (e: 'toggle-favorite', runIds: number[], favorite: boolean): void
   /** 保存命名与备注（clear_* 为显式清空） */
   (
     e: 'save-meta',
@@ -87,6 +87,9 @@ const emit = defineEmits<{
   /** 两批对比：选中两个批次后回抛（左=先选，右=后选） */
   (e: 'compare-runs', ids: [number, number]): void
 }>()
+
+/** 终态状态集合：数组提常量，避免每次渲染新建 */
+const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'] as const
 
 /** 生成方式中文标签（kind 由档位决定） */
 function kindLabel(kind: string): string {
@@ -143,10 +146,15 @@ function poseId(record: GenerationRunBrief): string {
   return typeof value === 'string' ? value : ''
 }
 
+/** 参考素材 id 列表（统一解析，列表与缩略图共用） */
+function referenceIds(record: GenerationRunBrief): string[] {
+  const ids = record.params?.reference_ids
+  return Array.isArray(ids) ? ids.map(String).filter(Boolean) : []
+}
+
 /** 参考素材张数（文生图为 0） */
 function referenceCount(record: GenerationRunBrief): number {
-  const ids = record.params?.reference_ids
-  return Array.isArray(ids) ? ids.length : 0
+  return referenceIds(record).length
 }
 
 /** 复制完整描述：历史列表只存参数，用户常需要把描述搬到别处复用 */
@@ -223,11 +231,14 @@ const maxModelRuns = computed(() => Math.max(1, ...topModels.value.map((item) =>
 const metaEditing = ref<GenerationRunBrief | null>(null)
 const metaTitle = ref('')
 const metaNote = ref('')
+/** 保存请求在途：防止连点发出多次 PATCH */
+const metaSaving = ref(false)
 
 function openMetaEditor(record: GenerationRunBrief): void {
   metaEditing.value = record
   metaTitle.value = record.title ?? ''
   metaNote.value = record.note ?? ''
+  metaSaving.value = false
 }
 
 /** 自动命名：模型给一个 ≤20 字建议填进输入框（用户仍要自己点保存） */
@@ -235,9 +246,17 @@ const autoTitling = ref(false)
 async function fillAutoTitle(): Promise<void> {
   const record = metaEditing.value
   if (!record) return
+  const beforeTitle = metaTitle.value
   autoTitling.value = true
   try {
     const result = await autoTitleRun(record.id)
+    // 等待期间可能已关闭弹窗/切到另一条记录：不要把结果写进别人的输入框
+    if (metaEditing.value?.id !== record.id) return
+    // 用户已手动改过标题时不覆盖，只提示建议已生成
+    if (metaTitle.value.trim() && metaTitle.value !== beforeTitle) {
+      Message.info('已生成标题建议，但你已手动修改，未覆盖当前输入')
+      return
+    }
     metaTitle.value = result.title
     Message.success(
       result.source === 'ai' ? '已用模型生成标题，可再修改' : '模型不可用，已用描述前 20 字代替',
@@ -251,9 +270,16 @@ async function fillAutoTitle(): Promise<void> {
 
 function saveMeta(): void {
   const record = metaEditing.value
-  if (!record) return
+  if (!record || metaSaving.value) return
   const title = metaTitle.value.trim()
   const note = metaNote.value.trim()
+  // 内容没变不发请求；直接关掉即可（标注弹窗只在成功后由视图关闭，这里是空操作）
+  if (title === (record.title ?? '').trim() && note === (record.note ?? '').trim()) {
+    Message.info('标注没有变化')
+    closeMetaEditor()
+    return
+  }
+  metaSaving.value = true
   emit('save-meta', record.id, {
     title: title || undefined,
     note: note || undefined,
@@ -266,6 +292,12 @@ function saveMeta(): void {
 /** 保存成功后由视图调用：关闭标注弹层（失败时保持打开，避免用户输入丢失） */
 function closeMetaEditor(): void {
   metaEditing.value = null
+  metaSaving.value = false
+}
+
+/** 保存失败后由视图调用：解除 loading，保留用户输入供重试 */
+function resetMetaSaving(): void {
+  metaSaving.value = false
 }
 
 // ── 筛选工具栏 ──
@@ -343,17 +375,13 @@ function onDateRangeChange(value: unknown): void {
   })
 }
 
+/** 是否处于筛选状态：遍历全部筛选字段，新增字段不会被漏掉（分页字段除外） */
 const filtered = computed(() =>
-  Boolean(
-    props.filters.model_key ||
-    props.filters.status ||
-    props.filters.has_imported ||
-    props.filters.q ||
-    props.filters.since ||
-    props.filters.until ||
-    props.filters.reference_id ||
-    props.filters.favorite,
-  ),
+  Object.entries(props.filters).some(([key, value]) => {
+    if (key === 'page' || key === 'size' || key === 'limit') return false
+    if (Array.isArray(value)) return value.length > 0
+    return value !== undefined && value !== null && value !== ''
+  }),
 )
 
 // ── 展开行：按需拉详情（含逐张 imported）──
@@ -362,6 +390,8 @@ interface RunDetailState {
   items: GenerationCandidate[]
   loading: boolean
   error: string | null
+  /** 多姿态合并行中读取失败的批次数（>0 时界面必须提示，否则用户以为只有这些候选） */
+  failedBatches: number
 }
 
 const details = reactive<Record<number, RunDetailState>>({})
@@ -383,13 +413,19 @@ function candidateKey(item: GenerationCandidate): string {
   return item.select_key ?? `${item.run_id ?? 0}:${item.filename}`
 }
 
-/** 拉取一行对应的全部候选图（多姿态行逐批拉详情后合并） */
-async function fetchRowItems(record: GenerationRunBrief): Promise<GenerationCandidate[]> {
+/** 拉取一行对应的全部候选图（多姿态行逐批拉详情后合并；返回失败批次数） */
+async function fetchRowItems(
+  record: GenerationRunBrief,
+): Promise<{ items: GenerationCandidate[]; failedBatches: number }> {
   const runIds = rowRunIds(record)
   const settled = await Promise.allSettled(runIds.map((id) => fetchRun(id)))
   const merged: GenerationCandidate[] = []
+  let failedBatches = 0
   settled.forEach((result, index) => {
-    if (result.status !== 'fulfilled') return
+    if (result.status !== 'fulfilled') {
+      failedBatches += 1
+      return
+    }
     const out = result.value
     // 测试/旧接口可能没回 run.id：退回发起请求时的批次 id
     const batchRunId = out.run.id ?? runIds[index]
@@ -402,12 +438,14 @@ async function fetchRowItems(record: GenerationRunBrief): Promise<GenerationCand
     }
   })
   if (merged.length === 0) throw new Error('候选图读取失败')
-  return merged
+  return { items: merged, failedBatches }
 }
 
 async function loadDetail(record: GenerationRunBrief): Promise<void> {
   const rowId = record.id
-  if (!details[rowId]) details[rowId] = { items: [], loading: false, error: null }
+  if (!details[rowId]) {
+    details[rowId] = { items: [], loading: false, error: null, failedBatches: 0 }
+  }
   //必须从 reactive 容器里读回 **proxy** 再改：直接改赋进去的原始对象不会触发更新
   // （踩过：展开行一直显示「这里没有候选图」还转圈）
   const state = details[rowId]
@@ -415,20 +453,32 @@ async function loadDetail(record: GenerationRunBrief): Promise<void> {
   state.loading = true
   state.error = null
   try {
-    state.items = await fetchRowItems(record)
+    const result = await fetchRowItems(record)
+    state.items = result.items
+    state.failedBatches = result.failedBatches
   } catch {
     // 详情拉不到不影响看列表：展开行给一句提示即可
     state.error = '候选图读取失败（批次可能已被清理）'
     state.items = []
+    state.failedBatches = 0
   } finally {
     state.loading = false
   }
 }
 
-/** Arco 的 @expand 签名是 (rowKey: string|number, record: TableData)：这里做一次窄化 */
-function onExpandRow(_rowKey: string | number, record: Record<string, unknown>): void {
-  onExpand(record as unknown as GenerationRunBrief, true)
-  void loadReferenceThumbs(record as unknown as GenerationRunBrief)
+/** 受控展开行：只有从「未展开」变为「展开」时才拉详情，收起不重复请求 */
+const expandedRowKeys = ref<Array<string | number>>([])
+
+function handleExpandedChange(keys: Array<string | number>): void {
+  const previous = new Set(expandedRowKeys.value.map(String))
+  expandedRowKeys.value = keys
+  for (const key of keys) {
+    if (previous.has(String(key))) continue
+    const record = props.history.find((item) => String(item.id) === String(key))
+    if (!record) continue
+    void loadDetail(record)
+    void loadReferenceThumbs(record)
+  }
 }
 
 /** 参考素材缩略图（按行缓存）：用于「按参考素材聚合」的入口 */
@@ -436,9 +486,7 @@ const refThumbs = reactive<Record<number, Array<{ id: string; url: string }>>>({
 
 async function loadReferenceThumbs(record: GenerationRunBrief): Promise<void> {
   if (refThumbs[record.id]) return
-  const ids = Array.isArray(record.params?.reference_ids)
-    ? (record.params?.reference_ids as unknown[]).map(String).filter(Boolean)
-    : []
+  const ids = referenceIds(record)
   if (!ids.length) return
   refThumbs[record.id] = [] // 占位，避免重复请求
   try {
@@ -449,18 +497,31 @@ async function loadReferenceThumbs(record: GenerationRunBrief): Promise<void> {
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
       .map((item) => ({
         id: item.id,
-        url: item.thumbnail_path
-          ? `/api/files/${item.thumbnail_path.split('/').map(encodeURIComponent).join('/')}`
-          : `/api/files/${item.file_path.split('/').map(encodeURIComponent).join('/')}`,
+        url: getFileUrl(item.thumbnail_path || item.file_path),
       }))
   } catch {
-    refThumbs[record.id] = []
+    // 失败不缓存占位：下次展开可以重试
+    delete refThumbs[record.id]
   }
 }
 
-function onExpand(record: GenerationRunBrief, expanded: boolean): void {
-  if (expanded && !details[record.id]?.items.length) void loadDetail(record)
-}
+/** 当前页刷新后：清掉已不在列表里的行缓存，并剔除失效的对比选择 */
+watch(
+  () => props.history.map((item) => item.id).join(','),
+  () => {
+    const ids = new Set(props.history.map((item) => item.id))
+    for (const key of Object.keys(details)) {
+      if (!ids.has(Number(key))) delete details[Number(key)]
+    }
+    for (const key of Object.keys(pickedByRun)) {
+      if (!ids.has(Number(key))) delete pickedByRun[Number(key)]
+    }
+    for (const key of Object.keys(refThumbs)) {
+      if (!ids.has(Number(key))) delete refThumbs[Number(key)]
+    }
+    comparePicked.value = comparePicked.value.filter((id) => ids.has(id))
+  },
+)
 
 /** 勾选/取消某张候选（已入库的不可选：后端会按哈希去重，前端不该给这个选项） */
 function togglePick(rowId: number, selectKey: string): void {
@@ -499,7 +560,7 @@ function submitImport(rowId: number): void {
 /** 入库成功后由视图调它清空勾选（并刷新行数据） */
 function resetPicked(rowId: number): void {
   pickedByRun[rowId] = []
-  details[rowId] = { items: [], loading: false, error: null }
+  details[rowId] = { items: [], loading: false, error: null, failedBatches: 0 }
   // 重新拉一次详情：否则仍展开的行会停在「这里没有候选图」的空态（图其实还在）
   const record = props.history.find((item) => item.id === rowId)
   if (record) void loadDetail(record)
@@ -525,10 +586,13 @@ function canImport(record: GenerationRunBrief): boolean {
  * 两种情况都回抛 `import-selected`，由视图统一调确认入库接口并刷新。
  */
 async function openImportDialog(record: GenerationRunBrief): Promise<void> {
-  if (preparingImportId.value !== null) return
+  if (preparingImportId.value !== null || props.importing) return
   preparingImportId.value = record.id
   try {
-    const items = await fetchRowItems(record)
+    const { items, failedBatches } = await fetchRowItems(record)
+    if (failedBatches > 0) {
+      Message.warning(`有 ${failedBatches} 个批次读取失败，当前只能看到并入库成功读取的部分`)
+    }
     const selectable = items.filter((item) => !item.imported)
     if (!selectable.length) {
       Message.info(
@@ -537,8 +601,13 @@ async function openImportDialog(record: GenerationRunBrief): Promise<void> {
       return
     }
     if (selectable.length === 1) {
+      const only = selectable[0]
+      if (only.run_id == null) {
+        Message.error('候选图缺少批次信息，无法入库')
+        return
+      }
       emit('import-selected-batch', record.id, [
-        { run_id: selectable[0].run_id as number, filenames: [selectable[0].filename] },
+        { run_id: only.run_id, filenames: [only.filename] },
       ])
       return
     }
@@ -567,16 +636,21 @@ function onImportDialogConfirm(files: Array<{ run_id: number; filename: string }
   )
 }
 
-/** 入库后视图刷新了历史：关掉弹窗（避免对着旧候选再点一次） */
-watch(
-  () => props.history,
-  () => {
-    if (importDialogVisible.value) importDialogVisible.value = false
-  },
-)
+/** 关闭入库弹窗：由视图在确认入库成功后调用，避免刷新历史时误关 */
+function closeImportDialog(): void {
+  importDialogVisible.value = false
+  importDialogRunId.value = null
+  importDialogItems.value = []
+}
 
-// 暴露给视图（入库后清勾选）与测试（日期换算的边界：Arco 弹层在 jsdom 里不稳定）
-defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
+// 暴露给视图（入库后清勾选/关弹窗）与测试（日期换算的边界：Arco 弹层在 jsdom 里不稳定）
+defineExpose({
+  resetPicked,
+  onDateRangeChange,
+  closeMetaEditor,
+  resetMetaSaving,
+  closeImportDialog,
+})
 </script>
 
 <template>
@@ -614,9 +688,9 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
     :pagination="false"
     row-key="id"
     size="small"
-    :scroll="{ x: 1480 }"
-    :expandable="{ width: 40 }"
-    @expand="onExpandRow"
+    :scroll="{ x: 1680 }"
+    :expandable="{ width: 40, expandedRowKeys }"
+    @expanded-change="handleExpandedChange"
   >
     <template #columns>
       <a-table-column title="#" data-index="id" :width="64" />
@@ -627,9 +701,11 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
             size="mini"
             type="text"
             :title="record.favorite ? '取消收藏（之后会按保留期清理）' : '收藏（图不会被自动清理）'"
+            :aria-label="record.favorite ? '取消收藏' : '收藏'"
+            :aria-pressed="record.favorite"
             class="gh-star"
             :class="{ 'is-on': record.favorite }"
-            @click="emit('toggle-favorite', record.id, !record.favorite)"
+            @click="emit('toggle-favorite', rowRunIds(record), !record.favorite)"
           >
             {{ record.favorite ? '★' : '☆' }}
           </a-button>
@@ -694,8 +770,11 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
             size="small"
             color="green"
             class="gh-imported"
+            role="button"
+            tabindex="0"
             :title="`查看这批入库的 ${record.imported_count} 张素材`"
             @click="emit('open-imported', record.id)"
+            @keydown.enter="emit('open-imported', record.id)"
           >
             已入库 {{ record.imported_count }}
           </a-tag>
@@ -750,6 +829,7 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
             type="primary"
             style="margin-left: 6px"
             :loading="preparingImportId === record.id"
+            :disabled="importing"
             title="默认全部入库；有多张候选时弹窗选择"
             @click="openImportDialog(record)"
           >
@@ -757,14 +837,14 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
           </a-button>
           <!-- 只对已结束的批次给删除：运行中的批次后端会拒绝（400），按钮不显示更清楚 -->
           <a-popconfirm
-            v-if="['done', 'failed', 'cancelled'].includes(record.status)"
+            v-if="TERMINAL_STATUSES.includes(record.status as (typeof TERMINAL_STATUSES)[number])"
             :content="
               isGroupRow(record)
                 ? `删除本次多姿态的 ${rowRunIds(record).length} 个批次及其候选图？`
                 : '删除这条生成记录及其候选图？（只清理本批次的候选文件）'
             "
             ok-text="删除"
-            @ok="emit('remove', record.id)"
+            @ok="emit('remove', record.id, rowRunIds(record))"
           >
             <a-button
               size="mini"
@@ -849,32 +929,38 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
               <div v-if="details[record.id]?.error" class="ghd-error">
                 {{ details[record.id]?.error }}
               </div>
-              <div v-else-if="!(details[record.id]?.items || []).length" class="gen-history-hint">
-                这里没有候选图（可能已入库并清理，或还没生成完）
-              </div>
-              <div v-else class="ghd-cand-grid">
-                <label
-                  v-for="item in details[record.id]?.items || []"
-                  :key="candidateKey(item)"
-                  class="ghd-cand"
-                  :class="{ 'is-imported': item.imported }"
-                >
-                  <!-- 悬停自动放大预览（候选图原图较大，预览用 ?w=1024 缩略图） -->
-                  <HoverImagePreview
-                    :src="item.url"
-                    :large-src="candidateUrl(item.run_id ?? record.id, item.filename, 1024)"
-                    :alt="item.filename"
-                    :delay="120"
-                  />
-                  <span class="ghd-cand-seed">{{ seedText(item.seed) }}</span>
-                  <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
-                  <a-checkbox
-                    v-else
-                    :model-value="(pickedByRun[record.id] || []).includes(candidateKey(item))"
-                    @change="togglePick(record.id, candidateKey(item))"
-                  />
-                </label>
-              </div>
+              <template v-else>
+                <div v-if="details[record.id]?.failedBatches" class="ghd-error">
+                  有
+                  {{ details[record.id]?.failedBatches }} 个批次读取失败，下面只显示成功读取的部分。
+                </div>
+                <div v-if="!(details[record.id]?.items || []).length" class="gen-history-hint">
+                  这里没有候选图（可能已入库并清理，或还没生成完）
+                </div>
+                <div v-else class="ghd-cand-grid">
+                  <label
+                    v-for="item in details[record.id]?.items || []"
+                    :key="candidateKey(item)"
+                    class="ghd-cand"
+                    :class="{ 'is-imported': item.imported }"
+                  >
+                    <!-- 悬停自动放大预览（候选图原图较大，预览用 ?w=1024 缩略图） -->
+                    <HoverImagePreview
+                      :src="item.url"
+                      :large-src="candidateUrl(item.run_id ?? record.id, item.filename, 1024)"
+                      :alt="item.filename"
+                      :delay="120"
+                    />
+                    <span class="ghd-cand-seed">{{ seedText(item.seed) }}</span>
+                    <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
+                    <a-checkbox
+                      v-else
+                      :model-value="(pickedByRun[record.id] || []).includes(candidateKey(item))"
+                      @change="togglePick(record.id, candidateKey(item))"
+                    />
+                  </label>
+                </div>
+              </template>
             </a-spin>
             <div v-if="(details[record.id]?.items || []).length" class="ghd-cand-actions">
               <span class="gen-history-hint">
@@ -887,7 +973,8 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
                 size="mini"
                 type="primary"
                 :loading="importing"
-                :disabled="pickCount(record.id) === 0"
+                :disabled="!canImport(record) || pickCount(record.id) === 0"
+                :title="canImport(record) ? '只入库勾选的候选图' : '仅已完成批次可入库'"
                 @click="submitImport(record.id)"
               >
                 入库选中
@@ -908,7 +995,7 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
 
   <!-- 服务端分页：total 来自接口（筛选后的总数），不是本地数组长度 -->
   <a-pagination
-    v-if="total > size"
+    v-if="total > size || page > 1"
     class="gh-pagination"
     :current="page"
     :page-size="size"
@@ -949,7 +1036,15 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
       />
       <div class="gh-meta-actions">
         <a-button size="small" @click="metaEditing = null">取消</a-button>
-        <a-button size="small" type="primary" @click="saveMeta">保存</a-button>
+        <a-button
+          size="small"
+          type="primary"
+          :loading="metaSaving"
+          :disabled="metaSaving"
+          @click="saveMeta"
+        >
+          保存
+        </a-button>
       </div>
     </div>
   </a-modal>

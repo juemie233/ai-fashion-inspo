@@ -30,11 +30,11 @@ const router = useRouter()
 /** 删除某条生成记录（连同批次目录里的候选图）；已入库的素材不受影响 */
 const deletingId = ref<number | null>(null)
 
-async function removeRun(id: number) {
+async function removeRun(id: number, runIdsOverride?: number[]) {
   deletingId.value = id
   // 多姿态合并行：删除整组（逐批调用删除接口，底层批次仍各自独立）
   const row = history.value.find((item) => item.id === id)
-  const runIds = row?.run_ids?.length ? row.run_ids : [id]
+  const runIds = runIdsOverride?.length ? runIdsOverride : row?.run_ids?.length ? row.run_ids : [id]
   try {
     let removedFiles = 0
     for (const runId of runIds) {
@@ -168,9 +168,16 @@ function touchHistory(): void {
 const paramForm = ref<InstanceType<typeof GenerateParamForm> | null>(null)
 
 /** 收藏切换（收藏的批次不会被过期清理） */
-async function onToggleFavorite(runId: number, favorite: boolean): Promise<void> {
-  const ok = await updateRunMeta(runId, { favorite })
-  if (ok) Message.success(favorite ? '已收藏（图不会被自动清理）' : '已取消收藏')
+async function onToggleFavorite(runIds: number[], favorite: boolean): Promise<void> {
+  // 多姿态合并行：整组一起收藏/取消，避免只保住其中一个批次
+  const results = await Promise.all(runIds.map((runId) => updateRunMeta(runId, { favorite })))
+  if (results.every(Boolean)) {
+    Message.success(
+      favorite
+        ? `已收藏 ${runIds.length} 个批次（图不会被自动清理）`
+        : `已取消收藏 ${runIds.length} 个批次`,
+    )
+  }
 }
 
 /** 保存命名 / 备注（表格的标注弹窗回抛） */
@@ -183,6 +190,9 @@ async function onSaveHistoryMeta(
     // 成功后才关弹窗：失败时保留用户输入（错误由 composable 弹 Message）
     historyTable.value?.closeMetaEditor()
     Message.success('标注已保存')
+  } else {
+    // 解除保存按钮 loading，保留弹窗让用户重试
+    historyTable.value?.resetMetaSaving()
   }
 }
 
@@ -281,6 +291,7 @@ async function onImportFromHistory(
       Message.info('选中的图都已入库过了（按内容哈希去重）')
     }
     historyTable.value?.resetPicked(rowId)
+    historyTable.value?.closeImportDialog()
     await refreshHistory()
   } catch (e) {
     Message.error(getApiErrorMessage(e, '入库失败'))

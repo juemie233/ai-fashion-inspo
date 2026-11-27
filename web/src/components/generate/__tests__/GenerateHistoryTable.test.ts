@@ -615,7 +615,7 @@ describe('生成历史表 · 标注与统计', () => {
     await wrapper.vm.$nextTick()
 
     await wrapper.find('.gh-star').trigger('click')
-    expect(wrapper.emitted('toggle-favorite')?.[0]).toEqual([12, true])
+    expect(wrapper.emitted('toggle-favorite')?.[0]).toEqual([[12], true])
 
     wrapper.unmount()
   })
@@ -886,6 +886,63 @@ describe('生成历史表 · 标注与统计', () => {
     // 没点保存：不应该回抛 save-meta
     expect(wrapper.emitted('save-meta')).toBeUndefined()
 
+    wrapper.unmount()
+  })
+})
+
+// ── 审查修复：多姿态收藏范围 / 部分批次失败 / 收起不重复请求 / 分页兜底 ──
+
+describe('生成历史表 · 展开与多姿态边界', () => {
+  beforeEach(() => {
+    mocks.fetchRun.mockReset()
+    mocks.fetchRun.mockResolvedValue({ run: {}, items: [], task: null })
+    document.body.innerHTML = ''
+  })
+
+  it('多姿态合并行收藏时回抛全部底层批次', async () => {
+    const wrapper = mountTable(record({ id: 12, run_ids: [12, 13] }))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('.gh-star').trigger('click')
+    expect(wrapper.emitted('toggle-favorite')?.[0]).toEqual([[12, 13], true])
+    wrapper.unmount()
+  })
+
+  it('部分批次读取失败时在展开行提示失败数', async () => {
+    mocks.fetchRun.mockImplementation((id: number) =>
+      id === 12
+        ? Promise.resolve({
+            run: {},
+            items: [{ filename: 'ok.png', index: 1, seed: 1, imported: false, url: '/u/ok' }],
+            task: null,
+          })
+        : Promise.reject(new Error('batch gone')),
+    )
+    const wrapper = mountTable(record({ id: 12, run_ids: [12, 13] }))
+    await wrapper.vm.$nextTick()
+    await expandFirstRow(wrapper)
+
+    expect(wrapper.text()).toContain('1 个批次读取失败')
+    expect(wrapper.findAll('.ghd-cand')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('收起展开行不重复拉详情', async () => {
+    const wrapper = mountTable(record())
+    await wrapper.vm.$nextTick()
+    await expandFirstRow(wrapper)
+    expect(mocks.fetchRun).toHaveBeenCalledTimes(1)
+
+    await wrapper.find('.arco-table-expand-btn').trigger('click')
+    await flushPromises()
+    expect(mocks.fetchRun).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('total 小于等于 size 但当前页大于 1 时仍显示分页器', async () => {
+    const wrapper = mountTable(record(), { total: 20, size: 20, page: 2 })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.arco-pagination').exists()).toBe(true)
     wrapper.unmount()
   })
 })
