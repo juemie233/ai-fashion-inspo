@@ -18,6 +18,7 @@
 """
 
 import uuid
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -149,7 +150,7 @@ def detect_screenshot_features(path) -> dict:
 
     方法：把图片统一缩放到 64 宽后逐行统计「行内颜色多样度」（量化后唯一
     颜色占比）。
-    - 状态栏特征：顶部区域存在「多样度 0.02~0.3 的行簇」（纯色背景上的
+    - 状态栏特征：顶部区域存在「多样度 0.1~0.3 的行簇」（纯色背景上的
       时间/信号图标），且其下方在合理范围内过渡到多样度更高的内容区。
     - 底部特征：底部最后几行为近纯色（手势条/导航栏），其上方为内容区。
     两个特征都用于区分「手机系统截图」与「普通竖图/纯色模板」：
@@ -270,32 +271,55 @@ def detect_content_bounds(path) -> dict:
         return result
 
 
-def _save_cropped_image(cropped: Image.Image, src: Image.Image, tmp) :
-    """把裁剪结果写入同目录临时文件（保留原格式，不可写回时降级 JPEG）。
+def _save_cropped_image(cropped: Image.Image, src: Image.Image, tmp: Path) -> Path:
+    """把裁剪结果写入同目录临时文件（保留原格式，只有格式不可写回时才降级 JPEG）。
 
-    参数:
-        cropped: 裁剪后的 PIL 图像
-        src: 原图（用于读取原始格式）
-        tmp: 目标临时文件路径
+    画质/元数据：
+    - JPEG 保持 quality=95 / 4:4:4；
+    - WebP 有损时 quality=95，源文件为无损 WebP 时继续 lossless；
+    - 带 ICC 配置时一并写入，避免 iPhone Display P3 裁剪后偏色。
 
-    返回:
-        实际写入的临时文件路径（降级 JPEG 时后缀会变为 .jpg）
+    降级：
+    - 只对「PIL 写该格式不支持」降级，磁盘满/权限错误等普通 I/O 错误原样抛出；
+    - RGBA/P 模式先合成到白底再写 JPEG；
+    - 降级写入失败时同时清理尝试过的 .jpg 临时文件。
     """
-    fmt = src.format or "JPEG"
+    tmp = Path(tmp)
+    fmt = (src.format or "JPEG").upper()
     save_kwargs: dict = {}
     if fmt == "JPEG":
         save_kwargs = {"quality": 95, "subsampling": 0, "optimize": True}
+    elif fmt == "WEBP":
+        # PIL 的 WebP 保存默认有损；源图信息里的 lossless 标记优先保留
+        if bool(src.info.get("lossless")):
+            save_kwargs = {"lossless": True, "quality": 100, "method": 6}
+        else:
+            save_kwargs = {"quality": 95, "method": 6}
+    icc_profile = src.info.get("icc_profile")
+    if icc_profile:
+        save_kwargs["icc_profile"] = icc_profile
     try:
         cropped.save(tmp, format=fmt, **save_kwargs)
-    except (ValueError, OSError):
-        # 个别格式（如 MPO）PIL 无法写回，降级为 JPEG；后缀同步改为 .jpg，
-        # 避免文件扩展名与实际内容格式不一致导致前端解码失败
-        if fmt == "JPEG":
+        return tmp
+    except (ValueError, OSError) as exc:
+        # 磁盘满/权限/文件被占用等普通 I/O 错误必须原样抛出，不能悄悄改有损 JPEG
+        if fmt == "JPEG" or getattr(exc, "errno", None) in (5, 13, 28):
+            tmp.unlink(missing_ok=True)
             raise
         tmp.unlink(missing_ok=True)
-        tmp = tmp.with_suffix(".jpg")
-        cropped.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True)
-    return tmp
+        fallback = tmp.with_suffix(".jpg")
+        try:
+            rgb = cropped
+            if rgb.mode not in ("RGB", "L"):
+                rgba = rgb.convert("RGBA")
+                background = Image.new("RGB", rgba.size, (255, 255, 255))
+                background.paste(rgba, mask=rgba.getchannel("A"))
+                rgb = background
+            rgb.save(fallback, format="JPEG", quality=95, subsampling=0, optimize=True)
+            return fallback
+        except Exception:
+            fallback.unlink(missing_ok=True)
+            raise
 
 
 def crop_image_to_temp(path, top_frac: float, bottom_frac: float):
@@ -320,6 +344,8 @@ def crop_image_to_temp(path, top_frac: float, bottom_frac: float):
     tmp = path.with_name(f"{path.stem}_crop_{uuid.uuid4().hex}{path.suffix}")
     try:
         with Image.open(path) as src:
+            if getattr(src, "n_frames", 1) > 1:
+                raise ValueError("动图不支持裁剪（会丢失其余帧），请先转为静态图")
             img = ImageOps.exif_transpose(src)
             width, height = img.size
             top = round(height * top_frac)
@@ -360,6 +386,8 @@ def crop_region_to_temp(path, y1_ratio: float, y2_ratio: float):
     tmp = path.with_name(f"{path.stem}_crop_{uuid.uuid4().hex}{path.suffix}")
     try:
         with Image.open(path) as src:
+            if getattr(src, "n_frames", 1) > 1:
+                raise ValueError("动图不支持裁剪（会丢失其余帧），请先转为静态图")
             img = ImageOps.exif_transpose(src)
             width, height = img.size
             top = round(height * y1_ratio)
@@ -409,7 +437,8 @@ def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
     # 残留估算的 UI 证据语义——bottom_bar（底部近纯色行，摄影棚白底/暗部
     # 照片极易命中）不再单独构成放宽残留门槛的证据
     glyph = _glyph_evidence(img)
-    ui_evidence = features.get("top_bar", False) or glyph["found"]
+    # 只有强字形证据才放宽残留门槛；found 可能只是水印/饰品等单个弱块
+    ui_evidence = features.get("top_bar", False) or glyph["strong"]
     try:
         bounds = _content_bounds_from_small(small96, ui_evidence=ui_evidence)
         bounds["bounds_valid"] = True
@@ -430,6 +459,7 @@ def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
                 "kind": "glyph_only",
                 "already_cropped": False,
                 "residual_top_frac": 0.0,
+                "residual_bottom_frac": 0.0,
                 "bounds_valid": False,
                 "glyph_top_frac": glyph_top,
                 "glyph_strong": glyph["strong"],

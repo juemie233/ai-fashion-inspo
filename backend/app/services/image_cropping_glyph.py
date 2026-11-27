@@ -25,8 +25,14 @@
 可脱离 FastAPI/DB 用合成图直测。
 """
 
+import logging
+from typing import Any
+
 import numpy as np
 from PIL import Image
+
+logger = logging.getLogger(__name__)
+_SCIPY_WARNED = False
 
 # ── 顶部状态栏字形证据检测（glyph）──
 # 行多样度剖面的原理性盲区：透明叠加状态栏（图标直接叠在照片上）没有「低多
@@ -96,13 +102,14 @@ def _right_icon_supports(g: tuple, glyphs: list[tuple], w: int) -> bool:
     return False
 
 
-def _glyph_top_frac(bottom_row: int, h: int) -> float:
+def _glyph_top_frac(bottom_row: int, strip_h: int, full_h: int | None = None) -> float:
     """字形底行 → 建议裁剪比例（占全图高度，带上限 ``_GLYPH_TOP_FRAC_CAP``）。
 
-    该公式原在 :func:`_glyph_evidence` 里重复三次（弱证据 / 正常返回 /
-    无 scipy 兜底），收敛到一处避免改余量或上限时漏改。
+    矮图上条带高度会被 ``max(12, H*0.10)`` 抬高；用真实 strip_h/full_h 换算，
+    避免名义 10% 在小图上偏小。
     """
-    return min(_GLYPH_TOP_FRAC_CAP, (bottom_row + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION)
+    image_h = full_h if full_h and full_h > 0 else strip_h
+    return min(_GLYPH_TOP_FRAC_CAP, (bottom_row + _GLYPH_MARGIN_ROWS) / image_h)
 
 
 def _glyph_time_signature(
@@ -192,8 +199,8 @@ def _glyph_time_signature(
 def _glyph_strip_features(img: "Image.Image") -> tuple:
     """取顶部条带并算出字形检测所需的灰度/前景/饱和度：
 
-    返回 (灰度 arr, 前景掩码 fg, 前景占比 fg_ratio, 条带饱和度 strip_sat, h, w) ——
-    h/w 是条带在分析宽度下的像素尺寸（不是原图尺寸）。
+    返回 (灰度 arr, 前景掩码 fg, 前景占比 fg_ratio, 条带饱和度 strip_sat, h, w, full_h) ——
+    h/w 是条带在分析宽度下的像素尺寸，full_h 是原图高度（建议比例用）。
 
     前景 = 「像素 − 5×5 均值」的局部对比二值化结果（cumsum 实现盒均值，
     条带很小、开销可忽略）。饱和度单独取出用于拒绝彩色照片顶部。
@@ -222,7 +229,7 @@ def _glyph_strip_features(img: "Image.Image") -> tuple:
     blur = box / 25.0
     fg = np.abs(arr - blur) > _GLYPH_CONTRAST
     fg_ratio = float(fg.mean())
-    return arr, fg, fg_ratio, strip_sat, h, w
+    return arr, fg, fg_ratio, strip_sat, h, w, H
 
 
 def _collect_glyph_components(fg: "np.ndarray", h: int, w: int, reject, bg_std) -> tuple:
@@ -293,7 +300,7 @@ def _collect_glyph_components(fg: "np.ndarray", h: int, w: int, reject, bg_std) 
     return glyphs, budget_exceeded, num
 
 
-def _glyph_fallback_profile(fg: "np.ndarray", h: int, w: int) -> tuple:
+def _glyph_fallback_profile(fg: "np.ndarray", h: int, w: int, full_h: int) -> tuple:
     """无 scipy 时的兜底：列密度剖面（两角有前景、中部稀疏）。
 
     返回 (found, top_frac, note)；判不出前景时为 (False, 0.0, 原因)。
@@ -309,7 +316,7 @@ def _glyph_fallback_profile(fg: "np.ndarray", h: int, w: int) -> tuple:
     nz = np.nonzero(rows > 0.02)[0]
     if len(nz) == 0:
         return False, 0.0, "无 scipy：无前景行"
-    top_frac = _glyph_top_frac(int(nz[-1]), h)
+    top_frac = _glyph_top_frac(int(nz[-1]), h, full_h)
     return True, top_frac, "无 scipy：列剖面兜底"
 
 
@@ -353,14 +360,18 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         strong = 左右两角字形齐备（高置信，可默认勾选）；top_frac 为建议
         裁剪比例（字形底部 + 余量，占全图高度），未检出时为 0。
     """
-    arr, fg, fg_ratio, strip_sat, h, w = _glyph_strip_features(img)
+    arr, fg, fg_ratio, strip_sat, h, w, full_h = _glyph_strip_features(img)
 
     glyphs: list[tuple[int, int, int, int, int, float]] = []
     rejected: list[dict] = []  # 调试：被剔除的连通域及原因
 
     def _result(found: bool, strong: bool, top_frac: float, note: str = "") -> dict:
         """构造返回字典；debug 模式附带判定过程明细。"""
-        out = {"found": found, "strong": strong, "top_frac": round(top_frac, 6)}
+        out: dict[str, Any] = {
+            "found": found,
+            "strong": strong,
+            "top_frac": round(top_frac, 6),
+        }
         if debug:
             band_top = min((g[2] for g in glyphs), default=0)
             out["debug"] = {
@@ -386,7 +397,7 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         return out
 
     def _bg_stats(x0: int, x1: int, y0: int, y1: int, pad: int = 4) -> tuple[float, int]:
-        """统计连通域「外扩一圈」的背景灰度标准差（调试用）。
+        """统计连通域「外扩一圈」的背景灰度标准差（strong 判定也用它）。
 
         真实状态栏字形印在平滑背景上（系统栏底色/半透明叠加），字形周围
         灰度方差极小；照片边缘（发丝/饰品/衣料轮廓）周围是纹理，方差大。
@@ -444,12 +455,18 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         #   宽度过滤拒绝
         if budget_exceeded:
             # 弱证据：内容过于杂乱，时间签名不可靠，不默认勾选
-            top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h)
+            top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h, full_h)
             return _result(True, False, top_frac, "超连通域预算 → 弱证据")
         strong, strong_note = _glyph_time_signature(glyphs, fg, h, w)
-        top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h)
+        top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h, full_h)
         return _result(True, strong, top_frac, strong_note)
     except ImportError:
         # 无 scipy：列密度剖面兜底（两角有前景、中部稀疏）
-        found, top_frac, note = _glyph_fallback_profile(fg, h, w)
+        global _SCIPY_WARNED
+        if not _SCIPY_WARNED:
+            _SCIPY_WARNED = True
+            logger.warning(
+                "scipy 未安装：字形检测降级为列密度兜底（弱证据，不同环境检出行为会变化）"
+            )
+        found, top_frac, note = _glyph_fallback_profile(fg, h, w, full_h)
         return _result(found, False, top_frac, note)

@@ -1,7 +1,9 @@
 """裁剪服务主流程测试：上传→扫描→应用、去重、备份与图片处理。"""
 
 from io import BytesIO
+
 import numpy as np
+import pytest
 from PIL import Image
 from app.config import settings
 from app.services.crop_service import (
@@ -655,3 +657,65 @@ def test_parse_bar_answer_variants():
     assert _parse_bar_answer('{"bar": "是"}') is None  # 非布尔值 → 未知
     assert _parse_bar_answer("BAR TRUE") is None  # 无引号/冒号结构，不误判
     assert _parse_bar_answer("") is None
+
+
+def test_content_bounds_gap_uses_first_content_row():
+    """内容区有缺口时，上界取该段第一个内容行，而不是落进缺口内部。"""
+    from app.services.image_cropping_content import _content_bounds
+
+    d = np.zeros(30, dtype=np.float32)
+    d[[10, 13, 14]] = 0.30
+    top, bottom = _content_bounds(d)
+    assert top == 10
+    assert bottom == 14
+
+
+def test_row_quantization_matches_between_profiles_and_diversity():
+    """两套行多样度实现必须同口径：纯白 255 也只落 15 档（不再多出第 17 档）。"""
+    from PIL import Image
+    from app.services.image_cropping_content import (
+        _profiles_from_small,
+        _row_diversity,
+    )
+
+    img = Image.new("RGB", (96, 20), (255, 255, 255))
+    _, _, diversity = _profiles_from_small(img)
+    row = _row_diversity(img, 96)
+    assert np.allclose(diversity, row)
+
+
+def test_glyph_top_frac_uses_real_strip_ratio_on_short_image():
+    """矮图条带被 max(12, H*0.1) 抬高时，建议比例要按真实条带/全高换算。"""
+    from app.services.image_cropping_glyph import _glyph_top_frac
+
+    # 100px 高图：条带 12px，字形底行 5 → 建议约 7/100，而不是 7/12*0.1
+    assert abs(_glyph_top_frac(5, 12, 100) - 0.07) < 1e-9
+
+
+def test_crop_rejects_animated_gif(tmp_path):
+    """动图裁剪会丢帧：入口直接拒绝，不产生临时文件。"""
+    from PIL import Image
+
+    frames = [Image.new("RGB", (20, 20), color) for color in ((255, 0, 0), (0, 255, 0))]
+    p = tmp_path / "anim.gif"
+    frames[0].save(p, save_all=True, append_images=frames[1:], duration=100, loop=0)
+
+    with pytest.raises(ValueError, match="动图"):
+        crop_image_to_temp(p, 0.1, 0.1)
+    assert not list(tmp_path.glob("*_crop_*"))
+
+
+def test_save_cropped_image_keeps_icc_profile(tmp_path):
+    """WebP 裁剪保留 ICC，避免 iPhone P3 照片裁剪后偏色。"""
+    from PIL import Image
+    from app.services.image_cropping import _save_cropped_image
+
+    src_path = tmp_path / "src.webp"
+    Image.new("RGB", (20, 20), (180, 40, 30)).save(
+        src_path, "WEBP", quality=90, icc_profile=b"fake-icc"
+    )
+    with Image.open(src_path) as src:
+        cropped = src.convert("RGB").crop((0, 0, 10, 10))
+        out = _save_cropped_image(cropped, src, tmp_path / "out.webp")
+    with Image.open(out) as saved:
+        assert saved.info.get("icc_profile") == b"fake-icc"

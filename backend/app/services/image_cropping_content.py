@@ -34,7 +34,6 @@ _CONTENT_MIN_RUN = 3  # 内容区起始的最小连续行数（防单行噪声�
 _CONTENT_MAX_GAP = 5  # 内容区内部允许的最大缺口行数（照片纯色块/暗部）
 # 状态栏修正窗口/阈值（详见 _status_bar_correction / _residual_top_estimate）
 _STATUS_BAR_MED = 0.25
-_STATUS_BAR_RATIO = 1.25
 _STATUS_BAR_SCAN_FRACTION = 0.08
 _STATUS_BAR_SEARCH_FRACTION = 0.2
 _RESIDUAL_MED = 0.28
@@ -146,31 +145,42 @@ def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:
     # 上界：向下扫描，缺口内续接；连续内容达到 MIN_RUN 即定为起点
     top_edge: int | None = None
     run = 0
+    run_start = 0
     last_content: int | None = None
     for y in range(n):
         if content[y]:
-            if last_content is None or (y - last_content - 1) <= _CONTENT_MAX_GAP:
+            if last_content is None:
+                run = 1
+                run_start = y
+            elif (y - last_content - 1) <= _CONTENT_MAX_GAP:
                 run += 1
             else:
                 run = 1
+                run_start = y
             last_content = y
             if run >= _CONTENT_MIN_RUN:
-                top_edge = last_content - run + 1
+                # 取本段第一个内容行，而不是用 last-run+1 反推（有缺口时会落进缺口）
+                top_edge = run_start
                 break
 
     # 下界：向上扫描对称处理
     bottom_edge: int | None = None
     run = 0
+    run_end = n - 1
     last_content = None
     for y in range(n - 1, -1, -1):
         if content[y]:
-            if last_content is None or (last_content - y - 1) <= _CONTENT_MAX_GAP:
+            if last_content is None:
+                run = 1
+                run_end = y
+            elif (last_content - y - 1) <= _CONTENT_MAX_GAP:
                 run += 1
             else:
                 run = 1
+                run_end = y
             last_content = y
             if run >= _CONTENT_MIN_RUN:
-                bottom_edge = last_content + run - 1
+                bottom_edge = run_end
                 break
     return top_edge, bottom_edge
 
@@ -240,7 +250,7 @@ def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
     """状态栏修正：顶部内容簇多样度显著低于后续内容区时，视为状态栏并后移边界。
 
     仅处理未裁截图场景（top_edge > 0）：纯色背景（多样度 < 0.1）→ 状态栏
-    图标行簇（多样度 0.15~0.24，极薄）→ 内容区。已裁截图的顶格残留
+    图标行簇（多样度 0.10~0.25，极薄）→ 内容区。已裁截图的顶格残留
     （top_edge=0）由 _residual_top_estimate 单独估算，不并入本函数。
 
     判定规则：首区段（顶部 8% 窗口内）多样度中位 < 0.25、且区段前一行属
@@ -366,7 +376,7 @@ def _ui_band_valid(
 
 def _top_band_analysis(
     diversity: "np.ndarray",
-    saturation: "np.ndarray | None",
+    saturation: np.ndarray,
     top_edge_raw: int,
     ui_evidence: bool,
     n: int,
@@ -386,7 +396,15 @@ def _top_band_analysis(
     correction = False
     top_frac = 0.0
     top_band_valid = False
-    if top_edge_raw > 0:
+    band_sat = (
+        float(np.median(saturation[0:top_edge_raw]))
+        if saturation is not None and top_edge_raw > 0
+        else 0.0
+    )
+    # 高饱和拒绝对「有/无截图证据」统一生效：证据越少保护不能越弱
+    if top_edge_raw > 0 and saturation is not None and band_sat > _UI_BAND_SAT_MAX:
+        top_band_valid = False
+    elif top_edge_raw > 0:
         if ui_evidence:
             # 有截图证据（状态栏/导航栏特征）：低饱和条带（sat≤0.15）比照片
             # 渐变可信，允许更小的多样度跃变（内容区多样度本身低的截图——
@@ -440,6 +458,7 @@ def _top_band_analysis(
 def _bottom_band_analysis(
     diversity: "np.ndarray",
     brightness: "np.ndarray",
+    saturation: np.ndarray,
     bottom_edge_raw: int,
     n: int,
 ) -> tuple[int, float]:
@@ -452,8 +471,16 @@ def _bottom_band_analysis(
     # ── 底部地带有效性校验（同上）：非系统 UI 的底部低多样度区域不裁 ──
     bottom_edge = bottom_edge_raw
     bottom_frac = 0.0
-    if bottom_edge < n - 1 and _ui_band_valid(
-        diversity, bottom_edge + 1, n, bottom_edge
+    band_sat = (
+        float(np.median(saturation[bottom_edge + 1 : n]))
+        if saturation is not None and bottom_edge < n - 1
+        else 0.0
+    )
+    high_sat = saturation is not None and band_sat > _UI_BAND_SAT_MAX
+    if (
+        not high_sat
+        and bottom_edge < n - 1
+        and _ui_band_valid(diversity, bottom_edge + 1, n, bottom_edge)
     ):
         # 底部边界微调：播放器条/导航栏顶部常为半透明渐变过渡（亮度骤降但多样度
         # 仍 ≥0.15），content_bounds 会把过渡行算进内容区，裁后残留暗带。
@@ -513,7 +540,7 @@ def _residual_bottom_band(
 
 def _band_kind(
     brightness: "np.ndarray",
-    saturation: "np.ndarray | None",
+    saturation: np.ndarray,
     top_edge: int,
     bottom_edge: int,
     correction: bool,
@@ -580,7 +607,7 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
     correction = top["correction"]
     residual_top_frac = top["residual_top_frac"]
     bottom_edge, bottom_frac = _bottom_band_analysis(
-        diversity, brightness, bottom_edge_raw, n
+        diversity, brightness, saturation, bottom_edge_raw, n
     )
     # 内容区占比下限校验（防灰带过厚/内容区过小误判）
     frac = (bottom_edge - top_edge + 1) / n
