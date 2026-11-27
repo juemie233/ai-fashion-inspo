@@ -9,7 +9,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { warnShape } from '@/utils/apiGuard'
-import { ref } from 'vue'
+import { getCurrentScope, onScopeDispose, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { useNotification } from '@/composables/useNotification'
@@ -60,6 +60,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
    *  需要暂停某次分析请用任务行级暂停（pauseTaskById）。 */
   const queuePaused = ref(false)
 
+  let tasksPollSeq = 0 // 任务列表轮询代际号
+  let tasksLoadSeq = 0 // 任务列表加载序号：并发请求只允许最新一次写回
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let batchPollTimer: ReturnType<typeof setTimeout> | null = null
   let batchPollSeq = 0 // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
@@ -77,17 +79,35 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
    *  只保留未完成任务（pending/running/paused）：完成（success/failed/cancelled）
    *  的批量分析不再展示，其进度与结果可从任务管理页 / 分析历史查看。 */
   async function loadAnalysisTasks() {
+    const seq = ++tasksLoadSeq
     try {
-      const [legacy, multi] = await Promise.all([
+      // 除按类型取最近任务外，再单独查 paused：只取全状态前 50 再前端过滤时，
+      // 近期终态任务会把更早的暂停任务挤出 50 条，导致它不可见、无法恢复。
+      const [legacy, multi, legacyPaused, multiPaused] = await Promise.all([
         apiClient.get<{ items: TaskInfo[] }>('/tasks', {
           params: { type: 'batch_analyze', size: 50 },
         }),
         apiClient.get<{ items: TaskInfo[] }>('/tasks', {
           params: { type: 'multi_analyze', size: 50 },
         }),
+        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
+          params: { type: 'batch_analyze', status: 'paused', size: 50 },
+        }),
+        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
+          params: { type: 'multi_analyze', status: 'paused', size: 50 },
+        }),
       ])
-      const merged = [...legacy.data.items, ...multi.data.items].sort((a, b) => b.id - a.id)
-      // 只保留未完成任务（含 paused）：暂停任务不能被数量上限挤掉，需始终可见可恢复
+      if (seq !== tasksLoadSeq) return // 慢的旧响应不能覆盖新响应
+      const byId = new Map<number, TaskInfo>()
+      for (const item of [
+        ...legacy.data.items,
+        ...multi.data.items,
+        ...legacyPaused.data.items,
+        ...multiPaused.data.items,
+      ]) {
+        byId.set(item.id, item)
+      }
+      const merged = [...byId.values()].sort((a, b) => b.id - a.id)
       analysisTasks.value = merged.filter((t) => !isTaskTerminalStatus(t.status))
     } catch {
       /* 静默：列表为空不影响其它功能 */
@@ -142,8 +162,14 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         `/tasks/${taskId}/cancel`,
       )
       Message.success(data?.message || '任务已取消')
-      if (data.deleted) {
+      if (data?.deleted) {
         analysisTasks.value = analysisTasks.value.filter((t) => t.id !== taskId)
+        // pending 取消等于物理删除：被跟踪任务必须一起停掉，否则后续 GET 404
+        // 会被误算成「获取任务状态失败」，5 次后弹错误让用户以为出了故障
+        if (batchTask.value?.id === taskId) {
+          stopBatchPolling()
+          batchTask.value = null
+        }
       } else {
         const row = analysisTasks.value.find((t) => t.id === taskId)
         if (row) {
@@ -153,6 +179,16 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       }
       loadQueue()
     } catch (e) {
+      const status = (e as { response?: { status?: number } } | undefined)?.response?.status
+      if (status === 404) {
+        // 任务已被其它入口删除：静默移除，不当成失败
+        analysisTasks.value = analysisTasks.value.filter((t) => t.id !== taskId)
+        if (batchTask.value?.id === taskId) {
+          stopBatchPolling()
+          batchTask.value = null
+        }
+        return
+      }
       Message.error(getApiErrorMessage(e, '取消失败'))
     }
   }
@@ -160,7 +196,9 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   /** 把「最新非终态任务」接入现有单任务轮询/通知机制（供操作与刷新后调用） */
   function syncActiveTask() {
     const active = analysisTasks.value.find((t) => !isTaskTerminalStatus(t.status))
-    if (active && active.id !== batchTask.value?.id) {
+    if (!active) return
+    // 同一任务但轮询链已因连续失败停掉时，也要重启，否则用户点刷新也无法恢复跟踪
+    if (active.id !== batchTask.value?.id || batchPollTimer === null) {
       batchTask.value = active
       startBatchPolling(active.id)
     }
@@ -193,8 +231,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         },
         '/ai/queue',
       )
-      checkFailureAlert(data.failed, data.total)
-    } catch {}
+      checkFailureAlert(queueStats.value.failed, queueStats.value.total)
+    } catch {
+      /* 静默：统计失败不影响任务列表与轮询 */
+    }
   }
 
   /** 兼容占位：旧 GET /ai/active-analyses 已删除（2026-11-16 R2，API 进程不再内存分析）。
@@ -204,32 +244,43 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     activeAnalyses.value = {}
   }
 
-  /** 开始轮询：先拉一次未完成任务列表，再按是否有任务调度（WS 已连接时推送为主） */
+  /** 开始轮询：先拉一次未完成任务列表，再按是否有任务调度（WS 已连接时推送为主）。
+   *  幂等：重复调用会先停掉旧链，避免两个定时器同时续排。 */
   function startPolling() {
+    stopPolling()
+    const seq = ++tasksPollSeq
     loadAnalysisTasks()
-    scheduleNextPoll()
+    scheduleNextPoll(seq)
   }
 
-  function scheduleNextPoll() {
+  function scheduleNextPoll(seq: number) {
+    if (seq !== tasksPollSeq) return
     const wasActive = analysisTasks.value.length > 0
+    const allPaused =
+      analysisTasks.value.length > 0 && analysisTasks.value.every((t) => t.status === 'paused')
     const interval = isWsConnected()
       ? WS_CONNECTED_POLL_MS
-      : wasActive
-        ? ACTIVE_POLL_MS
-        : IDLE_POLL_MS
+      : allPaused
+        ? IDLE_POLL_MS
+        : wasActive
+          ? ACTIVE_POLL_MS
+          : IDLE_POLL_MS
     pollTimer = setTimeout(async () => {
+      if (seq !== tasksPollSeq) return
       await loadAnalysisTasks()
+      if (seq !== tasksPollSeq) return
       const isActive = analysisTasks.value.length > 0
       loadQueue()
       if (isActive || wasActive) {
         options.loadHistory?.()
       }
-      if (pollTimer !== null) scheduleNextPoll()
+      if (seq === tasksPollSeq && pollTimer !== null) scheduleNextPoll(seq)
     }, interval)
   }
 
   /** 停止活动分析轮询 */
   function stopPolling() {
+    tasksPollSeq += 1
     if (pollTimer) {
       clearTimeout(pollTimer)
       pollTimer = null
@@ -243,6 +294,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
    *     超出实际未分析数量时按实际数量提交，最终数量以后端返回的 count 为准
    */
   async function triggerBatchAnalyze(multi?: MultiAnalyzeParams, limit?: number) {
+    if (batchAnalyzing.value) return
     batchAnalyzing.value = true
     try {
       const { data } = await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids')
@@ -254,12 +306,12 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       const ids = limit && limit > 0 ? data.ids.slice(0, limit) : data.ids
       // 请求体：传了组合参数用对象格式（多模型 × 多提示词），否则保持旧版数组格式
       const isMulti = !!multi
-      const body = isMulti
+      const body = multi
         ? {
             inspiration_ids: ids,
-            models: multi!.models,
-            prompt_ids: multi!.promptIds,
-            apply_tags: multi!.applyTags,
+            models: multi.models,
+            prompt_ids: multi.promptIds,
+            apply_tags: multi.applyTags,
           }
         : ids
       // 创建批量分析任务，立即拿到 task_id，后续轮询任务状态
@@ -273,9 +325,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         ollama_will_start?: boolean
       }>('/ai/batch-analyze', body)
       if (created.ollama_will_start) {
-        Message.warning(created.message || 'Ollama 正在启动中，请等待后刷新重试')
-        batchAnalyzing.value = false
-        return
+        // 后端已创建任务：不能直接 return，否则既不跟踪它、又诱导用户重试产生重复任务
+        Message.warning(created.message || 'Ollama 未运行，任务已创建，会在其恢复后自动执行')
       }
       batchTask.value = {
         id: created.task_id,
@@ -324,11 +375,23 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         consecutiveFailures = 0
         handleBatchSnapshot(data)
         if (batchTask.value && !isTaskTerminalStatus(batchTask.value.status)) {
-          const interval = isWsConnected() ? WS_CONNECTED_POLL_MS : BATCH_POLL_MS
+          // 暂停任务长时间不动：降到空闲频率，别每秒打一次 /tasks/{id}
+          const interval =
+            batchTask.value.status === 'paused'
+              ? IDLE_POLL_MS
+              : isWsConnected()
+                ? WS_CONNECTED_POLL_MS
+                : BATCH_POLL_MS
           batchPollTimer = setTimeout(poll, interval)
         }
-      } catch {
+      } catch (e) {
         if (seq !== batchPollSeq) return
+        // 任务被其它入口删除（pending 取消/任务页删除）：静默停止，不当失败重试
+        if ((e as { response?: { status?: number } }).response?.status === 404) {
+          stopBatchPolling()
+          batchTask.value = null
+          return
+        }
         consecutiveFailures += 1
         if (consecutiveFailures >= 5) {
           // 连续多次失败才停止，避免后端重启/网络抖动导致任务进度卡死
@@ -410,7 +473,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   // ── WebSocket 推送合流 ──
   // 1) task_event：与批量轮询同源的任务事件，即时合并 batchTask 进度/状态
   //    （settled 标记保证终态副作用只执行一次，与 useAdminTask 同一套模式）
-  subscribeWs('task_event', (raw) => {
+  const offTaskEvent = subscribeWs('task_event', (raw) => {
     const ev = raw as {
       task_id?: number
       task_type?: string
@@ -422,10 +485,27 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
     if (!ev || !ev.task_id) return
     const current = batchTask.value
-    if (current && ev.task_id === current.id && !batchSettled) {
+    if (current && ev.task_id === current.id) {
+      // 已结算：迟到/重复的终态事件直接丢弃，别落到列表分支反复刷 /tasks
+      if (batchSettled) return
+      if (ev.status && isTaskTerminalStatus(ev.status)) {
+        // WS 事件不带 result：终态先到时补拉一次完整快照，否则完成提示退化、
+        // batchTask.result 永远为 null。
+        apiClient
+          .get<TaskInfo>(`/tasks/${current.id}`)
+          .then(({ data }) => handleBatchSnapshot(data))
+          .catch(() =>
+            handleBatchSnapshot({
+              ...current,
+              status: ev.status as TaskInfo['status'],
+              error: ev.error !== undefined ? ev.error : current.error,
+            }),
+          )
+        return
+      }
       handleBatchSnapshot({
         ...current,
-        status: ev.status ?? current.status,
+        status: (ev.status as TaskInfo['status']) ?? current.status,
         progress: typeof ev.progress === 'number' ? ev.progress : current.progress,
         done: typeof ev.done === 'number' ? ev.done : current.done,
         total: typeof ev.total === 'number' ? ev.total : current.total,
@@ -482,6 +562,14 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     } catch (e) {
       Message.error(getApiErrorMessage(e, '重试失败'))
     }
+  }
+
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      stopPolling()
+      stopBatchPolling()
+      offTaskEvent?.()
+    })
   }
 
   return {

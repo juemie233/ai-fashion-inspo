@@ -384,10 +384,23 @@ describe('useAnalysisQueue（行级操作与轮询）', () => {
     it('批量任务终态副作用只执行一次（轮询 + WS 谁先到都行）', async () => {
       const { api } = setup()
       api.batchTask.value = task(6, { status: 'running' })
+      mocks.get.mockImplementation((url: string) => {
+        if (url === '/tasks/6') {
+          return Promise.resolve({
+            data: task(6, {
+              status: 'success',
+              result: { success: 8, failed: 2 },
+            }),
+          })
+        }
+        return Promise.resolve({ data: { items: [] } })
+      })
 
       mocks.wsHandlers['task_event']({ task_id: 6, status: 'success' })
+      await flush()
 
       expect(api.batchTask.value!.status).toBe('success')
+      expect(api.batchTask.value!.result).toEqual({ success: 8, failed: 2 })
       expect(mocks.message.success).toHaveBeenCalledTimes(1)
     })
   })
