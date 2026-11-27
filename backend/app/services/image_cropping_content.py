@@ -368,7 +368,9 @@ def _ui_band_valid(
     if band[peak] >= _UI_BAND_PURE_MAX and any(
         d < _ROW_UNIFORM for d in band[:peak]
     ):
-        step = float(band[peak] - band[peak - 1]) if peak > 0 else float(band[peak])
+        # any() 为真 ⇒ peak > 0（band[:0] 为空时 any 返回 False），可直接取前一行增量；
+        # 此前 `if peak > 0 else float(band[peak])` 的 peak==0 分支不可达，已删除
+        step = float(band[peak] - band[peak - 1])
         if step >= _UI_BAND_SPIKE_MIN:
             return True
     return False

@@ -719,3 +719,112 @@ def test_save_cropped_image_keeps_icc_profile(tmp_path):
         out = _save_cropped_image(cropped, src, tmp_path / "out.webp")
     with Image.open(out) as saved:
         assert saved.info.get("icc_profile") == b"fake-icc"
+
+
+# ── 内容边界/字形回归（d2217b7 收口：缺口边界、glyph_only 返回键、矮图比例、above_fg 跨元素误伤）──
+
+
+def test_content_bounds_gaps_keep_first_and_last_content_rows():
+    """内容区多处缺口时：上界取首个内容行，下界取末个内容行（不落进缺口）。"""
+    from app.services.image_cropping_content import _content_bounds
+
+    # 三段内容 [5,8] / [12,14] / [20,23]，缺口均 ≤5 行（允许续接）
+    d = np.zeros(40, dtype=np.float32)
+    d[[5, 6, 7, 8, 12, 13, 14, 20, 21, 22, 23]] = 0.30
+    top, bottom = _content_bounds(d)
+    assert top == 5
+    assert bottom == 23
+
+    # 缺口超过上限（12 行 > 5）时分段：上下界仍各取自己区段的首/末内容行
+    d2 = np.zeros(40, dtype=np.float32)
+    d2[[5, 6, 7, 20, 21, 22]] = 0.30
+    top2, bottom2 = _content_bounds(d2)
+    assert top2 == 5
+    assert bottom2 == 22
+
+    # 底部 2 行孤立噪声不足最小连续行数（3）→ 不得把下界抬到噪声行
+    d3 = np.zeros(40, dtype=np.float32)
+    d3[[10, 11, 12, 13, 14, 30, 31]] = 0.30
+    top3, bottom3 = _content_bounds(d3)
+    assert top3 == 10
+    assert bottom3 == 14
+
+
+def test_glyph_only_bounds_share_unified_keys_with_normal_path(tmp_path, monkeypatch):
+    """glyph_only（内容边界失败但有字形证据）与正常路径必须返回同一套键。
+
+    回归 d2217b7：glyph_only 曾缺 ``residual_bottom_frac`` / ``bounds_valid``，
+    扫描与 apply 两条路径消费同一份 bounds 时会因字段缺失而口径不一致。
+    """
+    from app.services import image_cropping as ic
+
+    # 正常路径：灰带包夹截图 → 内容边界有效，返回键齐全
+    data, _ = _make_content_band_screenshot()
+    band_path = tmp_path / "band.jpg"
+    band_path.write_bytes(data)
+    normal = ic.detect_content_bounds(band_path)
+    assert normal["bounds_valid"] is True
+    assert normal["residual_bottom_frac"] == 0.0
+
+    # glyph_only 路径：强制内容边界检测失败 + 字形证据 found（透明叠加状态栏场景）
+    tiny = tmp_path / "tiny.jpg"
+    Image.new("RGB", (60, 120), (30, 30, 30)).save(tiny, "JPEG")
+
+    def _raise_no_bounds(*args, **kwargs):
+        raise ValueError("未检测到内容区边界")
+
+    monkeypatch.setattr(ic, "_content_bounds_from_small", _raise_no_bounds)
+    monkeypatch.setattr(
+        ic,
+        "_glyph_evidence",
+        lambda *args, **kwargs: {"found": True, "strong": False, "top_frac": 0.05},
+    )
+    _features, glyph_only = ic.analyze_screenshot_combined(tiny)
+
+    assert glyph_only is not None
+    assert glyph_only["kind"] == "glyph_only"
+    assert glyph_only["bounds_valid"] is False
+    assert glyph_only["residual_bottom_frac"] == 0.0
+    # 关键：与正常路径同一套键，消费方无需按分支补默认值
+    assert set(glyph_only) == set(normal)
+
+
+def test_glyph_top_frac_short_image_uses_full_height_and_cap():
+    """矮图建议比例按真实条带/全高换算，且始终受 12% 上限约束。"""
+    from app.services.image_cropping_glyph import _GLYPH_TOP_FRAC_CAP, _glyph_top_frac
+
+    # 60px 高图：条带被 max(12, H*0.10)=12 抬高；底行 4 + 余量 2 → 6/60 = 0.10
+    # （旧口径 6/12×10% 只有 0.05，会把矮图状态栏裁不干净）
+    assert abs(_glyph_top_frac(4, 12, 60) - 0.10) < 1e-9
+
+    # 30px 高图：8/30≈0.267 超过上限 → 封顶
+    assert _glyph_top_frac(6, 12, 30) == _GLYPH_TOP_FRAC_CAP
+    # 未传全高时退回条带高（1.0）→ 同样受上限约束，不会给出 >12% 的比例
+    assert _glyph_top_frac(10, 12, None) == _GLYPH_TOP_FRAC_CAP
+    # 100px 高图 + 底行 10：恰好 12/100 = 0.12
+    assert abs(_glyph_top_frac(10, 12, 100) - 0.12) < 1e-9
+
+
+def test_glyph_signature_above_fg_ignores_taller_right_icon():
+    """above_fg 只看时间字形窗口列：右侧图标更高不得把左侧时间块判掉。"""
+    from app.services.image_cropping_glyph import _glyph_time_signature
+
+    h, w = 60, 320
+    left_time = (30, 80, 15, 27, 600, 1.0)  # 左侧时间块（中心 x≈0.17）
+    taller_right = (250, 290, 8, 27, 760, 1.0)  # 右区图标：更高（上沿更靠上）
+    fg = np.zeros((h, w), dtype=bool)
+    fg[8:15, 250:290] = True  # 右图标像素出现在左时间块上沿之上
+
+    strong, note = _glyph_time_signature([left_time, taller_right], fg, h, w)
+    assert strong is True, "右侧图标较高不应把左侧时间块的上方前景算进来"
+    assert "单块时间回退" in note
+
+    # 反例 1：没有右侧图标 → 左侧孤立一块不构成状态栏
+    assert (
+        _glyph_time_signature([left_time], np.zeros((h, w), dtype=bool), h, w)[0] is False
+    )
+
+    # 反例 2：时间块上方确有照片内容 → 仍必须拒绝（修复不能放宽真实判据）
+    fg_photo = fg.copy()
+    fg_photo[3:15, 30:86] = True
+    assert _glyph_time_signature([left_time, taller_right], fg_photo, h, w)[0] is False

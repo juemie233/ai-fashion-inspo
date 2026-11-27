@@ -60,6 +60,18 @@ const limitOptions = [
 
 const groups = computed(() => result.value?.groups ?? [])
 
+/**
+ * 组的稳定键：`keeper_id` + 组内文件 id 排序串。
+ *
+ * 决策 Map 不能拿 NearDuplicateGroup 对象引用当键：重新扫描/列表重排会生成新对象，
+ * 引用一换决定就全丢（用户已选过的组又变回未决定）。用组内容算键，只要这一组的
+ * 素材集合没变，重扫/重排后仍指向同一组。
+ */
+function groupKey(group: NearDuplicateGroup): string {
+  const ids = group.files.map((f) => f.id).sort()
+  return `${group.keeper_id}:${ids.join(',')}`
+}
+
 // ── 弹窗逐组对比状态 ──
 const showDupModal = ref(false)
 /** 待处理的重复组队列（按扫描结果顺序） */
@@ -67,15 +79,17 @@ const dupGroups = ref<NearDuplicateGroup[]>([])
 /** 当前组下标（0 起） */
 const dupIndex = ref(0)
 /**
- * 逐组的保留决策（组对象 → 决策）。
+ * 逐组的保留决策（稳定组键 → 决策）。
  *
  * 为什么记「决策」而不是只累加待删 ID：这样才能来回翻页改主意——改选时该组旧决策对应的
  * ID 会被自动撤掉（见 deletingIds），最终提交的就是用户最后看到的那批；只累加 ID 的话
  * 「点快了误删」无法挽回。
+ *
+ * 键是 :func:`groupKey` 而不是组对象：重扫/重排产生的同内容新对象也能命中同一决定。
  */
-const dupDecisions = ref<Map<NearDuplicateGroup, DupDecision>>(new Map())
-/** 组对象 → 指定保留的素材 ID（支持保留组内任意一张，不只前两张） */
-const dupKeepers = ref<Map<NearDuplicateGroup, string>>(new Map())
+const dupDecisions = ref<Map<string, DupDecision>>(new Map())
+/** 稳定组键 → 指定保留的素材 ID（支持保留组内任意一张，不只前两张） */
+const dupKeepers = ref<Map<string, string>>(new Map())
 /** 全部处理完成（进入提交确认视图） */
 const allDone = ref(false)
 /** 提交删除后的提示：此刻素材正在后台删除，不能说「未发现近似重复」 */
@@ -85,19 +99,24 @@ const submittedNotice = ref('')
 const currentGroup = computed<NearDuplicateGroup | null>(
   () => dupGroups.value[dupIndex.value] ?? null,
 )
+/** 当前组的稳定键（未选中组为 null） */
+const currentGroupKey = computed<string | null>(() => {
+  const group = currentGroup.value
+  return group ? groupKey(group) : null
+})
 /** 当前组左边素材（组内第一张，评分最高者） */
 const leftFile = computed<NearDuplicateFile | null>(() => currentGroup.value?.files[0] ?? null)
 /** 当前组右边素材（组内第二张） */
 const rightFile = computed<NearDuplicateFile | null>(() => currentGroup.value?.files[1] ?? null)
 /** 当前组已做的决策（未决定为 null） */
 const currentDecision = computed<DupDecision | null>(() => {
-  const g = currentGroup.value
-  return g ? (dupDecisions.value.get(g) ?? null) : null
+  const key = currentGroupKey.value
+  return key ? (dupDecisions.value.get(key) ?? null) : null
 })
 /** 当前组指定保留的素材 ID（未指定为 null） */
 const currentKeeperId = computed<string | null>(() => {
-  const g = currentGroup.value
-  return g ? (dupKeepers.value.get(g) ?? null) : null
+  const key = currentGroupKey.value
+  return key ? (dupKeepers.value.get(key) ?? null) : null
 })
 
 /** 当前保留选择的中文说明（前两张保持「保留左边/右边」语义，其它显示 ID 前缀） */
@@ -113,12 +132,13 @@ const currentKeeperLabel = computed<string>(() => {
 const deletingIds = computed<Set<string>>(() => {
   const ids = new Set<string>()
   for (const g of dupGroups.value) {
-    const keeperId = dupKeepers.value.get(g)
+    const key = groupKey(g)
+    const keeperId = dupKeepers.value.get(key)
     if (keeperId) {
       for (const id of collectIdsToDeleteByKeeper(g, keeperId)) ids.add(id)
       continue
     }
-    const decision = dupDecisions.value.get(g)
+    const decision = dupDecisions.value.get(key)
     if (!decision) continue
     for (const id of collectIdsToDelete(g, decision)) ids.add(id)
   }
@@ -126,10 +146,33 @@ const deletingIds = computed<Set<string>>(() => {
 })
 /** 已决定删除数量 */
 const deleteCount = computed(() => deletingIds.value.size)
-/** 已做出决策的组数 */
+/** 已做出决策的组数（按稳定组键统计） */
 const decidedCount = computed(
-  () => dupGroups.value.filter((g) => dupDecisions.value.has(g) || dupKeepers.value.has(g)).length,
+  () =>
+    dupGroups.value.filter(
+      (g) => dupDecisions.value.has(groupKey(g)) || dupKeepers.value.has(groupKey(g)),
+    ).length,
 )
+/**
+ * 本次待删除集合里的收藏素材。
+ *
+ * 收藏素材被物理删除后不可恢复，提交前必须显式二次确认（默认不静默删除）。
+ */
+const favoriteFilesToDelete = computed<NearDuplicateFile[]>(() => {
+  const deleting = deletingIds.value
+  const seen = new Set<string>()
+  const files: NearDuplicateFile[] = []
+  for (const group of dupGroups.value) {
+    for (const file of group.files) {
+      if (deleting.has(file.id) && file.is_favorite && !seen.has(file.id)) {
+        seen.add(file.id)
+        files.push(file)
+      }
+    }
+  }
+  return files
+})
+const favoriteDeleteCount = computed(() => favoriteFilesToDelete.value.length)
 /** 能否上下翻页 */
 const canPrev = computed(() => dupIndex.value > 0)
 const canNext = computed(() => dupIndex.value < dupGroups.value.length - 1)
@@ -236,10 +279,15 @@ async function startBackfill() {
 
 /** 打开逐组对比弹窗 */
 function openDupModal() {
-  dupGroups.value = groups.value.map((g) => g)
+  dupGroups.value = [...groups.value]
+  // 重扫/重排可能替换组对象：只保留仍存在于本次候选里的稳定键决策，
+  // 同一组（素材集合不变）继续沿用用户已做的选择，新组则从未决定开始。
+  const keys = new Set(dupGroups.value.map(groupKey))
+  const pruneMap = <T,>(map: Map<string, T>): Map<string, T> =>
+    new Map([...map].filter(([key]) => keys.has(key)))
+  dupDecisions.value = pruneMap(dupDecisions.value)
+  dupKeepers.value = pruneMap(dupKeepers.value)
   dupIndex.value = 0
-  dupDecisions.value = new Map()
-  dupKeepers.value = new Map()
   allDone.value = false
   showDupModal.value = true
 }
@@ -269,12 +317,13 @@ const decisionLocked = ref(false)
  */
 function decide(decision: DupDecision) {
   const g = currentGroup.value
-  if (!g || decisionLocked.value) return
+  const key = currentGroupKey.value
+  if (!g || !key || decisionLocked.value) return
   const next = new Map(dupDecisions.value)
-  next.set(g, decision)
+  next.set(key, decision)
   dupDecisions.value = next
   const nextKeepers = new Map(dupKeepers.value)
-  nextKeepers.delete(g)
+  nextKeepers.delete(key)
   dupKeepers.value = nextKeepers
   decisionLocked.value = true
   setTimeout(() => {
@@ -311,12 +360,13 @@ function decisionLabel(decision: DupDecision): string {
 /** 指定保留组内某一张：其余全部删除（适用于组内 >2 张时选择任意一张） */
 function decideKeeper(keeperId: string) {
   const g = currentGroup.value
-  if (!g || decisionLocked.value) return
+  const key = currentGroupKey.value
+  if (!g || !key || decisionLocked.value) return
   const nextKeepers = new Map(dupKeepers.value)
-  nextKeepers.set(g, keeperId)
+  nextKeepers.set(key, keeperId)
   dupKeepers.value = nextKeepers
   const nextDecisions = new Map(dupDecisions.value)
-  nextDecisions.delete(g)
+  nextDecisions.delete(key)
   dupDecisions.value = nextDecisions
   decisionLocked.value = true
   setTimeout(() => {
@@ -378,12 +428,16 @@ async function deleteBoth() {
     }
     dupGroups.value = replaceGroup(dupGroups.value)
     if (result.value) result.value.groups = replaceGroup(result.value.groups)
-    // 组内容已变化：旧决策/旧保留者一律作废，避免套用到新素材对上
+    // 组内容已变化：旧稳定键（以及新组的键）上的决策/保留者一律作废，避免套用到新素材对上
+    const oldKey = groupKey(g)
+    const nextKey = nextGroup ? groupKey(nextGroup) : null
     const nextDecisions = new Map(dupDecisions.value)
-    nextDecisions.delete(g)
+    nextDecisions.delete(oldKey)
+    if (nextKey) nextDecisions.delete(nextKey)
     dupDecisions.value = nextDecisions
     const nextKeepers = new Map(dupKeepers.value)
-    nextKeepers.delete(g)
+    nextKeepers.delete(oldKey)
+    if (nextKey) nextKeepers.delete(nextKey)
     dupKeepers.value = nextKeepers
     if (!nextGroup) {
       if (dupGroups.value.length === 0) {
@@ -465,6 +519,62 @@ async function confirmSubmit(): Promise<void> {
   }
   if (await submitDecisions()) closeDupModal()
 }
+
+// ── 收藏素材删除保护 ──
+//
+// 收藏是用户的强意图标记：待删集合里只要含收藏素材，提交前必须再确认一次，
+// 且文案要明确说明「收藏素材也会被物理删除」。取消后决定保持原样，不产生删除。
+
+type FavoritePendingAction = 'confirm-submit' | 'submit-exit'
+const favoriteConfirmVisible = ref(false)
+const pendingFavoriteAction = ref<FavoritePendingAction | null>(null)
+
+/** 提交入口（确认页）：有收藏素材时转二次确认，否则直接提交 */
+function requestConfirmSubmit(): void {
+  if (favoriteDeleteCount.value > 0) {
+    pendingFavoriteAction.value = 'confirm-submit'
+    favoriteConfirmVisible.value = true
+    return
+  }
+  void confirmSubmit()
+}
+
+/** 退出入口：有收藏素材时先确认再「提交并退出」 */
+function requestSubmitAndExit(): void {
+  if (favoriteDeleteCount.value > 0) {
+    pendingFavoriteAction.value = 'submit-exit'
+    favoriteConfirmVisible.value = true
+    return
+  }
+  void submitAndExit()
+}
+
+/** 取消收藏素材确认：不提交、不改变已有决定，回到原视图继续处理 */
+function cancelFavoriteConfirm(): void {
+  favoriteConfirmVisible.value = false
+  pendingFavoriteAction.value = null
+  Message.info('已取消：删除决定仍保留，可继续调整后提交')
+}
+
+/** 确认删除含收藏素材：按进入确认前选择的动作继续提交 */
+async function confirmFavoriteDelete(): Promise<void> {
+  const action = pendingFavoriteAction.value
+  favoriteConfirmVisible.value = false
+  pendingFavoriteAction.value = null
+  if (action === 'confirm-submit') await confirmSubmit()
+  else if (action === 'submit-exit') await submitAndExit()
+}
+
+/** 「删除两张」按钮的二次确认文案：含收藏素材时要明确警告 */
+const pairDeleteContent = computed<string>(() => {
+  const favorites = [leftFile.value, rightFile.value].filter((file): file is NearDuplicateFile =>
+    Boolean(file?.is_favorite),
+  )
+  if (favorites.length === 0) {
+    return '确定要同时删除这两张素材吗？将物理删除（文件与记录不可恢复），确认后自动切换到下一组。'
+  }
+  return `当前两张中有 ${favorites.length} 个已收藏素材（★ 已收藏）。继续会物理删除收藏素材（文件与记录不可恢复），确定继续？`
+})
 
 function fileUrl(f: NearDuplicateFile): string {
   return getFileUrl(f.thumbnail_path || f.file_path)
@@ -702,7 +812,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
         >
         <a-popconfirm
           :ok-button-props="{ type: 'primary', status: 'danger' }"
-          content="确定要同时删除这两张素材吗？将物理删除（文件与记录不可恢复），确认后自动切换到下一组。"
+          :content="pairDeleteContent"
           @ok="deleteBoth"
         >
           <a-button
@@ -738,7 +848,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
             <a-button type="text" @click="allDone = false">← 返回修改</a-button>
             <a-popconfirm
               :content="`将物理删除 ${deleteCount} 个素材（文件与记录不可恢复），确定继续？`"
-              @ok="confirmSubmit"
+              @ok="requestConfirmSubmit"
             >
               <a-button type="primary" status="danger" :disabled="deleteCount === 0">
                 确认提交删除（{{ deleteCount }} 个）
@@ -775,11 +885,41 @@ function favoriteLabel(f: NearDuplicateFile): string {
   >
     <p>当前还有 {{ deleteCount }} 个素材被标记为删除。退出前请选择如何处理这些决定：</p>
     <div class="dup-exit-actions">
-      <a-button type="primary" status="danger" @click="submitAndExit">
+      <a-button type="primary" status="danger" @click="requestSubmitAndExit">
         提交 {{ deleteCount }} 个删除并退出
       </a-button>
       <a-button @click="discardAndExit">放弃决定并退出</a-button>
       <a-button type="text" @click="exitConfirmVisible = false">继续处理</a-button>
+    </div>
+  </a-modal>
+
+  <!-- 收藏素材删除保护：待删集合含收藏素材时，提交前再确认一次 -->
+  <a-modal
+    v-model:visible="favoriteConfirmVisible"
+    title="删除包含收藏素材"
+    :footer="false"
+    :width="480"
+    @cancel="cancelFavoriteConfirm"
+  >
+    <p>
+      本次待删除的 {{ deleteCount }} 个素材中，有 <b>{{ favoriteDeleteCount }}</b> 个是已收藏素材（★
+      已收藏）。继续提交会 <b>物理删除这些收藏素材</b>（文件与记录不可恢复）。
+    </p>
+    <p v-if="favoriteFilesToDelete.length > 0" class="dup-favorite-list">
+      涉及素材：{{
+        favoriteFilesToDelete
+          .slice(0, 5)
+          .map((file) => file.id.slice(0, 8))
+          .join('、')
+      }}<template v-if="favoriteFilesToDelete.length > 5">
+        等 {{ favoriteFilesToDelete.length }} 个</template
+      >
+    </p>
+    <div class="dup-exit-actions">
+      <a-button type="primary" status="danger" @click="confirmFavoriteDelete">
+        确认删除（含收藏素材）
+      </a-button>
+      <a-button @click="cancelFavoriteConfirm">取消，返回继续处理</a-button>
     </div>
   </a-modal>
 </template>
@@ -946,6 +1086,14 @@ function favoriteLabel(f: NearDuplicateFile): string {
   flex-direction: column;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* 收藏素材确认：列出涉及素材的 ID 前缀，提醒这些会被物理删除 */
+.dup-favorite-list {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: rgb(var(--danger-6));
+  word-break: break-all;
 }
 
 @media (max-width: 768px) {

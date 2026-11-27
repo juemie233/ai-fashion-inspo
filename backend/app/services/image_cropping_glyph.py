@@ -59,7 +59,12 @@ _GLYPH_MIN_TOP_FRAC = 0.08
 # 字形带上方的前景密度上限：状态栏文字之上是状态栏自身背景（纯色/半透明），
 # 实测真实截图 4 张全为 0；照片在字形「上方」永远还有内容（实测误报
 # 0.034~0.142）。这是区分「状态栏文字」与「照片纹理块」最直接的结构信号。
+# 统计口径见 ``_above_fg_ratio``：只看字形窗口所在列（左右少量边距），
+# 避免右侧信号/电量图标或其它元素被算进左侧时间块的「上方前景」。
 _GLYPH_ABOVE_FG_MAX = 0.01
+# 「上方前景」统计的列边距（占分析宽度比例）：字形窗口左右各留 2%，
+# 覆盖抗锯齿边/局部模糊，又不把相邻的右侧图标或照片纹理并进来。
+_GLYPH_ABOVE_FG_COL_MARGIN_FRAC = 0.02
 # 字形周边背景灰度标准差上限：状态栏文字印在平滑底上（实测真实截图 0.5~6.9），
 # 照片边缘（发丝/饰品/衣料轮廓）周边是纹理（实测误报 15~89）。这是区分
 # 「印刷体文字」与「照片边缘」最本质的信号，只用于强字形判定，不剔除连通域。
@@ -105,11 +110,42 @@ def _right_icon_supports(g: tuple, glyphs: list[tuple], w: int) -> bool:
 def _glyph_top_frac(bottom_row: int, strip_h: int, full_h: int | None = None) -> float:
     """字形底行 → 建议裁剪比例（占全图高度，带上限 ``_GLYPH_TOP_FRAC_CAP``）。
 
-    矮图上条带高度会被 ``max(12, H*0.10)`` 抬高；用真实 strip_h/full_h 换算，
-    避免名义 10% 在小图上偏小。
+    矮图上条带高度会被 ``max(12, H*0.10)`` 抬高；用真实 ``strip_h / full_h``
+    换算，避免名义 10% 在小图上偏小。正常调用方都会传入原图全高 ``full_h``；
+    ``strip_h`` 仅在未提供全高时兜底（测试/诊断脚本直接调用本函数）。
     """
     image_h = full_h if full_h and full_h > 0 else strip_h
     return min(_GLYPH_TOP_FRAC_CAP, (bottom_row + _GLYPH_MARGIN_ROWS) / image_h)
+
+
+def _above_fg_ratio(
+    fg: "np.ndarray", top_row: int, x0: int, x1: int, w: int
+) -> float:
+    """字形窗口列（左右少量边距）上方的前景占比。
+
+    ``above_fg`` 只应衡量「时间字形正上方是否还有照片内容」：按整条带宽统计
+    会把右侧信号/电量图标（或其它元素）的上方也算进来——右侧图标上沿高于
+    时间块时会把真实状态栏误判成照片纹理。因此限定到字形窗口列，避免这种
+    跨元素的误伤；边距覆盖抗锯齿边/局部模糊，阈值 ``_GLYPH_ABOVE_FG_MAX`` 不变。
+
+    参数:
+        fg: 局部对比二值化的前景掩码（行 × 列）
+        top_row: 字形上沿行（统计严格在它之上）
+        x0: 字形窗口左列（含）
+        x1: 字形窗口右列（不含）
+        w: 条带分析宽度（用于换算列边距）
+
+    返回:
+        该列区间上方的前景占比；无上行时为 0.0。
+    """
+    if top_row <= 0:
+        return 0.0
+    margin = max(2, int(w * _GLYPH_ABOVE_FG_COL_MARGIN_FRAC))
+    col_lo = max(0, x0 - margin)
+    col_hi = min(fg.shape[1], x1 + margin)
+    if col_hi <= col_lo:
+        return 0.0
+    return float(fg[:top_row, col_lo:col_hi].mean())
 
 
 def _glyph_time_signature(
@@ -158,7 +194,14 @@ def _glyph_time_signature(
             hs = [g[3] - g[2] for g in window]
             cs = [(g[2] + g[3]) / 2 for g in window]
             band_top = min(g[2] for g in window)
-            above_fg = float(fg[:band_top].mean()) if band_top > 0 else 0.0
+            # 只看时间窗口列（含少量边距）：右侧图标的上方不算进时间块上方
+            above_fg = _above_fg_ratio(
+                fg,
+                band_top,
+                min(g[0] for g in window),
+                max(g[1] for g in window),
+                w,
+            )
             if (
                 max(hs) / max(1, min(hs)) < 1.4
                 and max(cs) - min(cs) < h * 0.10
@@ -180,7 +223,8 @@ def _glyph_time_signature(
         for g in glyphs:
             gw, gh = g[1] - g[0], g[3] - g[2]
             gcx = (g[0] + g[1]) / 2
-            above_fg = float(fg[: g[2]].mean()) if g[2] > 0 else 0.0
+            # 同上：只统计该单块时间字形所在列的上方，不把右侧图标算进来
+            above_fg = _above_fg_ratio(fg, g[2], g[0], g[1], w)
             if (
                 0.04 * w <= gw <= 0.18 * w
                 and 0.15 * h <= gh <= _GLYPH_MAX_HEIGHT_FRAC * h
@@ -341,8 +385,9 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
       字形垂直中心 ≤ 条带 45%（状态栏文字居中于顶部状态栏，实测 33%~36%；
       照片内容块垂直中心常在 52% 以上，即更靠下）、
       字形整体宽度 ≥ 图宽 6%（真实「12:30」≈10%）、
-      字形带上方前景密度 ≤ 1%（状态栏文字之上是状态栏自身背景，实测真实
-      截图全为 0；照片在字形上方永远还有内容）、
+      字形窗口列（左右各留少量边距）的上方前景密度 ≤ 1%（状态栏文字之上是
+      状态栏自身背景，实测真实截图全为 0；只看时间窗口列，避免右侧图标/
+      其它元素被算进「上方前景」）、
       字形周边背景灰度标准差 ≤ 12（印刷体文字印在平滑底上，照片边缘周边
       是纹理——这是区分「文字」与「照片边缘」最本质的信号）。
     - 单块时间回退（小字号渲染下「12:30」合并成一块）另要求：块中心 x ≤ 图宽
@@ -374,12 +419,17 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         }
         if debug:
             band_top = min((g[2] for g in glyphs), default=0)
+            glyph_x0 = min((g[0] for g in glyphs), default=0)
+            glyph_x1 = max((g[1] for g in glyphs), default=0)
             out["debug"] = {
                 "strip_h": h,
                 "strip_w": w,
                 "strip_sat": round(strip_sat, 4),
                 "fg_ratio": round(fg_ratio, 4),
-                "fg_above": round(float(fg[:band_top].mean()) if band_top > 0 else 0.0, 4),
+                # 与 above_fg 判定同口径：字形窗口列上方（含少量边距）
+                "fg_above": round(
+                    _above_fg_ratio(fg, band_top, glyph_x0, glyph_x1, w), 4
+                ),
                 "note": note,
                 "glyphs": [
                     {
