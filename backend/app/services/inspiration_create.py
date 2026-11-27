@@ -40,6 +40,15 @@ from app.utils.file_hash import file_sha256
 
 logger = logging.getLogger(__name__)
 
+def _file_size(path: Path) -> int | None:
+    """返回文件字节数；文件缺失/无权限返回 None（不阻塞入库）。"""
+    try:
+        return path.stat().st_size
+    except OSError as exc:
+        logger.debug("_file_size: 忽略异常（预期降级）：%s", exc)
+        return None
+
+
 # 下载图片用的浏览器 UA：平台图片 CDN（小红书/抖音 xhscdn 等）对非浏览器
 # 请求（默认 httpx UA）常返回 403 或占位图，右键保存/URL 导入依赖此头
 DOWNLOAD_USER_AGENT = (
@@ -159,6 +168,7 @@ async def create_inspiration_from_file(
         await asyncio.to_thread(shutil.copy2, src_resolved, dest)
         await asyncio.to_thread(file_service.validate_media, dest, None)
         thumb_path = await generate_thumbnail(dest, settings.thumbnails_dir)
+        file_size = await asyncio.to_thread(_file_size, dest)
 
         content_hash = await asyncio.to_thread(file_sha256, dest)
         if content_hash and await find_duplicate_by_hash(db, content_hash):
@@ -168,6 +178,7 @@ async def create_inspiration_from_file(
         inspiration = Inspiration(
             source_type=source_type,
             file_path=rel_path,
+            file_size=file_size,
             thumbnail_path=thumb_path,
             content_hash=content_hash,
             media_type="image",
@@ -237,6 +248,9 @@ async def create_inspiration(
         content_hash = await asyncio.to_thread(
             file_sha256, settings.storage_root / file_path
         )
+        file_size = await asyncio.to_thread(
+            _file_size, settings.storage_root / file_path
+        )
         if content_hash and await find_duplicate_by_hash(db, content_hash):
             raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
 
@@ -261,6 +275,7 @@ async def create_inspiration(
             source_author=source_author,
             source_platform_id=source_platform_id,
             file_path=file_path,
+            file_size=file_size,
             thumbnail_path=thumb_path,
             content_hash=content_hash,
             media_type=media_type,
@@ -407,6 +422,7 @@ async def create_inspiration_from_url(
         thumb_path = await generate_thumbnail(file_path_obj)
 
         content_hash = await asyncio.to_thread(file_sha256, file_path_obj)
+        file_size = await asyncio.to_thread(_file_size, file_path_obj)
         if not content_hash:
             logger.warning("URL 导入内容哈希计算失败（文件可能损坏）: %s", rel_path)
         elif await find_duplicate_by_hash(db, content_hash):
@@ -419,6 +435,7 @@ async def create_inspiration_from_url(
             source_author=source_author,
             source_platform_id=source_platform_id,
             file_path=rel_path,
+            file_size=file_size,
             thumbnail_path=thumb_path,
             content_hash=content_hash,
             media_type=media_type,

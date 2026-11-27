@@ -442,15 +442,17 @@ async def list_inspirations(
         # 复用与主查询完全一致的筛选条件（含 NOT_DELETED 与用户筛选），
         # 否则取出的 size_rows 与筛选结果错位，导致翻页错乱/空页
         where_clause = query.whereclause
-        size_query = select(Inspiration.id, Inspiration.file_path).order_by(
-            Inspiration.id
-        )
+        size_query = select(
+            Inspiration.id, Inspiration.file_path, Inspiration.file_size
+        ).order_by(Inspiration.id)
         if where_clause is not None:
             size_query = size_query.where(where_clause)
         size_rows = (await db.execute(size_query)).all()
 
         def _file_size(row: Any) -> int:
-            """返回素材文件字节数（文件缺失按 0 处理）。"""
+            """返回素材文件字节数：优先入库时记录的大小，历史 NULL 行再 stat。"""
+            if row[2] is not None:
+                return int(row[2])
             if not row[1]:
                 return 0
             try:

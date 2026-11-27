@@ -107,6 +107,9 @@ class Inspiration(Base):
     )  # 关联出图批次（仅 source_type='generated' 有值）：溯源 + 同参再生成
 
     file_path: Mapped[str] = mapped_column(Text)
+    # 文件字节数（入库时/回填脚本写入）：largest 排序不再全库 stat；
+    # 历史行可能为 NULL，读取方按需 stat 兜底。
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True

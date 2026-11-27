@@ -81,6 +81,15 @@ from app.services.crop_common import (
 
 logger = logging.getLogger(__name__)
 
+
+def _stat_file_size(rel_path: str) -> int:
+    """裁剪替换文件后返回新文件字节数；缺失按 0（不阻断裁剪主流程）。"""
+    try:
+        return (settings.storage_root / rel_path).stat().st_size
+    except OSError as exc:
+        logger.debug("_stat_file_size: 忽略异常（预期降级）：%s", exc)
+        return 0
+
 # 内容重复时的裁剪结果预览目录（每次 apply 前清空，仅存活于对比决策期间）
 DUP_PREVIEW_DIR_NAME = "_crop_dups"
 
@@ -492,6 +501,7 @@ async def _persist_crop_successes(
         insp.thumbnail_path = thumb_path
         insp.dominant_colors = colors
         insp.phash = None  # 文件内容已替换，感知哈希缓存作废（近似重复扫描时懒重算）
+        insp.file_size = await asyncio.to_thread(_stat_file_size, insp.file_path)
         insp.updated_at = utcnow()
     await db.commit()
 
@@ -634,6 +644,7 @@ async def crop_inspiration_region(
         insp.phash = new_phash
         insp.thumbnail_path = thumb_path
         insp.dominant_colors = colors
+        insp.file_size = await asyncio.to_thread(_stat_file_size, insp.file_path)
         insp.updated_at = utcnow()
         # ⚠ 事务边界：commit 之后即为「裁剪成功」，后续仅做尽力而为的清理，
         # 任何清理失败都不得进入回滚分支（否则会用备份把新图覆盖回旧图，

@@ -172,6 +172,7 @@ async def test_create_inspiration_dedupes_identical_content(client):
         first = await inspiration_create.create_inspiration(db, _upload_file((9, 9, 9)))
         await db.commit()
         first_path = first.file_path
+        assert first.file_size == (settings.storage_root / first_path).stat().st_size
 
     async with async_session() as db:
         with pytest.raises(HTTPException) as exc:
