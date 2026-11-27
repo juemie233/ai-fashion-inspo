@@ -16,6 +16,34 @@ TrashReason = Literal["质量差", "重复", "不喜欢", "隐私", "其他", "A
 
 # 垃圾桶删除原因的运行时全部取值（由 TrashReason 派生，单一来源，勿再手工维护副本）
 TRASH_REASONS: tuple[str, ...] = get_args(TrashReason)
+# 素材列表/搜索的枚举参数：FastAPI 直接校验，拼错返回 422 而不是静默回退。
+AnalysisStatus = Literal["done", "pending", "error"]
+TagStatus = Literal["tagged", "untagged"]
+QualityStatus = Literal["pending", "approved", "rejected"]
+MediaType = Literal["image", "video"]
+
+# 列表排序（/api/inspirations）
+InspirationListSort = Literal[
+    "newest",
+    "oldest",
+    "tag_count",
+    "favorite_time",
+    "rating",
+    "rating_asc",
+    "unrated_first",
+    "largest",
+]
+# 搜索排序（/api/search）：多 match_score，不支持 largest/favorite_time
+SearchSort = Literal[
+    "newest",
+    "oldest",
+    "tag_count",
+    "match_score",
+    "rating",
+    "rating_asc",
+    "unrated_first",
+]
+TagCombine = Literal["AND", "OR"]
 
 
 class TagOut(BaseModel):

@@ -13,7 +13,15 @@ from app.config import settings
 from app.database import get_db
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
-from app.schemas.inspiration import InspirationListOut, inspiration_to_out
+from app.schemas.inspiration import (
+    AnalysisStatus,
+    InspirationListOut,
+    MediaType,
+    SearchSort,
+    TagCombine,
+    TagStatus,
+    inspiration_to_out,
+)
 from app.schemas.search import (
     SimilarItemOut,
     SimilarOut,
@@ -66,21 +74,21 @@ async def search_inspirations(
     ),
     dominant_color: str | None = Query(None),
     source_type: str | None = Query(None),
-    media_type: str | None = Query(None),
+    media_type: MediaType | None = Query(None),
     is_favorite: bool | None = Query(None, description="仅收藏 / 全部"),
-    analysis_status: str | None = Query(None, description="done | pending | error"),
-    tag_status: str | None = Query(None, description="tagged | untagged"),
+    analysis_status: AnalysisStatus | None = Query(None, description="done | pending | error"),
+    tag_status: TagStatus | None = Query(None, description="tagged | untagged"),
     date_from: str | None = Query(None, description="ISO 日期，例如 2026-01-01"),
     date_to: str | None = Query(None),
     rating_min: int | None = Query(None, ge=1, le=5, description="评分下限（评分 >= 该值）"),
-    sort: str = Query(
+    sort: SearchSort = Query(
         "newest",
         description=(
             "newest | oldest | tag_count | match_score | rating | "
             "rating_asc（仅已评分） | unrated_first（未评分优先）"
         ),
     ),
-    combine: str = Query("AND", description="标签组合逻辑 AND | OR"),
+    combine: TagCombine = Query("AND", description="标签组合逻辑 AND | OR"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),

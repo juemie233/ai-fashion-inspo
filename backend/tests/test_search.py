@@ -254,3 +254,10 @@ def test_search_favorites_only(client, upload):
     assert body["total"] == 1
     assert [i["id"] for i in body["items"]] == [a]
     assert b not in {i["id"] for i in body["items"]}
+
+
+async def test_search_rejects_invalid_enum_params(client):
+    """排序/分析状态/标签组合是枚举：拼错返回 422，不再静默回退。"""
+    assert client.get("/api/search", params={"sort": "newst"}).status_code == 422
+    assert client.get("/api/search", params={"analysis_status": "ok"}).status_code == 422
+    assert client.get("/api/search", params={"combine": "XOR"}).status_code == 422

@@ -423,3 +423,13 @@ def test_trash_cannot_be_favorited(client, upload):
     # 收藏筛选不会出现在结果里
     body = client.get("/api/inspirations", params={"is_favorite": True}).json()
     assert body["total"] == 0
+
+
+async def test_list_rejects_invalid_enum_params(client):
+    """列表筛选/排序是枚举：非法值返回 422。"""
+    assert client.get("/api/inspirations", params={"sort": "largest2"}).status_code == 422
+    assert (
+        client.get("/api/inspirations", params={"quality_status": "ok"}).status_code
+        == 422
+    )
+    assert client.get("/api/inspirations", params={"media_type": "audio"}).status_code == 422

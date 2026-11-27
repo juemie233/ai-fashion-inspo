@@ -8,20 +8,25 @@ from app.config import settings
 from app.database import get_db
 from app.models.inspiration import FavoriteEvent, Inspiration
 from app.schemas.inspiration import (
+    AnalysisStatus,
     BatchAddTagsRequest,
     BatchFavoriteRequest,
     BatchTrashRequest,
     BatchUpdateRequest,
     CropRequest,
     InspirationDetailOut,
+    InspirationListSort,
     InspirationListOut,
     InspirationOut,
     InspirationUpdate,
     InspirationTagOut,
+    MediaType,
     MoveToTrashRequest,
+    QualityStatus,
     TagCorrectionOut,
     TagCorrectionRequest,
     TagOut,
+    TagStatus,
     analysis_status_from_logs,
     inspiration_to_out,
 )
@@ -234,10 +239,10 @@ async def list_inspirations(
     size: int = Query(50, ge=1, le=200),
     source_type: str | None = None,
     is_favorite: bool | None = None,
-    media_type: str | None = None,
-    analysis_status: str | None = None,  # done | pending | error
-    tag_status: str | None = None,        # tagged | untagged
-    quality_status: str | None = None,    # pending | approved | rejected
+    media_type: MediaType | None = None,
+    analysis_status: AnalysisStatus | None = None,
+    tag_status: TagStatus | None = None,
+    quality_status: QualityStatus | None = None,
     # 按结构化拒绝原因筛选（仅 quality_status=rejected 时有意义）
     quality_reason_code: str | None = None,
     is_ai_generated: bool | None = None,  # 标记了 AI 生成（含本地出图）
@@ -252,7 +257,7 @@ async def list_inspirations(
     ),
     rating_min: int | None = Query(None, ge=1, le=5, description="评分下限（评分 >= 该值）"),
     unrated: bool = Query(False, description="仅未评分素材（rating 为空或 0）"),
-    sort: str = "newest",
+    sort: InspirationListSort = "newest",
     db: AsyncSession = Depends(get_db),
 ) -> InspirationListOut:
     """分页获取灵感列表，支持多维筛选和排序。"""
