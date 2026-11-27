@@ -130,6 +130,14 @@ async function mountScanned(groups: ReturnType<typeof group>[]) {
   return wrapper
 }
 
+/** 子组件现在等父组件回调确认任务创建成功：测试里手动回 true 模拟成功。 */
+async function resolveDelete(wrapper: Awaited<ReturnType<typeof mountScanned>>): Promise<void> {
+  const call = wrapper.emitted('delete-selected')?.at(-1) as
+    [string[], (ok: boolean) => void] | undefined
+  call?.[1]?.(true)
+  await flushPromises()
+}
+
 describe('AdminNearDuplicates 删除流程', () => {
   it('逐组对比后「确认提交删除」：emit 待删素材 ID', async () => {
     const wrapper = await mountScanned([group(['aaa', 'bbb'])])
@@ -139,8 +147,9 @@ describe('AdminNearDuplicates 删除流程', () => {
     await button(wrapper, '确认提交删除').trigger('click')
     await wrapper.find('button.popconfirm-ok').trigger('click')
     await flushPromises()
+    await resolveDelete(wrapper)
 
-    expect(wrapper.emitted('delete-selected')?.[0]).toEqual([['bbb']])
+    expect(wrapper.emitted('delete-selected')?.[0]?.[0]).toEqual(['bbb'])
   })
 
   it('中途退出（未走完队列）：已做的决定也要提交', async () => {
@@ -150,8 +159,11 @@ describe('AdminNearDuplicates 删除流程', () => {
     await flushPromises()
     await button(wrapper, '退出').trigger('click')
     await flushPromises()
+    await button(wrapper, '提交 1 个删除并退出').trigger('click')
+    await flushPromises()
+    await resolveDelete(wrapper)
 
-    expect(wrapper.emitted('delete-selected')?.[0]).toEqual([['bbb']])
+    expect(wrapper.emitted('delete-selected')?.[0]?.[0]).toEqual(['bbb'])
     expect(wrapper.emitted('delete-selected')).toHaveLength(1)
   })
 
@@ -191,8 +203,9 @@ describe('AdminNearDuplicates 删除流程', () => {
     await button(wrapper, '确认提交删除').trigger('click')
     await wrapper.find('button.popconfirm-ok').trigger('click')
     await flushPromises()
+    await resolveDelete(wrapper)
 
-    expect(wrapper.emitted('delete-selected')?.[0]).toEqual([['bbb']])
+    expect(wrapper.emitted('delete-selected')?.[0]?.[0]).toEqual(['bbb'])
   })
 
   it('翻页边界：第 1 组不能上一组，最后一组不能下一组', async () => {
@@ -225,5 +238,36 @@ describe('AdminNearDuplicates 删除流程', () => {
     expect(wrapper.text()).toContain('第 2 / 3 组') // 只前进了一组
     expect(wrapper.text()).toContain('已处理 1 / 3 组')
     expect(wrapper.text()).toContain('已决定删除 1 个素材') // 只有第 1 组的 bbb
+  })
+})
+
+describe('AdminNearDuplicates 安全边界', () => {
+  it('组内 3 张全部展示，点第 3 张可保留它、删除前两张', async () => {
+    const wrapper = await mountScanned([group(['aaa', 'bbb', 'ccc'])])
+    await flushPromises()
+    expect(wrapper.findAll('.dup-all-item')).toHaveLength(3)
+
+    await wrapper.findAll('.dup-all-item')[2].trigger('click')
+    await flushPromises()
+    await button(wrapper, '确认提交删除').trigger('click')
+    await wrapper.find('button.popconfirm-ok').trigger('click')
+    await flushPromises()
+    await resolveDelete(wrapper)
+
+    expect(wrapper.emitted('delete-selected')?.[0]?.[0]).toEqual(['aaa', 'bbb'])
+    wrapper.unmount()
+  })
+
+  it('中途退出不会立刻提交：先展示三选一确认', async () => {
+    const wrapper = await mountScanned([group(['aaa', 'bbb']), group(['ccc', 'ddd'])])
+    await button(wrapper, '保留左边').trigger('click')
+    await flushPromises()
+    await button(wrapper, '退出').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('delete-selected')).toBeUndefined()
+    expect(wrapper.text()).toContain('当前还有 1 个素材被标记为删除')
+    expect(wrapper.text()).toContain('放弃决定并退出')
+    wrapper.unmount()
   })
 })

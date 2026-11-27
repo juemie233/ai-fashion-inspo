@@ -20,6 +20,7 @@ interface PhashBackfillTask {
   done: number
   total: number
   result: { complete?: boolean; unhashable?: number; missing?: number } | null
+  error?: string | null
 }
 
 interface BatchDeleteResult {

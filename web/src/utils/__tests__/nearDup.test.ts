@@ -137,3 +137,39 @@ describe('nearDupScopeLabel', () => {
     ).toBe('已扫描已缓存的 300 张（哈希缓存还差 20 张未补齐）')
   })
 })
+
+describe('collectIdsToDeleteByKeeper', () => {
+  it('保留任意一张时删除其余全部（含前两张）', async () => {
+    const { collectIdsToDeleteByKeeper } = await import('../nearDup')
+    const g = {
+      keeper_id: 'a',
+      files: [
+        {
+          id: 'a',
+          file_path: '',
+          thumbnail_path: null,
+          is_favorite: false,
+          created_at: null,
+          size_bytes: 1,
+        },
+        {
+          id: 'b',
+          file_path: '',
+          thumbnail_path: null,
+          is_favorite: false,
+          created_at: null,
+          size_bytes: 1,
+        },
+        {
+          id: 'c',
+          file_path: '',
+          thumbnail_path: null,
+          is_favorite: false,
+          created_at: null,
+          size_bytes: 1,
+        },
+      ],
+    } as never
+    expect(collectIdsToDeleteByKeeper(g, 'c')).toEqual(['a', 'b'])
+  })
+})

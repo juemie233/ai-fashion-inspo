@@ -33,6 +33,11 @@ export function collectIdsToDelete(group: NearDuplicateGroup, decision: DupDecis
   return files.filter((f) => f.id !== rightId).map((f) => f.id)
 }
 
+/** 按「指定保留哪一张」计算待删 ID（支持组内任意一张，不只前两张）。 */
+export function collectIdsToDeleteByKeeper(group: NearDuplicateGroup, keeperId: string): string[] {
+  return (group.files ?? []).filter((f) => f.id !== keeperId).map((f) => f.id)
+}
+
 /**
  * 提交删除后按删除决定就地更新候选组：剔除已提交删除的素材，组内不足 2 张的整组丢弃。
  *

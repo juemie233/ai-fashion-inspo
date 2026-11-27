@@ -20,6 +20,7 @@ import { formatSize } from '@/utils/format'
 import { getApiErrorMessage } from '@/utils/apiError'
 import {
   collectIdsToDelete,
+  collectIdsToDeleteByKeeper,
   dropSubmittedFiles,
   nearDupScopeLabel,
   type DupDecision,
@@ -29,7 +30,7 @@ import { usePolling } from '@/composables/usePolling'
 const nearApi = useNearDuplicatesApi()
 
 const emit = defineEmits<{
-  (e: 'delete-selected', ids: string[]): void
+  (e: 'delete-selected', ids: string[], done: (ok: boolean) => void): void
   /** 「删除两张」已提交批量删除任务，父组件接管进度轮询（任务完成后刷新统计） */
   (e: 'task-started', taskId: number, message: string): void
 }>()
@@ -40,11 +41,13 @@ const threshold = ref(32)
 const limit = ref(0)
 const scanning = ref(false)
 const result = ref<NearDuplicateResult | null>(null)
+/** 本次扫描实际用的抽样上限（下拉框后续改动不能改写结果文案） */
+const scannedLimit = ref(0)
 
 const thresholdOptions = [
-  { label: '严格（16，仅极相似）', value: 16 },
-  { label: '标准（32，推荐）', value: 32 },
-  { label: '宽松（64，含轻微差异）', value: 64 },
+  { label: '严格（差 16 位 / 768 位）', value: 16 },
+  { label: '标准（差 32 位，推荐）', value: 32 },
+  { label: '宽松（差 64 位）', value: 64 },
 ]
 
 const limitOptions = [
@@ -71,6 +74,8 @@ const dupIndex = ref(0)
  * 「点快了误删」无法挽回。
  */
 const dupDecisions = ref<Map<NearDuplicateGroup, DupDecision>>(new Map())
+/** 组对象 → 指定保留的素材 ID（支持保留组内任意一张，不只前两张） */
+const dupKeepers = ref<Map<NearDuplicateGroup, string>>(new Map())
 /** 全部处理完成（进入提交确认视图） */
 const allDone = ref(false)
 /** 提交删除后的提示：此刻素材正在后台删除，不能说「未发现近似重复」 */
@@ -89,10 +94,30 @@ const currentDecision = computed<DupDecision | null>(() => {
   const g = currentGroup.value
   return g ? (dupDecisions.value.get(g) ?? null) : null
 })
+/** 当前组指定保留的素材 ID（未指定为 null） */
+const currentKeeperId = computed<string | null>(() => {
+  const g = currentGroup.value
+  return g ? (dupKeepers.value.get(g) ?? null) : null
+})
+
+/** 当前保留选择的中文说明（前两张保持「保留左边/右边」语义，其它显示 ID 前缀） */
+const currentKeeperLabel = computed<string>(() => {
+  const id = currentKeeperId.value
+  if (!id) return ''
+  if (id === leftFile.value?.id) return '保留左边'
+  if (id === rightFile.value?.id) return '保留右边'
+  return `保留 ${id.slice(0, 8)}…`
+})
+
 /** 待删素材 ID 集合：由各组当前决策现算，改主意后自动同步 */
 const deletingIds = computed<Set<string>>(() => {
   const ids = new Set<string>()
   for (const g of dupGroups.value) {
+    const keeperId = dupKeepers.value.get(g)
+    if (keeperId) {
+      for (const id of collectIdsToDeleteByKeeper(g, keeperId)) ids.add(id)
+      continue
+    }
     const decision = dupDecisions.value.get(g)
     if (!decision) continue
     for (const id of collectIdsToDelete(g, decision)) ids.add(id)
@@ -102,7 +127,9 @@ const deletingIds = computed<Set<string>>(() => {
 /** 已决定删除数量 */
 const deleteCount = computed(() => deletingIds.value.size)
 /** 已做出决策的组数 */
-const decidedCount = computed(() => dupGroups.value.filter((g) => dupDecisions.value.has(g)).length)
+const decidedCount = computed(
+  () => dupGroups.value.filter((g) => dupDecisions.value.has(g) || dupKeepers.value.has(g)).length,
+)
 /** 能否上下翻页 */
 const canPrev = computed(() => dupIndex.value > 0)
 const canNext = computed(() => dupIndex.value < dupGroups.value.length - 1)
@@ -120,6 +147,7 @@ async function scan() {
   result.value = null
   submittedNotice.value = ''
   try {
+    scannedLimit.value = limit.value
     result.value = await nearApi.scan(limit.value, threshold.value)
     if (result.value.groups.length === 0) {
       Message.success(`已${nearDupScopeLabel(result.value, limit.value)}，未发现近似重复`)
@@ -163,6 +191,12 @@ const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
       if (!['pending', 'running'].includes(data.status)) {
         stopBackfillPolling()
         forceRehash.value = false
+        if (data.status === 'failed' || data.status === 'cancelled') {
+          backfillMessage.value =
+            data.error || (data.status === 'cancelled' ? '补齐任务已取消' : '补齐任务失败')
+          Message.error(backfillMessage.value)
+          return
+        }
         const complete = data.result?.complete ?? false
         backfillMessage.value = complete
           ? '哈希缓存已补齐，可重新扫描（现在覆盖全库）'
@@ -184,13 +218,17 @@ async function startBackfill() {
     const data = await nearApi.startBackfill(forceRehash.value)
     backfillTaskId.value = data.task_id
     backfillProgress.value = 0
-    backfillStatus.value = 'running'
     backfillMessage.value = data.message
+    // 没有 task_id 表示缓存已完整/无需补齐：不要留下永不结束的 running 进度条
+    backfillStatus.value = data.task_id !== null ? 'running' : 'done'
     Message.success(data.message)
     if (data.task_id !== null) startBackfillPolling()
   } catch (e) {
-    // 缓存已完整时接口返回 400，按提示处理而不是报错
-    Message.info(getApiErrorMessage(e, '创建补齐任务失败'))
+    // 缓存已完整时接口返回 400，按提示处理；其它错误（500/网络）必须报错
+    const status = (e as { response?: { status?: number } }).response?.status
+    const msg = getApiErrorMessage(e, '创建补齐任务失败')
+    if (status === 400) Message.info(msg)
+    else Message.error(msg)
   } finally {
     backfillBusy.value = false
   }
@@ -201,6 +239,7 @@ function openDupModal() {
   dupGroups.value = groups.value.map((g) => g)
   dupIndex.value = 0
   dupDecisions.value = new Map()
+  dupKeepers.value = new Map()
   allDone.value = false
   showDupModal.value = true
 }
@@ -210,6 +249,7 @@ function closeDupModal() {
   showDupModal.value = false
   dupGroups.value = []
   dupDecisions.value = new Map()
+  dupKeepers.value = new Map()
 }
 
 /**
@@ -233,6 +273,9 @@ function decide(decision: DupDecision) {
   const next = new Map(dupDecisions.value)
   next.set(g, decision)
   dupDecisions.value = next
+  const nextKeepers = new Map(dupKeepers.value)
+  nextKeepers.delete(g)
+  dupKeepers.value = nextKeepers
   decisionLocked.value = true
   setTimeout(() => {
     decisionLocked.value = false
@@ -265,14 +308,34 @@ function decisionLabel(decision: DupDecision): string {
   return '都保留（跳过本组）'
 }
 
+/** 指定保留组内某一张：其余全部删除（适用于组内 >2 张时选择任意一张） */
+function decideKeeper(keeperId: string) {
+  const g = currentGroup.value
+  if (!g || decisionLocked.value) return
+  const nextKeepers = new Map(dupKeepers.value)
+  nextKeepers.set(g, keeperId)
+  dupKeepers.value = nextKeepers
+  const nextDecisions = new Map(dupDecisions.value)
+  nextDecisions.delete(g)
+  dupDecisions.value = nextDecisions
+  decisionLocked.value = true
+  setTimeout(() => {
+    decisionLocked.value = false
+  }, DECISION_GUARD_MS)
+  if (dupIndex.value < dupGroups.value.length - 1) dupIndex.value += 1
+  else allDone.value = true
+}
+
 /** 保留左边：删除该组其余全部素材 */
 function keepLeft() {
-  decide('keep-left')
+  const id = leftFile.value?.id
+  if (id) decideKeeper(id)
 }
 
 /** 保留右边：删除该组除右图外的全部素材 */
 function keepRight() {
-  decide('keep-right')
+  const id = rightFile.value?.id
+  if (id) decideKeeper(id)
 }
 
 /** 都保留（跳过本组） */
@@ -301,19 +364,30 @@ async function deleteBoth() {
     const data = await nearApi.submitBatchDelete(ids)
     emit('task-started', data.task_id, data.message)
 
-    // 从当前组中移除已删除的两张；剩余不足两张时整组移出候选队列
-    g.files = g.files.filter((f) => f.id !== left.id && f.id !== right.id)
-    if (g.files.length < 2) {
-      dupGroups.value.splice(dupIndex.value, 1)
-      // 该组已移出队列：连同它的决策一起丢掉（deletingIds 由现存组的决策现算）
-      const next = new Map(dupDecisions.value)
-      next.delete(g)
-      dupDecisions.value = next
+    // 不可变更新：组对象同时被 result.groups 与 dupGroups 引用，就地 splice/filter
+    // 会留下 files=0/1 的僵尸组。先算出新组，再同时替换两处。
+    const remaining = g.files.filter((f) => f.id !== left.id && f.id !== right.id)
+    const nextGroup = remaining.length >= 2 ? { ...g, files: remaining } : null
+    const replaceGroup = (arr: NearDuplicateGroup[]) => {
+      const index = arr.indexOf(g)
+      if (index < 0) return arr
+      if (!nextGroup) return arr.filter((item) => item !== g)
+      const copy = [...arr]
+      copy[index] = nextGroup
+      return copy
+    }
+    dupGroups.value = replaceGroup(dupGroups.value)
+    if (result.value) result.value.groups = replaceGroup(result.value.groups)
+    // 组内容已变化：旧决策/旧保留者一律作废，避免套用到新素材对上
+    const nextDecisions = new Map(dupDecisions.value)
+    nextDecisions.delete(g)
+    dupDecisions.value = nextDecisions
+    const nextKeepers = new Map(dupKeepers.value)
+    nextKeepers.delete(g)
+    dupKeepers.value = nextKeepers
+    if (!nextGroup) {
       if (dupGroups.value.length === 0) {
-        // 候选队列清空：若还有待提交的删除决定，进入提交确认视图；否则显示空状态
-        if (deletingIds.value.size > 0) {
-          allDone.value = true
-        }
+        if (deletingIds.value.size > 0) allDone.value = true
       } else if (dupIndex.value >= dupGroups.value.length) {
         dupIndex.value = dupGroups.value.length - 1
       }
@@ -332,41 +406,64 @@ async function deleteBoth() {
  * 查回来 → 弹窗又自动打开、进度退回第 1 组（用户刚做完选择就被弹回选择页）。
  * 库里真实状态等任务跑完后由用户再扫一次确认。
  */
-function submitDecisions() {
+async function submitDecisions(): Promise<boolean> {
   const ids = new Set(deletingIds.value)
-  if (ids.size === 0) return
-  emit('delete-selected', [...ids])
+  if (ids.size === 0) return true
+  // 等父组件把任务真正创建成功再改界面与提示；失败时保留全部决定供重试/放弃
+  const ok = await new Promise<boolean>((resolve) => {
+    emit('delete-selected', [...ids], resolve)
+  })
+  if (!ok) {
+    Message.error('删除任务提交失败，决定仍保留；可重试或退出放弃')
+    return false
+  }
   Message.success(`已提交删除任务：${ids.size} 个冗余素材（后台物理删除）`)
   if (result.value) {
     result.value.groups = dropSubmittedFiles(result.value.groups, ids)
   }
+  dupDecisions.value = new Map()
+  dupKeepers.value = new Map()
   submittedNotice.value =
     groups.value.length > 0
       ? `已提交删除 ${ids.size} 个冗余素材（后台物理删除），列表已按决定更新，剩余 ${groups.value.length} 组待确认`
       : `已提交删除 ${ids.size} 个冗余素材（后台物理删除），删除完成后可重新扫描确认`
+  return true
 }
 
 /**
- * 退出对比弹窗（右上角 X / 「退出」/ 「完成」都走这里）——**已做的决定一律提交**。
- *
- * 这里曾弹一次「一并提交 / 放弃这些决定」确认，但实测反馈「对比完好像没删」——多半是
- * 误点了放弃（或按了 Esc）。「保留左边 / 保留右边」本身就是明确的删除确认（按钮旁已写明
- * 其余将永久删除），所以退出就按决定执行：有决定 → 提交删除任务；没有决定 → 纯关闭。
+ * 退出对比弹窗：有待提交决定时先让用户明确选择（提交 / 放弃 / 继续），
+ * 不再把「退出」静默当提交；没有决定时直接关闭。
  */
+const exitConfirmVisible = ref(false)
+
 function requestExit() {
-  submitDecisions() // 没有决定时内部直接返回，等于纯关闭
+  if (deletingIds.value.size > 0) {
+    exitConfirmVisible.value = true
+    return
+  }
+  closeDupModal()
+}
+
+async function submitAndExit(): Promise<void> {
+  if (await submitDecisions()) {
+    exitConfirmVisible.value = false
+    closeDupModal()
+  }
+}
+
+function discardAndExit(): void {
+  exitConfirmVisible.value = false
   closeDupModal()
 }
 
 /** 提交确认视图的「确认提交删除」 */
-function confirmSubmit() {
+async function confirmSubmit(): Promise<void> {
   if (deletingIds.value.size === 0) {
     Message.info('没有需要删除的素材')
     closeDupModal()
     return
   }
-  submitDecisions()
-  closeDupModal()
+  if (await submitDecisions()) closeDupModal()
 }
 
 function fileUrl(f: NearDuplicateFile): string {
@@ -462,7 +559,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
         已扫描已缓存的 {{ result.scanned }} 张（哈希缓存还差 {{ result.missing }} 张未补齐），
         暂未发现近似重复；补齐缓存后再扫一次才能覆盖全库
       </template>
-      <template v-else-if="result.truncated || limit > 0">
+      <template v-else-if="result.truncated || scannedLimit > 0">
         已随机扫描 {{ result.scanned }} /
         {{ result.total }} 张，未发现近似重复（仅覆盖本次抽样，可再次扫描或改用全库扫描）
       </template>
@@ -471,7 +568,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
 
     <template v-if="groups.length > 0">
       <p style="color: rgb(var(--warning-6)); margin-bottom: 12px">
-        发现 {{ groups.length }} 组近似重复，{{ nearDupScopeLabel(result!, limit) }}
+        发现 {{ groups.length }} 组近似重复，{{ nearDupScopeLabel(result!, scannedLimit) }}
       </p>
 
       <a-space align="center" style="margin-bottom: 12px">
@@ -510,6 +607,9 @@ function favoriteLabel(f: NearDuplicateFile): string {
         <a-tag v-if="currentDecision" color="green" size="small" style="margin-left: 8px">
           本组已选：{{ decisionLabel(currentDecision) }}（可改）
         </a-tag>
+        <a-tag v-else-if="currentKeeperId" color="green" size="small" style="margin-left: 8px">
+          本组已选：{{ currentKeeperLabel }}（删除其余）
+        </a-tag>
         <a-space style="margin-left: 12px">
           <a-button size="mini" :disabled="!canPrev" @click="goPrev">← 上一组</a-button>
           <a-button size="mini" :disabled="!canNext" @click="goNext">下一组 →</a-button>
@@ -521,7 +621,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
         <div class="dup-side">
           <div class="dup-side-label">保留左边</div>
           <div class="dup-img-wrap" v-if="leftFile">
-            <img :src="fileUrl(leftFile)" :alt="leftFile.file_path" />
+            <img :src="getFileUrl(leftFile.file_path)" :alt="`候选素材 ${leftFile.id}`" />
           </div>
           <div class="dup-side-meta" v-if="leftFile">
             ID {{ leftFile.id.slice(0, 8) }} · 上传 {{ fmtTime(leftFile.created_at)
@@ -537,7 +637,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
         <div class="dup-side">
           <div class="dup-side-label">保留右边</div>
           <div class="dup-img-wrap" v-if="rightFile">
-            <img :src="fileUrl(rightFile)" :alt="rightFile.file_path" />
+            <img :src="getFileUrl(rightFile.file_path)" :alt="`候选素材 ${rightFile.id}`" />
           </div>
           <div class="dup-side-meta" v-if="rightFile">
             ID {{ rightFile.id.slice(0, 8) }} · 上传 {{ fmtTime(rightFile.created_at)
@@ -548,23 +648,50 @@ function favoriteLabel(f: NearDuplicateFile): string {
         </div>
       </div>
 
+      <!-- 组内全部素材：不让用户只凭前两张决定其余未展示素材的命运 -->
+      <div v-if="currentGroup && currentGroup.files.length > 2" class="dup-all">
+        <div class="dup-all-title">
+          本组共 {{ currentGroup.files.length }} 张（全部展示，点一张即「保留它、删除其余」）：
+        </div>
+        <div class="dup-all-strip">
+          <button
+            v-for="file in currentGroup.files"
+            :key="file.id"
+            type="button"
+            class="dup-all-item"
+            :class="{
+              'is-keeper': currentKeeperId === file.id,
+              'is-suggested': currentGroup.keeper_id === file.id,
+            }"
+            :title="`保留这张，删除其余 ${currentGroup.files.length - 1} 张`"
+            @click="decideKeeper(file.id)"
+          >
+            <img :src="fileUrl(file)" :alt="`候选素材 ${file.id}`" loading="lazy" />
+            <span v-if="currentGroup.keeper_id === file.id" class="dup-all-suggest">建议</span>
+            <span v-if="currentKeeperId === file.id" class="dup-all-keeper">保留</span>
+            <span v-if="favoriteLabel(file)" class="dup-all-fav">★</span>
+          </button>
+        </div>
+      </div>
+
       <p class="dup-hint">
-        组内共有 {{ currentGroup?.files.length ?? 0 }} 张，此处对比前两张；可保留一张（其余将
+        组内共有
+        {{ currentGroup?.files.length ?? 0 }} 张，本页已全部展示；点缩略图可保留任意一张（其余将
         <strong>永久删除</strong>，文件与记录不可恢复），或点「删除两张」将当前两张一并删除。
         可随时用「← 上一组 / 下一组 →」翻页回看：回到已决定的组再点一次就是改主意，
         提交时按最后一次选择算（决定后 0.3 秒内的连点会被忽略，防手快误删下一组）。
-        中途「退出」时已做的决定会自动提交（后台物理删除），不会白选。
+        中途退出会先询问「提交 / 放弃 / 继续」，不再静默提交。
       </p>
 
       <div class="dup-actions">
         <a-button
-          :type="currentDecision === 'keep-left' ? 'primary' : 'outline'"
+          :type="currentKeeperId === leftFile?.id ? 'primary' : 'outline'"
           :disabled="deletingBoth || decisionLocked"
           @click="keepLeft"
           >保留左边</a-button
         >
         <a-button
-          :type="currentDecision === 'keep-right' ? 'primary' : 'outline'"
+          :type="currentKeeperId === rightFile?.id ? 'primary' : 'outline'"
           status="warning"
           :disabled="deletingBoth || decisionLocked"
           @click="keepRight"
@@ -608,6 +735,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
         </template>
         <template #extra>
           <a-space style="display: flex; justify-content: center; width: 100%">
+            <a-button type="text" @click="allDone = false">← 返回修改</a-button>
             <a-popconfirm
               :content="`将物理删除 ${deleteCount} 个素材（文件与记录不可恢复），确定继续？`"
               @ok="confirmSubmit"
@@ -616,7 +744,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
                 确认提交删除（{{ deleteCount }} 个）
               </a-button>
             </a-popconfirm>
-            <a-button @click="requestExit">退出</a-button>
+            <a-button @click="requestExit">退出（未提交决定会先询问）</a-button>
           </a-space>
         </template>
       </a-result>
@@ -635,6 +763,24 @@ function favoriteLabel(f: NearDuplicateFile): string {
         </template>
       </a-result>
     </template>
+  </a-modal>
+
+  <!-- 退出确认：有未提交决定时不静默提交 -->
+  <a-modal
+    v-model:visible="exitConfirmVisible"
+    title="还有未提交的删除决定"
+    :footer="false"
+    :width="460"
+    @cancel="exitConfirmVisible = false"
+  >
+    <p>当前还有 {{ deleteCount }} 个素材被标记为删除。退出前请选择如何处理这些决定：</p>
+    <div class="dup-exit-actions">
+      <a-button type="primary" status="danger" @click="submitAndExit">
+        提交 {{ deleteCount }} 个删除并退出
+      </a-button>
+      <a-button @click="discardAndExit">放弃决定并退出</a-button>
+      <a-button type="text" @click="exitConfirmVisible = false">继续处理</a-button>
+    </div>
   </a-modal>
 </template>
 
@@ -724,5 +870,97 @@ function favoriteLabel(f: NearDuplicateFile): string {
   font-size: 12px;
   color: var(--color-text-3);
   margin-top: 12px;
+}
+
+/* 组内全部素材条带：避免用户只看到前两张就决定其余未展示素材的命运 */
+.dup-all {
+  margin-top: 12px;
+}
+.dup-all-title {
+  font-size: 12px;
+  color: var(--color-text-2);
+  margin-bottom: 6px;
+}
+.dup-all-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.dup-all-item {
+  position: relative;
+  flex: 0 0 88px;
+  width: 88px;
+  height: 88px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--sheet-2);
+  cursor: pointer;
+  overflow: hidden;
+}
+.dup-all-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.dup-all-item.is-keeper {
+  border-color: var(--danger-6);
+}
+.dup-all-item.is-suggested {
+  box-shadow: inset 0 0 0 2px rgb(var(--warning-6));
+}
+.dup-all-suggest {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgb(var(--warning-6));
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+}
+.dup-all-keeper {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--danger-6);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.dup-all-fav {
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  color: var(--seal);
+  font-size: 14px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.dup-exit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+@media (max-width: 768px) {
+  .dup-compare {
+    flex-direction: column;
+  }
+  .dup-vs {
+    align-self: center;
+  }
+  .dup-img-wrap {
+    height: 45dvh;
+    min-height: 240px;
+  }
+  .dup-actions {
+    flex-wrap: wrap;
+  }
 }
 </style>
