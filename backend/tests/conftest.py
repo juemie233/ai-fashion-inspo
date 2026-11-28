@@ -77,6 +77,9 @@ _ALL_TABLES = [
     "bloggers",
     "models",
     "tag_history",
+    # 抖音收藏夹 → 大标签映射（2026-11-24）：引用 tags，须先于 tags 清空；
+    # 不清理会让映射类用例跨用例残留（此前仅靠唯一夹名规避，新增用例容易串扰）
+    "douyin_folder_tag_map",
     "tags",
 ]
 

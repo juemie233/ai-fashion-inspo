@@ -39,6 +39,12 @@ WATCHED: list[tuple[str, str]] = [
     ("get", "/api/collections"),
     # 半智能合集（2026-11-22）：to-semi 有 response_model=CollectionOut → 可做字段契约
     ("post", "/api/collections/{collection_id}/to-semi"),
+    # 抖音收藏夹 → 大标签映射（2026-11-24）：全部有 response_model，前端管理面板消费
+    ("get", "/api/admin/douyin-folder-tags"),
+    ("post", "/api/admin/douyin-folder-tags"),
+    ("post", "/api/admin/douyin-folder-tags/apply-all"),
+    ("post", "/api/admin/douyin-folder-tags/{folder_name}/apply"),
+    ("get", "/api/admin/douyin-folder-tags/tag-impact/{tag_id}"),
     ("get", "/api/bloggers"),
     ("get", "/api/bloggers/{blogger_id}"),
     ("get", "/api/models"),
@@ -61,6 +67,8 @@ UNMODELED_ALLOWLIST: set[tuple[str, str]] = {
     ("post", "/api/collections/{collection_id}/suggest-items"),
     ("post", "/api/collections/{collection_id}/expansions"),
     ("delete", "/api/collections/{collection_id}/expansions/{batch_id}"),
+    # 删除抖音收藏夹映射：返回自由 dict（removed/tag_id 等），暂无 response_model
+    ("delete", "/api/admin/douyin-folder-tags/{folder_name}"),
 }
 
 
@@ -84,17 +92,23 @@ def _resolve(spec: dict[str, Any], node: dict[str, Any] | None) -> dict[str, Any
 
 
 def _response_fields(spec: dict[str, Any], method: str, path: str) -> list[str]:
-    """取某接口 200 响应体的**顶层字段名**（分页对象取 items/total/…，数组取元素字段）。
+    """取某接口成功响应体（200/201/202 中第一个有 content 的）的**顶层字段名**。
 
+    分页对象取 items/total/…，数组取元素字段；POST 创建接口常返回 201，这里一并兼容。
     解析不出来（`additionalProperties: true` 的自由 dict、或没有 response_model）时返回 []。
     这类接口无法做字段契约检查，由 `UNMODELED_ALLOWLIST` 显式登记为缺口。
     """
     operation = spec["paths"].get(path, {}).get(method)
     assert operation, f"OpenAPI 里找不到 {method.upper()} {path}（接口被删或改名了？）"
 
-    content = operation.get("responses", {}).get("200", {}).get("content", {})
-    media = content.get("application/json") or next(iter(content.values()), None)
-    assert media, f"{method.upper()} {path} 没有 200 JSON 响应定义"
+    responses = operation.get("responses", {})
+    media = None
+    for code in ("200", "201", "202"):
+        content = responses.get(code, {}).get("content", {})
+        media = content.get("application/json") or (next(iter(content.values()), None) if content else None)
+        if media:
+            break
+    assert media, f"{method.upper()} {path} 没有 200/201/202 JSON 响应定义"
     schema = media.get("schema") or {}
 
     # 数组响应：字段在 items 里

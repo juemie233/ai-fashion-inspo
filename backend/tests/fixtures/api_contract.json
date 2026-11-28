@@ -1,4 +1,21 @@
 {
+  "GET /api/admin/douyin-folder-tags": [
+    "folder_name",
+    "local_collection_id",
+    "local_item_count",
+    "mode",
+    "needs_confirm",
+    "tag_category",
+    "tag_id",
+    "tag_name"
+  ],
+  "GET /api/admin/douyin-folder-tags/tag-impact/{tag_id}": [
+    "category",
+    "mapped_folders",
+    "name",
+    "tag_id",
+    "usage_count"
+  ],
   "GET /api/bloggers": [
     "items",
     "page",
@@ -143,6 +160,24 @@
     "task_id",
     "task_type",
     "total_count"
+  ],
+  "POST /api/admin/douyin-folder-tags": [
+    "folder_name",
+    "local_collection_id",
+    "local_item_count",
+    "mode",
+    "needs_confirm",
+    "tag_category",
+    "tag_id",
+    "tag_name"
+  ],
+  "POST /api/admin/douyin-folder-tags/apply-all": [
+    "applied",
+    "folders"
+  ],
+  "POST /api/admin/douyin-folder-tags/{folder_name}/apply": [
+    "applied",
+    "folders"
   ],
   "POST /api/collections/{collection_id}/to-semi": [
     "auto_source",
