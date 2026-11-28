@@ -578,6 +578,29 @@ describe('云端 Seedream 档位', () => {
     wrapper.unmount()
   })
 
+  it('云端价格缺失时显示「以实际账单为准」，不伪造 ¥0.12 默认价', async () => {
+    const noCostStatus: GenerateStatus = {
+      ...CLOUD_STATUS,
+      models_meta: {
+        ...CLOUD_STATUS.models_meta,
+        seedream_5_0_flash: {
+          ...CLOUD_STATUS.models_meta!.seedream_5_0_flash,
+          cost_per_image_cny: undefined,
+        },
+      },
+    }
+    const wrapper = mountForm({
+      status: noCostStatus,
+      ready: true,
+      initialRefIds: 'ref-a',
+      initialModelKey: 'seedream_5_0_flash',
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('以实际账单为准')
+    expect(wrapper.text()).not.toContain('¥0.12')
+    wrapper.unmount()
+  })
+
   it('多选姿态后一次提交多个云端批次（每姿态一个 payload）', async () => {
     const wrapper = mount(GenerateParamForm, {
       props: {

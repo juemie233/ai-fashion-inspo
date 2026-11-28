@@ -146,10 +146,15 @@ const cloudWatermark = ref(false)
 const cloudPoses = ref<PoseItem[]>([])
 /** 云端可选姿态上限：后端 models_meta.max_poses（默认 10，可由 SEEDREAM_MAX_POSES 配置） */
 const maxCloudPoses = computed(() => currentModel.value?.maxPoses ?? 10)
+/** 云端单张价格来自后端 models_meta；缺失时不要用假默认价冒充「预计费用」。 */
+const cloudUnitCost = computed(() => currentModel.value?.costPerImage ?? null)
 const cloudCost = computed(() =>
-  isArk.value
-    ? Math.max(1, cloudPoses.value.length) * (currentModel.value?.costPerImage || 0.12)
-    : 0,
+  isArk.value && cloudUnitCost.value !== null && cloudUnitCost.value > 0
+    ? Math.max(1, cloudPoses.value.length) * cloudUnitCost.value
+    : null,
+)
+const cloudCostText = computed(() =>
+  cloudCost.value === null ? '以实际账单为准' : `¥${cloudCost.value.toFixed(2)}`,
 )
 
 function onCloudPosesSelected(poses: PoseItem[]): void {
@@ -984,7 +989,7 @@ onMounted(() => {
           {{ currentModel ? modelTaskTitle(currentModel) : '—' }}
         </span>
         <span v-if="isArk" class="gen-hint">
-          云端 · 本次云端预计费用 ¥{{ cloudCost.toFixed(2) }}（{{ Math.max(1, cloudPoses.length) }}
+          云端 · 本次云端预计费用 {{ cloudCostText }}（{{ Math.max(1, cloudPoses.length) }}
           个姿态）
         </span>
         <span v-else class="gen-hint">
@@ -1038,7 +1043,7 @@ onMounted(() => {
     </p>
     <p>
       确认后，<b>本浏览器会话内</b>的后续云端提交不再重复询问；本次共
-      {{ pendingPayloads.length }} 个计费批次，预计 ¥{{ cloudCost.toFixed(2) }}。
+      {{ pendingPayloads.length }} 个计费批次，预计费用：{{ cloudCostText }}。
     </p>
     <p>云端接口可能触发内容审核；被拦截时会给出提示，不会自动绕过。</p>
     <a-checkbox v-model="privacyAgree">我已知晓，本浏览器会话内允许上传</a-checkbox>
