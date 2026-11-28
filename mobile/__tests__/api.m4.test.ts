@@ -88,13 +88,15 @@ describe('人物作品墙', () => {
   it('博主作品打 /bloggers/{id}/inspirations', async () => {
     const spy = jest
       .spyOn(apiClient, 'get')
-      .mockResolvedValue({ data: { items: [{ id: 'a' }], total: 5 } })
+      .mockResolvedValue({ data: { items: [{ inspiration_id: 'a', file_path: 'x.jpg' }], total: 5 } })
 
     const page = await fetchPersonInspirations('blogger', 3, 1, 30)
 
     expect(spy).toHaveBeenCalledWith('/bloggers/3/inspirations', {
       params: { page: 1, size: 30 },
     })
+    // 回归：人物作品接口用 inspiration_id，必须映射成详情页路由需要的 id
+    expect(page.items[0]?.id).toBe('a')
     expect(page.total).toBe(5)
     spy.mockRestore()
   })

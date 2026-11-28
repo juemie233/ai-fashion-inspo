@@ -687,10 +687,17 @@ export async function fetchPersonInspirations(
   size = 30,
 ): Promise<InspirationListResponse> {
   const path = kind === 'blogger' ? `/bloggers/${id}/inspirations` : `/models/${id}/inspirations`
-  const { data } = await apiClient.get<{ items?: Inspiration[]; total?: number }>(path, {
+  // 人物作品墙接口返回的是「关联行」口径：主键字段叫 inspiration_id（不是 id），
+  // 且只带作品卡需要的精简字段。若不映射，详情页会拿到 undefined 而 404「素材未找到」。
+  type PersonWorkItem = Partial<Inspiration> & { inspiration_id?: string; id?: string }
+  const { data } = await apiClient.get<{ items?: PersonWorkItem[]; total?: number }>(path, {
     params: { page, size },
   })
-  return { items: data?.items ?? [], total: Number(data?.total ?? 0), page, size }
+  const items = (data?.items ?? []).map((raw) => ({
+    ...raw,
+    id: String(raw.inspiration_id ?? raw.id ?? ''),
+  })) as Inspiration[]
+  return { items, total: Number(data?.total ?? 0), page, size }
 }
 
 /** 标签改名（轻量管理只开放改名，合并/删除留在 Web） */
