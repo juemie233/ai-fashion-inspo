@@ -17,6 +17,8 @@
       与实际写回阶段的 ``ImageOps.exif_transpose`` 保持一致。
 """
 
+import logging
+import time
 import uuid
 from pathlib import Path
 
@@ -37,10 +39,6 @@ from app.services.image_cropping_glyph import (  # noqa: F401
     _glyph_top_frac,
     _right_icon_supports,
 )
-
-# 行剖面 / 条带 / 残留证据链已独立成 image_cropping_content.py（原样搬移，行为不变）。
-# 这里导入回本模块仍在用的常量，并**原样再导出** crop_service / 测试 / 诊断脚本还在引用的
-# 助手——它们的 import 路径保持 `app.services.image_cropping` 不变。
 from app.services.image_cropping_content import (  # noqa: F401
     _ANALYZE_W,
     _BOTTOM_SCAN_FRACTION,
@@ -59,6 +57,56 @@ from app.services.image_cropping_content import (  # noqa: F401
     _ui_band_valid,
 )
 
+logger = logging.getLogger(__name__)
+
+# 临时文件清理节流：每个目录每小时最多扫一次，避免每张裁剪都 glob
+_last_temp_cleanup: dict[str, float] = {}
+_CROP_TEMP_CLEANUP_INTERVAL = 3600.0
+
+
+def cleanup_stale_crop_temps(
+    root: Path | str, older_than_seconds: float = 3600.0
+) -> int:
+    """删除 ``root`` 下超过指定年龄的裁剪临时文件（``*_crop_*``）。
+
+    为什么需要：裁剪失败/进程崩溃可能留下 ``*_crop_<uuid>.<ext>``；它们看起来
+    和正常素材文件一样，若长期不清理会被其它目录扫描任务误当素材。只删除
+    修改时间早于 ``older_than_seconds`` 的文件，绝不碰正在进行的裁剪。
+
+    Args:
+        root: 素材目录（通常是某项原图所在目录）。
+        older_than_seconds: 文件年龄阈值（默认 1 小时）。
+
+    Returns:
+        实际删除的文件数；目录不存在/无权限返回 0（不抛异常）。
+    """
+    base = Path(root)
+    if not base.is_dir():
+        return 0
+    cutoff = time.time() - max(0.0, older_than_seconds)
+    removed = 0
+    for candidate in base.glob("*_crop_*"):
+        try:
+            if not candidate.is_file() or candidate.stat().st_mtime >= cutoff:
+                continue
+            candidate.unlink()
+            removed += 1
+        except OSError as exc:
+            logger.debug("清理裁剪临时文件失败（忽略）: %s — %s", candidate, exc)
+    return removed
+
+
+def _cleanup_stale_temps_once(root: Path) -> None:
+    """按目录节流调用清理（避免每次裁剪都做 glob）。"""
+    key = str(root)
+    now = time.monotonic()
+    last = _last_temp_cleanup.get(key)
+    if last is not None and now - last < _CROP_TEMP_CLEANUP_INTERVAL:
+        return
+    _last_temp_cleanup[key] = now
+    cleanup_stale_crop_temps(root)
+
+
 # 手动裁剪最小保留高度（自然像素）：与前端 Cropper.js minCropBoxHeight=50
 # 的口径对齐，避免确认出极窄（<50px）的裁剪结果
 MIN_MANUAL_CROP_HEIGHT_PX = 50
@@ -73,6 +121,21 @@ MAX_OTHER_BANDS_FRACTION = 0.5  # 其他条带总高度不超过主体的 50%
 # EXIF Orientation 取值：5/6/7/8 表示 90°/270° 旋转，宽高互换
 _EXIF_TRANSPOSE_90 = frozenset((5, 6, 7, 8))
 
+# 公开接口清单：只列真正供 crop_service / 扫描编排 / 诊断脚本使用的函数与
+# 外部契约常量；内部实现（下划线开头）仍可被测试 import，但不属于公开 API。
+__all__ = [
+    "MIN_MANUAL_CROP_HEIGHT_PX",
+    "probe_size",
+    "detect_photo_band",
+    "detect_screenshot_features",
+    "screenshot_confidence",
+    "detect_content_bounds",
+    "crop_image_to_temp",
+    "crop_region_to_temp",
+    "cleanup_stale_crop_temps",
+    "analyze_screenshot_combined",
+]
+
 
 def probe_size(path) -> tuple[int, int]:
     """读取图片显示尺寸（按 EXIF 方向校正宽高，仅读文件头，不完整解码）。
@@ -86,6 +149,7 @@ def probe_size(path) -> tuple[int, int]:
     返回:
         (width, height) 按 EXIF 方向校正后的显示尺寸
     """
+    path = Path(path)
     with Image.open(path) as im:
         width, height = im.size
         orientation = im.getexif().get(0x0112, 1)
@@ -110,6 +174,7 @@ def detect_photo_band(path) -> tuple[int, int]:
     异常:
         ValueError: 布局不规则（无内容/主体过矮/多主体拼贴等），需人工处理
     """
+    path = Path(path)
     with Image.open(path) as im:
         # 与裁剪阶段一致：先做 EXIF 方向校正，避免旋转图片的黑边检测基准错位
         arr = np.asarray(ImageOps.exif_transpose(im).convert("L"))
@@ -162,6 +227,7 @@ def detect_screenshot_features(path) -> dict:
     返回:
         {"top_bar": bool, "bottom_bar": bool}
     """
+    path = Path(path)
     with Image.open(path) as im:
         # 与裁剪阶段一致：先做 EXIF 方向校正，再缩放分析
         img = ImageOps.exif_transpose(im).convert("RGB")
@@ -252,6 +318,7 @@ def detect_content_bounds(path) -> dict:
     异常:
         ValueError: 未检测到内容区或布局不合理（内容区占比过小等）
     """
+    path = Path(path)
     with Image.open(path) as im:
         img = ImageOps.exif_transpose(im).convert("RGB")
         small = img.resize(
@@ -341,6 +408,8 @@ def crop_image_to_temp(path, top_frac: float, bottom_frac: float):
 
     # 临时文件名带随机串：同一素材被并发处理或存在历史残留文件时互不干扰；
     # 任何失败路径都会在下方清理临时文件后重抛
+    path = Path(path)
+    _cleanup_stale_temps_once(path.parent)
     tmp = path.with_name(f"{path.stem}_crop_{uuid.uuid4().hex}{path.suffix}")
     try:
         with Image.open(path) as src:
@@ -361,7 +430,7 @@ def crop_image_to_temp(path, top_frac: float, bottom_frac: float):
         raise
 
 
-def crop_region_to_temp(path, y1_ratio: float, y2_ratio: float):
+def crop_region_to_temp(path: str | Path, y1_ratio: float, y2_ratio: float) -> Path:
     """按「保留区域」上下边界比例裁剪图片并写入同目录临时文件（不改动原图）。
 
     与 crop_image_to_temp（分别裁掉顶部/底部多少）语义互补：本函数直接表达
@@ -383,6 +452,8 @@ def crop_region_to_temp(path, y1_ratio: float, y2_ratio: float):
         raise ValueError(
             f"裁剪比例非法，需满足 0 ≤ y1 < y2 ≤ 1: y1={y1_ratio}, y2={y2_ratio}"
         )
+    path = Path(path)
+    _cleanup_stale_temps_once(path.parent)
     tmp = path.with_name(f"{path.stem}_crop_{uuid.uuid4().hex}{path.suffix}")
     try:
         with Image.open(path) as src:
@@ -390,13 +461,13 @@ def crop_region_to_temp(path, y1_ratio: float, y2_ratio: float):
                 raise ValueError("动图不支持裁剪（会丢失其余帧），请先转为静态图")
             img = ImageOps.exif_transpose(src)
             width, height = img.size
-            top = round(height * y1_ratio)
-            bottom = round(height * y2_ratio)
-            if bottom - top < MIN_MANUAL_CROP_HEIGHT_PX:
+            y1_px = round(height * y1_ratio)
+            y2_px = round(height * y2_ratio)
+            if y2_px - y1_px < MIN_MANUAL_CROP_HEIGHT_PX:
                 raise ValueError(
-                    f"保留区域高度过小（{bottom - top}px < {MIN_MANUAL_CROP_HEIGHT_PX}px）"
+                    f"保留区域高度过小（{y2_px - y1_px}px < {MIN_MANUAL_CROP_HEIGHT_PX}px）"
                 )
-            cropped = img.crop((0, top, width, bottom))
+            cropped = img.crop((0, y1_px, width, y2_px))
             tmp = _save_cropped_image(cropped, src, tmp)
         return tmp
     except Exception:

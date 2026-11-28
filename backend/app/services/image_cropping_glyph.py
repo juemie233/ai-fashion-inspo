@@ -26,7 +26,7 @@
 """
 
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from PIL import Image
@@ -80,29 +80,55 @@ _GLYPH_RIGHT_ICON_X = 0.70
 _GLYPH_TIME_X_MAX = 0.42  # 单块时间的中心 x 上限（时间渲染在中央偏左，实测 0.34~0.38）
 
 
-def _right_icon_supports(g: tuple, glyphs: list[tuple], w: int) -> bool:
+class Glyph(NamedTuple):
+    """状态栏字形连通域（裁剪检测内部结构）。
+
+    字段顺序与历史 tuple 完全一致，保持 NamedTuple 以兼容旧调用：测试/诊断
+    可直接传 6 元组，入口用 :func:`_as_glyph` 归一为 ``Glyph``。
+    """
+
+    x0: int
+    x1: int
+    y0: int
+    y1: int
+    area: int
+    bg_std: float
+
+
+def _as_glyph(value: "Glyph | tuple") -> Glyph:
+    """把历史 tuple / Glyph 统一成 Glyph（测试与旧调用兼容入口）。"""
+    return value if isinstance(value, Glyph) else Glyph(*value)
+
+
+def _right_icon_supports(
+    g: "Glyph | tuple", glyphs: list["Glyph | tuple"], w: int
+) -> bool:
     """单块时间回退的右侧印证：右区是否存在同带、低背景方差的图标块。
 
     真实状态栏是「时间（左）+ 信号/电量（右）」的成对结构，只有一个左侧
     孤立块时不能判定为状态栏（真实 FP：照片左侧的装饰/发丝块）。
 
     参数:
-        g: 候选时间块 (x0, x1, y0, y1, area, bg_std)
-        glyphs: 全部通过过滤的连通域
+        g: 候选时间块（``Glyph``；也接受历史 6 元组，内部归一）
+        glyphs: 全部通过过滤的连通域（元素可为 ``Glyph`` 或历史 6 元组）
         w: 条带宽度（缩放坐标系）
 
     返回:
         右区是否存在垂直同带（重叠 ≥ 较矮一方一半）且背景平滑的块
     """
-    for o in glyphs:
-        if o is g:
+    g_glyph = _as_glyph(g)
+    for raw in glyphs:
+        # 旧实现用对象身份跳过「自己」；tuple 调用时先按原引用跳过，避免
+        # 归一成新 Glyph 后把自身当成右侧图标（测试直接传同一 tuple 的场景）
+        if raw is g:
             continue
-        if (o[0] + o[1]) / 2 <= w * _GLYPH_RIGHT_ICON_X:
+        o = _as_glyph(raw)
+        if (o.x0 + o.x1) / 2 <= w * _GLYPH_RIGHT_ICON_X:
             continue
-        if o[5] > _GLYPH_BG_STD_MAX:
+        if o.bg_std > _GLYPH_BG_STD_MAX:
             continue
-        overlap = min(g[3], o[3]) - max(g[2], o[2])
-        if overlap >= 0.5 * min(g[3] - g[2], o[3] - o[2]):
+        overlap = min(g_glyph.y1, o.y1) - max(g_glyph.y0, o.y0)
+        if overlap >= 0.5 * min(g_glyph.y1 - g_glyph.y0, o.y1 - o.y0):
             return True
     return False
 
@@ -149,7 +175,7 @@ def _above_fg_ratio(
 
 
 def _glyph_time_signature(
-    glyphs: list[tuple[int, int, int, int, int, float]], fg: "np.ndarray", h: int, w: int
+    glyphs: list["Glyph | tuple"], fg: "np.ndarray", h: int, w: int
 ) -> tuple[bool, str]:
     """时间签名判定（strong）：返回 (是否强证据, 说明文案)。
 
@@ -167,11 +193,12 @@ def _glyph_time_signature(
     """
     strong = False
     strong_note = ""
-    gs = sorted(glyphs, key=lambda g: g[0])
+    # 兼容历史 tuple 调用（测试/诊断）：入口统一归一为 Glyph
+    gs = sorted((_as_glyph(g) for g in glyphs), key=lambda g: g.x0)
     for i in range(len(gs)):
         window = [gs[i]]
         for j in range(i + 1, len(gs)):
-            gap = gs[j][0] - window[-1][1]
+            gap = gs[j].x0 - window[-1].x1
             # 相邻字形必须水平「不重叠且紧邻」：状态栏「12:30」的每个数字
             # 各自成块、块间有正间隙（实测间隙 1px）。水平重叠的两个 blob
             # 是同一内容块被局部对比二值化切碎（照片纹理常见），不是时间签名
@@ -181,25 +208,25 @@ def _glyph_time_signature(
                 continue
             else:
                 break
-        span = window[-1][1] - window[0][0]
+        span = window[-1].x1 - window[0].x0
         if len(window) >= 2 and w * _GLYPH_MIN_SPAN_FRAC <= span <= w * 0.18:
             # 区域限制（误报修正）：状态栏元素只在左右两角——时间在左区、
             # 信号/电量在右区，中央是空的。画面中央出现「两个相邻数字状
             # blob」是照片内容（水印/花纹/文字），不是状态栏。
             # 真实素材诊断：误报样本 efef31ba 的 strong 来自中央
             # （中心 x 占比 0.48/0.50）的两个 blob，属照片内容误判。
-            wc = (window[0][0] + window[-1][1]) / 2.0 / w
+            wc = (window[0].x0 + window[-1].x1) / 2.0 / w
             if not (wc < 0.40 or wc > 0.60):
                 continue
-            hs = [g[3] - g[2] for g in window]
-            cs = [(g[2] + g[3]) / 2 for g in window]
-            band_top = min(g[2] for g in window)
+            hs = [g.y1 - g.y0 for g in window]
+            cs = [(g.y0 + g.y1) / 2 for g in window]
+            band_top = min(g.y0 for g in window)
             # 只看时间窗口列（含少量边距）：右侧图标的上方不算进时间块上方
             above_fg = _above_fg_ratio(
                 fg,
                 band_top,
-                min(g[0] for g in window),
-                max(g[1] for g in window),
+                min(g.x0 for g in window),
+                max(g.x1 for g in window),
                 w,
             )
             if (
@@ -208,7 +235,7 @@ def _glyph_time_signature(
                 and max(cs) <= h * _GLYPH_MAX_CENTER_Y
                 and max(hs) <= h * _GLYPH_MAX_HEIGHT_FRAC
                 and above_fg <= _GLYPH_ABOVE_FG_MAX
-                and all(g[5] <= _GLYPH_BG_STD_MAX for g in window)
+                and all(g.bg_std <= _GLYPH_BG_STD_MAX for g in window)
             ):
                 strong = True
                 strong_note = f"时间签名：{len(window)} 个相邻字形（中心 x 占比 {wc:.2f}）"
@@ -220,19 +247,19 @@ def _glyph_time_signature(
         # 附加两道印证（误报修正）：① 垂直中心落在条带上半部（真实
         # 时间块 36%，照片内容块常在 80%）；② 右区存在同带、低背景方差
         # 的图标块（状态栏右侧信号/电量）——左侧孤立一块不构成状态栏。
-        for g in glyphs:
-            gw, gh = g[1] - g[0], g[3] - g[2]
-            gcx = (g[0] + g[1]) / 2
+        for g in gs:
+            gw, gh = g.x1 - g.x0, g.y1 - g.y0
+            gcx = (g.x0 + g.x1) / 2
             # 同上：只统计该单块时间字形所在列的上方，不把右侧图标算进来
-            above_fg = _above_fg_ratio(fg, g[2], g[0], g[1], w)
+            above_fg = _above_fg_ratio(fg, g.y0, g.x0, g.x1, w)
             if (
                 0.04 * w <= gw <= 0.18 * w
                 and 0.15 * h <= gh <= _GLYPH_MAX_HEIGHT_FRAC * h
                 and gcx < w * _GLYPH_TIME_X_MAX
-                and g[5] <= _GLYPH_BG_STD_MAX
-                and (g[2] + g[3]) / 2 <= h * _GLYPH_MAX_CENTER_Y
+                and g.bg_std <= _GLYPH_BG_STD_MAX
+                and (g.y0 + g.y1) / 2 <= h * _GLYPH_MAX_CENTER_Y
                 and above_fg <= _GLYPH_ABOVE_FG_MAX
-                and _right_icon_supports(g, glyphs, w)
+                and _right_icon_supports(g, gs, w)
             ):
                 strong = True
                 strong_note = f"单块时间回退（中心 x 占比 {gcx / w:.2f}）"
@@ -276,7 +303,9 @@ def _glyph_strip_features(img: "Image.Image") -> tuple:
     return arr, fg, fg_ratio, strip_sat, h, w, H
 
 
-def _collect_glyph_components(fg: "np.ndarray", h: int, w: int, reject, bg_std) -> tuple:
+def _collect_glyph_components(
+    fg: "np.ndarray", h: int, w: int, reject, bg_std
+) -> tuple[list[Glyph], bool, int]:
     """连通域分析 + 逐块过滤，返回 (字形块列表, 是否超预算, 连通域总数)。
 
     过滤口径（顺序即从严顺序，被剔除的块交给 reject 记录调试信息）：
@@ -286,7 +315,7 @@ def _collect_glyph_components(fg: "np.ndarray", h: int, w: int, reject, bg_std) 
     返回的连通域总数为 0 表示「无连通域」，与「有连通域但全被过滤」是两种
     不同情况（调用方给不同提示）。
     """
-    glyphs: list[tuple[int, int, int, int, int, float]] = []
+    glyphs: list[Glyph] = []
 
     from scipy import ndimage
 
@@ -339,7 +368,7 @@ def _collect_glyph_components(fg: "np.ndarray", h: int, w: int, reject, bg_std) 
             reject(x0, x1, y0, y1, area, "超连通域预算")
             continue
         kept += 1
-        glyphs.append((x0, x1, y0, y1, area, bg_std(x0, x1, y0, y1)[0]))
+        glyphs.append(Glyph(x0, x1, y0, y1, area, bg_std(x0, x1, y0, y1)[0]))
 
     return glyphs, budget_exceeded, num
 
@@ -407,7 +436,7 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
     """
     arr, fg, fg_ratio, strip_sat, h, w, full_h = _glyph_strip_features(img)
 
-    glyphs: list[tuple[int, int, int, int, int, float]] = []
+    glyphs: list[Glyph] = []
     rejected: list[dict] = []  # 调试：被剔除的连通域及原因
 
     def _result(found: bool, strong: bool, top_frac: float, note: str = "") -> dict:
@@ -418,9 +447,9 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
             "top_frac": round(top_frac, 6),
         }
         if debug:
-            band_top = min((g[2] for g in glyphs), default=0)
-            glyph_x0 = min((g[0] for g in glyphs), default=0)
-            glyph_x1 = max((g[1] for g in glyphs), default=0)
+            band_top = min((g.y0 for g in glyphs), default=0)
+            glyph_x0 = min((g.x0 for g in glyphs), default=0)
+            glyph_x1 = max((g.x1 for g in glyphs), default=0)
             out["debug"] = {
                 "strip_h": h,
                 "strip_w": w,
@@ -433,12 +462,12 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
                 "note": note,
                 "glyphs": [
                     {
-                        "x0": g[0],
-                        "x1": g[1],
-                        "y0": g[2],
-                        "y1": g[3],
-                        "area": g[4],
-                        "bg_std": g[5],
+                        "x0": g.x0,
+                        "x1": g.x1,
+                        "y0": g.y0,
+                        "y1": g.y1,
+                        "area": g.area,
+                        "bg_std": g.bg_std,
                     }
                     for g in glyphs
                 ],
@@ -505,10 +534,10 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         #   宽度过滤拒绝
         if budget_exceeded:
             # 弱证据：内容过于杂乱，时间签名不可靠，不默认勾选
-            top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h, full_h)
+            top_frac = _glyph_top_frac(max(g.y1 for g in glyphs), h, full_h)
             return _result(True, False, top_frac, "超连通域预算 → 弱证据")
         strong, strong_note = _glyph_time_signature(glyphs, fg, h, w)
-        top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h, full_h)
+        top_frac = _glyph_top_frac(max(g.y1 for g in glyphs), h, full_h)
         return _result(True, strong, top_frac, strong_note)
     except ImportError:
         # 无 scipy：列密度剖面兜底（两角有前景、中部稀疏）

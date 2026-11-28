@@ -367,11 +367,8 @@ def test_detect_photo_band_full_content_raises(tmp_path):
     img = Image.new("RGB", (200, 400), (220, 220, 220))
     p = tmp_path / "full.jpg"
     img.save(p, "JPEG")
-    try:
+    with pytest.raises(ValueError, match="无黑边"):
         detect_photo_band(p)
-        assert False, "应抛出 ValueError"
-    except ValueError as e:
-        assert "无黑边" in str(e)
 
 
 def test_screenshot_features_high_confidence(tmp_path):
@@ -600,11 +597,8 @@ def test_crop_image_to_temp_cleans_tmp_on_failure(tmp_path):
     img.save(p, "PNG")
 
     before = set(tmp_path.iterdir())
-    try:
-        crop_image_to_temp(p, 0.9, 0.9)  # 合计 ≥ 高度，抛 ValueError
-        assert False, "应抛出 ValueError"
-    except ValueError:
-        pass
+    with pytest.raises(ValueError):  # 合计 ≥ 高度
+        crop_image_to_temp(p, 0.9, 0.9)
     assert set(tmp_path.iterdir()) == before
 
 
@@ -828,3 +822,42 @@ def test_glyph_signature_above_fg_ignores_taller_right_icon():
     fg_photo = fg.copy()
     fg_photo[3:15, 30:86] = True
     assert _glyph_time_signature([left_time, taller_right], fg_photo, h, w)[0] is False
+
+
+def test_cleanup_stale_crop_temps_only_removes_old_crop_files(tmp_path):
+    """裁剪临时文件清理只删 1 小时前的 *_crop_*，不碰正常素材/新临时文件。"""
+    import os
+    import time
+
+    from app.services.image_cropping import cleanup_stale_crop_temps
+
+    old = tmp_path / "a_crop_old.jpg"
+    fresh = tmp_path / "b_crop_fresh.jpg"
+    normal = tmp_path / "normal.jpg"
+    for p in (old, fresh, normal):
+        p.write_bytes(b"x")
+    past = time.time() - 2 * 3600
+    os.utime(old, (past, past))
+
+    removed = cleanup_stale_crop_temps(tmp_path, older_than_seconds=3600)
+
+    assert removed == 1
+    assert not old.exists()
+    assert fresh.exists()
+    assert normal.exists()
+    assert cleanup_stale_crop_temps(tmp_path / "missing") == 0
+
+
+def test_public_functions_accept_string_paths(tmp_path):
+    """公开裁剪/探测入口统一接受 str 路径（内部转 Path）。"""
+    from PIL import Image
+
+    from app.services.image_cropping import crop_region_to_temp, probe_size
+
+    p = tmp_path / "strpath.png"
+    Image.new("RGB", (80, 120), (30, 30, 30)).save(p)
+
+    assert probe_size(str(p)) == (80, 120)
+    out = crop_region_to_temp(str(p), 0.1, 0.9)
+    assert out.exists()
+    out.unlink()
