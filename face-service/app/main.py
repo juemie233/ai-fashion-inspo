@@ -37,13 +37,22 @@ def _setup_logging() -> None:
     """
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    file_handler = RotatingFileHandler(
-        _LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
-    file_handler.setFormatter(formatter)
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
-    logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
+    handlers: list[logging.Handler] = [stream_handler]
+    try:
+        file_handler = RotatingFileHandler(
+            _LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(formatter)
+        handlers.insert(0, file_handler)
+    except OSError as exc:
+        # Windows 下若启动脚本/其它进程已以不共享方式占用日志文件，文件日志会
+        # PermissionError；服务本身不应因此启动失败，降级为仅控制台并记录原因。
+        logging.getLogger(__name__).warning(
+            "人脸服务文件日志不可用，降级为控制台输出: %s", exc
+        )
+    logging.basicConfig(level=logging.INFO, handlers=handlers)
 
 
 _setup_logging()
