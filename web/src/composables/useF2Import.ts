@@ -9,6 +9,7 @@ import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { warnShape } from '@/utils/apiGuard'
 import type { F2PreviewResult } from '@/types/scraper'
 
 /** f2 采集入口：post=博主主页作品 / like=我的喜欢 / collection=我的收藏 */
@@ -242,25 +243,96 @@ interface F2SubmitResult {
   reused: boolean
 }
 
-export function useF2Import() {
-  const status = ref<F2ImportStatus | null>(null)
-  const statusLoading = ref(false)
-  const submitting = ref(false)
-  /** 预览请求进行中（与「提交任务」分开：预览慢但不动数据） */
-  const previewing = ref(false)
-  const autoSaving = ref(false)
-  const likeUserSaving = ref(false)
-  const likeMaxSaving = ref(false)
-  /** 博主清单（展开清单时才拉取，不参与状态轮询） */
-  const f2Authors = ref<F2AuthorsOverview | null>(null)
-  const authorsLoading = ref(false)
-  /** 「先扫描」结果：收藏夹清单（供勾选，默认全选） */
-  const collectFolders = ref<F2CollectFolders | null>(null)
-  const collectScanning = ref(false)
-  /** 状态/清单加载序号：慢的旧响应不能覆盖新响应 */
-  let statusLoadSeq = 0
-  let authorsLoadSeq = 0
+// ── 模块级共享状态（F2 三张卡片共用同一份）──
+//
+// 收藏/点赞/自动获取三张卡都调用 useF2Import()，若状态放在函数内会各拿一份：
+// 一张卡刷新状态后，其它卡仍显示旧可用性；多实例轮询还会互相覆盖。这里提到模块级，
+// 三张卡共享 status/loading/作者清单/收藏夹清单等；各卡片自己的输入框/开关仍是本
+// 组件内的 ref，互不影响。
 
+const status = ref<F2ImportStatus | null>(null)
+const statusLoading = ref(false)
+const submitting = ref(false)
+/** 预览请求进行中（与「提交任务」分开：预览慢但不动数据） */
+const previewing = ref(false)
+const autoSaving = ref(false)
+const likeUserSaving = ref(false)
+const likeMaxSaving = ref(false)
+/** 博主清单（展开清单时才拉取，不参与状态轮询） */
+const f2Authors = ref<F2AuthorsOverview | null>(null)
+const authorsLoading = ref(false)
+/** 「先扫描」结果：收藏夹清单（供勾选，默认全选） */
+const collectFolders = ref<F2CollectFolders | null>(null)
+const collectScanning = ref(false)
+/** 模块级请求序号：多实例并发时旧响应不能覆盖新响应 */
+let statusLoadSeq = 0
+let authorsLoadSeq = 0
+let collectLoadSeq = 0
+
+/** 状态响应关键字段形状：只告警不阻断（warnShape），缺失按 false/'' 兜底 */
+function normalizeF2Status(raw: unknown): F2ImportStatus {
+  const data = warnShape<Record<string, unknown>>(
+    raw,
+    {
+      available: 'boolean',
+      reason: 'string',
+      like_available: 'boolean',
+      like_reason: 'string',
+      collect_available: 'boolean',
+      collect_reason: 'string',
+      authors: 'number?',
+      unknown_authors: 'array?',
+      fetch_since_days: 'number?',
+      like_max_counts: 'number?',
+      auto: 'object?',
+    },
+    'F2 状态',
+  )
+  const obj = data && typeof data === 'object' && !Array.isArray(data) ? data : {}
+  const bool = (key: string): boolean => (typeof obj[key] === 'boolean' ? obj[key] : false)
+  const str = (key: string): string => (typeof obj[key] === 'string' ? obj[key] : '')
+  return {
+    ...(obj as Partial<F2ImportStatus>),
+    available: bool('available'),
+    reason: str('reason'),
+    like_available: bool('like_available'),
+    like_reason: str('like_reason'),
+    collect_available: bool('collect_available'),
+    collect_reason: str('collect_reason'),
+    // profiles_available/profiles_reason 刻意不做缺失兜底：旧后端没有这两个字段时
+    // 卡片用 `!== false` 判断（undefined = 旧版本仍可尝试），兜底成 false 会误禁用入口。
+    authors: typeof obj.authors === 'number' ? obj.authors : 0,
+    unknown_authors: Array.isArray(obj.unknown_authors) ? (obj.unknown_authors as string[]) : [],
+  } as F2ImportStatus
+}
+
+/**
+ * 重置模块级共享状态（**仅测试使用**）。
+ *
+ * 生产代码不应调用：它会把三张卡共享的状态清空并让在途请求序号失效。导出只是为了
+ * 单测之间隔离模块级单例。
+ *
+ * @internal
+ */
+export function __resetF2ImportStateForTests(): void {
+  status.value = null
+  statusLoading.value = false
+  submitting.value = false
+  previewing.value = false
+  autoSaving.value = false
+  likeUserSaving.value = false
+  likeMaxSaving.value = false
+  f2Authors.value = null
+  authorsLoading.value = false
+  collectFolders.value = null
+  collectScanning.value = false
+  // 递增而非归零：让重置前发起的在途响应也失效
+  statusLoadSeq += 1
+  authorsLoadSeq += 1
+  collectLoadSeq += 1
+}
+
+export function useF2Import() {
   /**
    * 读取可用性（卡片挂载、刷新按钮与「有任务在跑」时的轮询都调它）。
    *
@@ -273,13 +345,13 @@ export function useF2Import() {
     try {
       const { data } = await apiClient.get<F2ImportStatus>('/scraper/f2-status')
       if (seq !== statusLoadSeq) return // 旧响应不覆盖新状态
-      status.value = data
+      status.value = normalizeF2Status(data)
     } catch (e) {
       if (seq !== statusLoadSeq) return
-      // 静默轮询失败保留上一次好数据：网络抖动不能把状态行/按钮一起清空，
-      // 也不能每 5 秒弹一次 toast
+      // 刷新失败保留上一次好数据：网络抖动不能把共享状态行/按钮一起清空；
+      // 首次失败时旧数据本来就是 null（保持 null），不额外造一个空对象。
+      // 静默轮询失败不弹 toast；手动/首次刷新失败仍提示一次。
       if (!options.silent) {
-        status.value = null
         Message.warning(getApiErrorMessage(e, 'f2 状态读取失败'))
       }
     } finally {
@@ -319,17 +391,20 @@ export function useF2Import() {
    * @returns 扫描结果；失败（Cookie 失效 / 风控）返回 null 并提示原因。
    */
   async function scanCollects(): Promise<F2CollectFolders | null> {
+    const seq = ++collectLoadSeq
     collectScanning.value = true
     try {
       const { data } = await apiClient.get<F2CollectFolders>('/scraper/f2-collects')
+      if (seq !== collectLoadSeq) return collectFolders.value
       collectFolders.value = data
       return data
     } catch (e) {
+      if (seq !== collectLoadSeq) return null
       collectFolders.value = null
       Message.error(getApiErrorMessage(e, '读取收藏夹失败'))
       return null
     } finally {
-      collectScanning.value = false
+      if (seq === collectLoadSeq) collectScanning.value = false
     }
   }
 

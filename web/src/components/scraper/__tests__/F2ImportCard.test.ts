@@ -12,7 +12,13 @@
 import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { __resetF2ImportStateForTests } from '@/composables/useF2Import'
 import F2ImportCard from '../F2ImportCard.vue'
+
+// F2 状态是模块级单例：用例之间必须重置，避免上一张卡的状态串味
+beforeEach(() => {
+  __resetF2ImportStateForTests()
+})
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn() }))
 

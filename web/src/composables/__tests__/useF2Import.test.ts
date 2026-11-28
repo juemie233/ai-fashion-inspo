@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Message } from '@arco-design/web-vue'
-import { useF2Import, type F2AutoStatus } from '../useF2Import'
+import { useF2Import, __resetF2ImportStateForTests, type F2AutoStatus } from '../useF2Import'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -57,6 +57,7 @@ function makeStatus(auto: Partial<F2AutoStatus> = {}, extra: Partial<typeof STAT
 describe('useF2Import', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    __resetF2ImportStateForTests()
   })
 
   it('loadStatus 读取可用性状态', async () => {
@@ -72,6 +73,87 @@ describe('useF2Import', () => {
     expect(status.value?.fetch_since_days).toBe(14)
     // f2 用户库里未登记到博主的账号：卡片据此提示默认会跳过
     expect(status.value?.unknown_authors).toEqual(['网易第五人格'])
+  })
+
+  it('多个 useF2Import 实例共享同一份 status', async () => {
+    mocks.get.mockResolvedValue({ data: makeStatus() })
+    const a = useF2Import()
+    const b = useF2Import()
+
+    // 同一模块级 ref，而不是各实例各自一份
+    expect(a.status).toBe(b.status)
+    await a.loadStatus()
+    expect(b.status.value?.authors).toBe(21)
+  })
+
+  it('并发 loadStatus：旧响应不能覆盖新响应', async () => {
+    let resolveOld!: (value: unknown) => void
+    let resolveNew!: (value: unknown) => void
+    mocks.get
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNew = resolve
+          }),
+      )
+    const a = useF2Import()
+    const b = useF2Import()
+
+    const oldRequest = a.loadStatus()
+    const newRequest = b.loadStatus()
+    resolveNew({ data: makeStatus({}, { authors: 99 }) })
+    await newRequest
+    resolveOld({ data: makeStatus({}, { authors: 1 }) })
+    await oldRequest
+
+    expect(a.status.value?.authors).toBe(99)
+  })
+
+  it('状态响应关键字段缺失/类型异常：按 false 与空串兜底，不崩', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        available: 'yes',
+        reason: 123,
+        like_available: null,
+        collect_available: undefined,
+      },
+    })
+    const { status, loadStatus } = useF2Import()
+
+    await loadStatus()
+
+    expect(status.value).toMatchObject({
+      available: false,
+      reason: '',
+      like_available: false,
+      like_reason: '',
+      collect_available: false,
+      collect_reason: '',
+      authors: 0,
+      unknown_authors: [],
+    })
+    // profiles_* 不做缺失兜底：旧后端没有该字段时保持 undefined（卡片按 !== false 兼容）
+    expect(status.value?.profiles_available).toBeUndefined()
+  })
+
+  it('已成功加载后再次 loadStatus 失败：保留旧数据并提示', async () => {
+    const warn = vi.spyOn(Message, 'warning').mockImplementation((() => {}) as never)
+    mocks.get.mockResolvedValueOnce({ data: makeStatus() }).mockRejectedValueOnce(new Error('boom'))
+    const { status, loadStatus } = useF2Import()
+    await loadStatus()
+    const previous = status.value
+
+    await loadStatus()
+
+    expect(status.value).toBe(previous)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('submit 透传「包含未登记账号」开关', async () => {
