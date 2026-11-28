@@ -58,6 +58,7 @@ const {
   status,
   statusLoading,
   submitting,
+  importing,
   run,
   candidates,
   selected,
@@ -514,6 +515,7 @@ onUnmounted(stopPoll)
           :last-seed="lastSeed"
           :seed-supported="seedSupported"
           :submitting="submitting"
+          :importing="importing"
           @preview="openLightbox"
           @toggle="toggle"
           @regenerate="regenerate"

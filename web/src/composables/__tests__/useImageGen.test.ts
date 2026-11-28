@@ -373,6 +373,8 @@ describe('useImageGen', () => {
       { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p2' },
     ])
     expect(gen.groupRunIds.value).toEqual([101, 102])
+    // 合成 run 带 merged 标记，视图可区分「组批次」与真实单批
+    expect(gen.run.value?.merged).toBe(true)
 
     const target = gen.candidates.value[0]
     const newId = await gen.regenerate(target)
@@ -434,6 +436,41 @@ describe('useImageGen', () => {
     expect(mocks.regenerateCandidate).toHaveBeenCalledWith(101, '01_seed-0.png', 0, undefined)
     // 分组合并语义不变：旧数据也继续并入当前组
     expect(gen.groupRunIds.value).toEqual([101, 102, 9])
+    success.mockRestore()
+  })
+
+  it('reset 与单批成功动作都会清空旧失败批次提示', async () => {
+    mocks.createRun.mockResolvedValue({ run_id: 7, task_id: 3, seed: 1, batch_dir: 'x', total: 2 })
+    mocks.fetchRun.mockResolvedValue(RUN_DETAIL)
+    mocks.retryRun.mockResolvedValue({ run_id: 8, task_id: 4, seed: 2 })
+    mocks.regenerateCandidate.mockResolvedValue({
+      run_id: 9,
+      task_id: 5,
+      seed: 3,
+      original_seed: 11,
+    })
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+
+    const gen = useImageGen()
+    // reset：旧批次失败提示跨批次清空
+    gen.lastBatchFailures.value = [{ index: 0, payload: { prompt: 'x' }, error: '限流' }]
+    gen.reset()
+    expect(gen.lastBatchFailures.value).toEqual([])
+
+    // 单批 submit 成功
+    gen.lastBatchFailures.value = [{ index: 0, payload: { prompt: 'x' }, error: '限流' }]
+    await gen.submit({ prompt: 'x' })
+    expect(gen.lastBatchFailures.value).toEqual([])
+
+    // retry 成功
+    gen.lastBatchFailures.value = [{ index: 0, payload: { prompt: 'x' }, error: '限流' }]
+    await gen.retry(7, 2)
+    expect(gen.lastBatchFailures.value).toEqual([])
+
+    // regenerate 成功
+    gen.lastBatchFailures.value = [{ index: 0, payload: { prompt: 'x' }, error: '限流' }]
+    await gen.regenerate(RUN_DETAIL.items[0])
+    expect(gen.lastBatchFailures.value).toEqual([])
     success.mockRestore()
   })
 

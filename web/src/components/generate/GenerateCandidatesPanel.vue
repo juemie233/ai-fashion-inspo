@@ -23,6 +23,8 @@ const props = defineProps<{
   seedSupported?: boolean
   /** 提交中（换 seed 按钮的 loading） */
   submitting: boolean
+  /** 确认入库进行中：只让入库按钮 loading/disabled，不复用出图提交状态 */
+  importing: boolean
 }>()
 
 const emit = defineEmits<{
@@ -83,7 +85,13 @@ const groupCount = computed(
       <a-button v-if="run.kind === 'i2i'" size="mini" @click="emit('compare', 0)">
         对比参考图
       </a-button>
-      <a-button type="primary" size="mini" :disabled="selectedCount === 0" @click="emit('confirm')">
+      <a-button
+        type="primary"
+        size="mini"
+        :loading="importing"
+        :disabled="selectedCount === 0 || importing"
+        @click="emit('confirm')"
+      >
         确认入库
       </a-button>
       <a-button size="mini" status="danger" @click="emit('discard')">

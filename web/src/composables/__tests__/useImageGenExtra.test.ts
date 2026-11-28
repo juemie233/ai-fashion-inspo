@@ -179,6 +179,34 @@ describe('useImageGen（历史区与周边动作）', () => {
       expect(gen.historyStats.value).toEqual({ runs: 3, images: 10 }) // 未被清空
       expect(mocks.message.error).not.toHaveBeenCalled()
     })
+
+    it('快速切换统计窗口：旧响应不能覆盖新统计', async () => {
+      let resolveOld!: (value: unknown) => void
+      let resolveNew!: (value: unknown) => void
+      mocks.fetchRunStats
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveOld = resolve
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveNew = resolve
+            }),
+        )
+      const gen = useImageGen()
+
+      const oldRequest = gen.loadHistoryStats(7)
+      const newRequest = gen.loadHistoryStats(30)
+      resolveNew({ runs: 30, images: 300 })
+      await newRequest
+      resolveOld({ runs: 7, images: 70 })
+      await oldRequest
+
+      expect(gen.historyStats.value).toEqual({ runs: 30, images: 300 })
+    })
   })
 
   describe('updateRunMeta（收藏/命名/备注）', () => {

@@ -162,6 +162,8 @@ export function useImageGen() {
     selected.value = new Set()
     lastSeed.value = null
     runId.value = null
+    // 旧批次的失败提示不能跨批次残留
+    lastBatchFailures.value = []
   }
 
   /** 清空多姿态组状态（切回单批次/重新提交时用） */
@@ -181,6 +183,8 @@ export function useImageGen() {
   /** 候选保留天数（后端给，前端算「图还剩 N 天」） */
   const historyKeepDays = ref(0)
   let historySeq = 0
+  /** 统计请求序号：旧响应不能覆盖后发起的统计 */
+  let statsSeq = 0
 
   const run = computed<GenerationRun | null>(() => {
     if (groupRunIds.value.length) {
@@ -191,6 +195,7 @@ export function useImageGen() {
         ...last,
         // 合成一个「组批次」给现有组件用（进度/状态/文案），底层批次仍各自独立。
         // 注意：id/seed 仍是最后一个姿态的，调用方不能拿合成 run 的 id 去 retry。
+        merged: true,
         status: _mergedStatus(runs),
         total: runs.reduce((sum, item) => sum + item.total, 0),
         done: runs.reduce((sum, item) => sum + item.done, 0),
@@ -429,6 +434,7 @@ export function useImageGen() {
       // 创建成功后才清现场：参数校验/网络失败时保留用户勾选与姿态分组
       selected.value = new Set()
       clearGroup()
+      lastBatchFailures.value = []
       runId.value = out.run_id
       lastSeed.value = out.seed
       // 云端档位无 seed（每次随机），不要把 null 打印成「seed null」
@@ -591,8 +597,12 @@ export function useImageGen() {
 
   /** 拉统计卡（与列表分开：统计不随筛选变化，只跟时间窗口走） */
   async function loadHistoryStats(days = 30): Promise<void> {
+    const seq = ++statsSeq
     try {
-      historyStats.value = await fetchRunStats(days)
+      const stats = await fetchRunStats(days)
+      // 快速展开/收起/切窗口时丢弃旧统计响应，避免覆盖新数据
+      if (seq !== statsSeq) return
+      historyStats.value = stats
     } catch {
       // 统计只是辅助信息：失败不打断历史区（保留上一次数据）
     }
@@ -660,6 +670,7 @@ export function useImageGen() {
       const out = await retryRun(sourceRunId, seed)
       selected.value = new Set()
       clearGroup()
+      lastBatchFailures.value = []
       runId.value = out.run_id
       lastSeed.value = out.seed
       Message.success(
@@ -710,6 +721,7 @@ export function useImageGen() {
       // 的新批次（否则刚对比的整组消失）。单批次场景仍是原来的「替换为新批次」。
       const appendToGroup = groupRunIds.value.length > 1
       selected.value = new Set()
+      lastBatchFailures.value = []
       if (appendToGroup) {
         if (!groupRunIds.value.includes(out.run_id)) {
           groupRunIds.value = [...groupRunIds.value, out.run_id]
@@ -779,6 +791,7 @@ export function useImageGen() {
     status,
     statusLoading,
     submitting,
+    importing,
     run,
     runId,
     candidates,

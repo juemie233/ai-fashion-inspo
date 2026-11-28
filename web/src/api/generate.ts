@@ -76,6 +76,8 @@ export interface GenerationRun {
   created_at: string | null
   /** 多姿态提交分组 id（同一次提交的多个独立批次共用；空 = 单批次） */
   group_id?: string | null
+  /** 前端把多个独立批次合成一个「组批次」展示时置 true（不是后端真实批次） */
+  merged?: boolean
 }
 
 /** 候选图（未入库前只存在于候选区）。 */

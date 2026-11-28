@@ -55,6 +55,7 @@ vi.mock('@/composables/useImageGen', async () => {
       status,
       statusLoading: ref(false),
       submitting: ref(false),
+      importing: ref(false),
       run: ref(null),
       candidates: ref([]),
       selected: ref(new Set<string>()),

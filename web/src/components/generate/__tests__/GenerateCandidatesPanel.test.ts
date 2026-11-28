@@ -38,7 +38,7 @@ function run(kind: 't2i' | 'i2i'): GenerationRun {
   }
 }
 
-function mountPanel(kind: 't2i' | 'i2i') {
+function mountPanel(kind: 't2i' | 'i2i', overrides: Record<string, unknown> = {}) {
   return mount(GenerateCandidatesPanel, {
     props: {
       run: run(kind),
@@ -47,6 +47,8 @@ function mountPanel(kind: 't2i' | 'i2i') {
       stageText: '完成',
       lastSeed: 100,
       submitting: false,
+      importing: false,
+      ...overrides,
     },
     global: { plugins: [ArcoVue] },
   })
@@ -96,6 +98,7 @@ describe('候选区对比入口', () => {
         lastSeed: null,
         seedSupported: false,
         submitting: false,
+        importing: false,
       },
       global: { plugins: [ArcoVue] },
     })
@@ -121,6 +124,7 @@ describe('候选区对比入口', () => {
         stageText: '完成',
         lastSeed: null,
         submitting: false,
+        importing: false,
       },
       global: { plugins: [ArcoVue] },
     })
@@ -132,5 +136,21 @@ describe('候选区对比入口', () => {
     const secondCheckbox = wrapper.findAll('.gen-item .arco-checkbox input')[1]
     await secondCheckbox.setValue(true)
     expect(wrapper.emitted('toggle')?.[0]).toEqual(['30:0.png'])
+  })
+
+  it('确认入库按钮使用 importing：导入中 loading/disabled，普通 submitting 不误伤', async () => {
+    const selected = new Set<string>(['0.png'])
+    const importingWrapper = mountPanel('t2i', { importing: true, selected })
+    const importingBtn = importingWrapper
+      .findAll('button')
+      .find((b) => b.text().includes('确认入库'))!
+    expect(importingBtn.attributes('disabled')).toBeDefined()
+
+    // 只是「提交出图」时，入库按钮不应被禁用/转圈
+    const submittingWrapper = mountPanel('t2i', { submitting: true, selected })
+    const submittingBtn = submittingWrapper
+      .findAll('button')
+      .find((b) => b.text().includes('确认入库'))!
+    expect(submittingBtn.attributes('disabled')).toBeUndefined()
   })
 })
