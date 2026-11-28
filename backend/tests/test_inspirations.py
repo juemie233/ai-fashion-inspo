@@ -425,6 +425,23 @@ def test_trash_cannot_be_favorited(client, upload):
     assert body["total"] == 0
 
 
+async def test_list_accepts_random_sort(client, upload):
+    """随机评分页依赖 sort=random；枚举化时曾漏掉该值导致 422（E2E 回归）。"""
+    upload()
+    r = client.get(
+        "/api/inspirations",
+        params={
+            "page": 1,
+            "size": 1,
+            "sort": "random",
+            "media_type": "image",
+            "unrated": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["items"]) <= 1
+
+
 async def test_list_rejects_invalid_enum_params(client):
     """列表筛选/排序是枚举：非法值返回 422。"""
     assert client.get("/api/inspirations", params={"sort": "largest2"}).status_code == 422

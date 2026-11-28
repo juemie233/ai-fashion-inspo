@@ -32,6 +32,7 @@ InspirationListSort = Literal[
     "rating_asc",
     "unrated_first",
     "largest",
+    "random",
 ]
 # 搜索排序（/api/search）：多 match_score，不支持 largest/favorite_time
 SearchSort = Literal[

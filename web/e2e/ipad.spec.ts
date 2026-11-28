@@ -69,12 +69,18 @@ test('随机评分页在 iPad 上可打开并显示评分入口', async ({ page 
   await page.waitForTimeout(1800)
 
   await expect(page.getByRole('heading', { name: '随机评分' })).toBeVisible()
-  // 素材/接口偏慢时首屏按钮可能晚于默认 5s 出现（本地并发跑测试时实测偶发）
-  await expect(page.getByRole('button', { name: '换一张 →' })).toBeVisible({ timeout: 15000 })
-  // 有图片时星级可点；没有图片时至少空态可见
-  const stars = page.locator('.arco-rate-character')
+  // 空库/全部已评分时页面合法地只显示空态，不能把「没有换一张按钮」当失败；
+  // 素材/接口偏慢时首屏按钮也可能晚于默认 5s 出现，所以等二者之一即可。
+  const nextButton = page.getByRole('button', { name: '换一张 →' })
   const empty = page.locator('.arco-empty')
-  expect((await stars.count()) > 0 || (await empty.count()) > 0).toBeTruthy()
+  await expect
+    .poll(async () => (await nextButton.isVisible()) || (await empty.isVisible()), {
+      timeout: 15000,
+    })
+    .toBe(true)
+  if (await nextButton.isVisible()) {
+    expect(await page.locator('.arco-rate-character').count()).toBeGreaterThan(0)
+  }
   await expectNoPageHorizontalScroll(page)
 })
 
