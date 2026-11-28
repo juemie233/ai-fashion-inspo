@@ -26,6 +26,7 @@ for /f "tokens=1,2 delims==" %%a in ('findstr /B "PORT=" backend\.env 2^>nul') d
 set FRONTEND_PORT=17777
 set FACE_PORT=18889
 set FACE_LOG=logs\face-service.log
+set FACE_BOOTSTRAP_LOG=logs\face-service-bootstrap.log
 set LOG_DIR=logs
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
@@ -115,8 +116,8 @@ if not exist "face-service\.venv\Scripts\python.exe" (
   if exist "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" (
     set "PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin;%PATH%"
   )
-  start "face-service" /B /D "%CD%\face-service" cmd /c ""%CD%\face-service\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port %FACE_PORT% > "%CD%\%FACE_LOG%" 2>&1"
-  echo   人脸服务已启动（日志: %FACE_LOG%）
+  start "face-service" /B /D "%CD%\face-service" cmd /c ""%CD%\face-service\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port %FACE_PORT% > "%CD%\%FACE_BOOTSTRAP_LOG%" 2>&1"
+  echo   人脸服务已启动（日志: %FACE_LOG%，启动输出: %FACE_BOOTSTRAP_LOG%）
 )
 
 rem ── 5. 启动 supervisor（由它拉起三服务）──
@@ -176,7 +177,7 @@ for /l %%i in (1,1,60) do (
 if "!FACE_OK!"=="1" (
   echo   [OK] 人脸服务已就绪: http://localhost:%FACE_PORT%
 ) else (
-  echo   [X] 人脸服务未就绪，请检查 %FACE_LOG%
+  echo   [X] 人脸服务未就绪，请检查 %FACE_LOG% 与 %FACE_BOOTSTRAP_LOG%
 )
 goto :face_done
 :face_skip
