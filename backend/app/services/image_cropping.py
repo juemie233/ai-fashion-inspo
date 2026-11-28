@@ -20,6 +20,7 @@
 import logging
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +95,67 @@ def cleanup_stale_crop_temps(
         except OSError as exc:
             logger.debug("清理裁剪临时文件失败（忽略）: %s — %s", candidate, exc)
     return removed
+
+
+def cleanup_stale_crop_temps_for_roots(
+    roots: Iterable[str | Path],
+    older_than_seconds: float = 3600,
+    max_dirs: int = 200,
+    time_budget_seconds: float = 5.0,
+) -> dict:
+    """启动兜底：遍历媒体根目录下的月份子目录，清理过期的裁剪临时文件。
+
+    仅同步函数（由 ``main.lifespan`` 用 ``asyncio.to_thread`` 调用，不阻塞
+    事件循环）；单个目录的删除判定委托 :func:`cleanup_stale_crop_temps`，
+    最近文件/普通文件不动。为避免超大/异常目录拖慢启动：
+
+    - 最多扫描 ``max_dirs`` 个直接子目录；
+    - 总耗时预算 ``time_budget_seconds``（目录之间检查，已开始的目录清理完）；
+    - 任何目录读取/清理异常只计数，不向外抛（启动路径必须能继续）。
+
+    Returns:
+        ``{"removed", "scanned_dirs", "timed_out", "errors"}``；``timed_out``
+        表示因目录数/时间预算提前停止。
+    """
+    deadline = time.monotonic() + max(0.0, time_budget_seconds)
+    removed = 0
+    scanned_dirs = 0
+    errors = 0
+    timed_out = False
+    for root in roots:
+        if timed_out:
+            break
+        try:
+            base = Path(root)
+            if not base.is_dir():
+                continue
+            month_dirs = sorted(p for p in base.iterdir() if p.is_dir())
+        except OSError as exc:
+            errors += 1
+            logger.debug("启动裁剪清理：读取目录失败 %s：%s", root, exc)
+            continue
+        for month_dir in month_dirs:
+            if scanned_dirs >= max_dirs or time.monotonic() >= deadline:
+                timed_out = True
+                break
+            try:
+                removed += cleanup_stale_crop_temps(month_dir, older_than_seconds)
+                scanned_dirs += 1
+            except Exception as exc:  # noqa: BLE001 —— 单个目录失败不影响其它目录
+                errors += 1
+                logger.debug("启动裁剪清理：清理目录失败 %s：%s", month_dir, exc)
+    if timed_out:
+        logger.warning(
+            "启动裁剪清理达到上限（已扫 %s 个目录，预算 %.1fs），跳过剩余目录",
+            scanned_dirs,
+            time_budget_seconds,
+        )
+    return {
+        "removed": removed,
+        "scanned_dirs": scanned_dirs,
+        "timed_out": timed_out,
+        "errors": errors,
+    }
 
 
 def _cleanup_stale_temps_once(root: Path) -> None:

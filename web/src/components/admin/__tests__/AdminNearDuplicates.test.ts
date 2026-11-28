@@ -10,20 +10,38 @@
 /* eslint-disable vue/one-component-per-file -- 本文件集中定义 Arco 测试桩 */
 
 import { defineComponent, h } from 'vue'
-import { describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, enableAutoUnmount, type VueWrapper } from '@vue/test-utils'
+import { Message } from '@arco-design/web-vue'
 
 const nearDup = vi.hoisted(() => ({
   fetchNearDuplicates: vi.fn(),
   startPhashBackfill: vi.fn(),
 }))
 
+/** 轮询桩：捕获组件注册的 callback，供失败重试用例手动触发 */
+const polling = vi.hoisted(() => ({
+  callback: null as null | (() => Promise<void> | void),
+  start: vi.fn(),
+  stop: vi.fn(),
+}))
+const apiClientMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
+
 vi.mock('@/api/admin', () => nearDup)
 vi.mock('@/api/inspirations', () => ({ getFileUrl: (p: string) => `/${p}` }))
+vi.mock('@/api/client', () => ({ default: apiClientMock }))
+vi.mock('@/composables/usePolling', () => ({
+  usePolling: (options: { callback: () => Promise<void> | void }) => {
+    polling.callback = options.callback
+    return { start: polling.start, stop: polling.stop, running: { value: false } }
+  },
+}))
 
 import AdminNearDuplicates from '../AdminNearDuplicates.vue'
 
-function file(id: string, isFavorite = false) {
+enableAutoUnmount(afterEach)
+
+function file(id: string, isFavorite = false, extra: Record<string, unknown> = {}) {
   return {
     id,
     file_path: `images/${id}.jpg`,
@@ -33,15 +51,20 @@ function file(id: string, isFavorite = false) {
     size_bytes: 1000,
     score: 0,
     distance: 0,
+    ...extra,
   }
 }
 
-function group(ids: string[], favoriteIds: string[] = []) {
+function group(
+  ids: string[],
+  favoriteIds: string[] = [],
+  extras: Record<string, Record<string, unknown>> = {},
+) {
   return {
     rep_phash: 'x'.repeat(48),
     keeper_id: ids[0],
     wasted_bytes: 1000,
-    files: ids.map((id) => file(id, favoriteIds.includes(id))),
+    files: ids.map((id) => file(id, favoriteIds.includes(id), extras[id])),
   }
 }
 
@@ -414,5 +437,117 @@ describe('AdminNearDuplicates 收藏素材删除保护', () => {
     expect(wrapper.emitted('delete-selected')).toBeUndefined()
     expect(wrapper.text()).toContain('还有未提交的删除决定')
     wrapper.unmount()
+  })
+})
+
+describe('AdminNearDuplicates 快捷键与辅助信息', () => {
+  /** 向 window 派发键盘事件（弹窗打开时组件监听 window） */
+  function press(key: string): void {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key }))
+  }
+
+  it('←/→ 翻组、S 跳过本组、Esc 对未提交决定弹退出确认', async () => {
+    const wrapper = await mountScanned([group(['aaa', 'bbb']), group(['ccc', 'ddd'])])
+
+    press('ArrowRight')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第 2 / 2 组')
+
+    press('ArrowLeft')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第 1 / 2 组')
+
+    // S 跳过第 1 组并前进到第 2 组
+    press('s')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第 2 / 2 组')
+
+    press('ArrowLeft')
+    await flushPromises()
+    expect(wrapper.text()).toContain('本组已选：都保留（跳过本组）')
+
+    // 改主意保留左边 → 有未提交删除；Esc 应弹退出三选一
+    await button(wrapper, '保留左边').trigger('click')
+    await flushPromises()
+    press('Escape')
+    await flushPromises()
+    expect(wrapper.text()).toContain('还有未提交的删除决定')
+  })
+
+  it('卸载时清理 decisionLocked 的 setTimeout', async () => {
+    const setSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout')
+    const wrapper = await mountScanned([group(['aaa', 'bbb']), group(['ccc', 'ddd'])])
+
+    await button(wrapper, '保留左边').trigger('click')
+    const timerIds = setSpy.mock.results.map((result) => result.value)
+
+    wrapper.unmount()
+    expect(clearSpy.mock.calls.some(([id]) => timerIds.includes(id))).toBe(true)
+
+    setSpy.mockRestore()
+    clearSpy.mockRestore()
+  })
+
+  it('缩略图条带补充宽×高/标签数/评分，缺失字段显示 --', async () => {
+    const wrapper = await mountScanned([
+      group(['aaa', 'bbb', 'ccc'], [], {
+        aaa: { width: 1200, height: 1600, tags: [{ id: 1 }, { id: 2 }], rating: 4 },
+        bbb: { width: null, height: null, tags: undefined, rating: null },
+      }),
+    ])
+    await flushPromises()
+
+    const metas = wrapper.findAll('.dup-all-meta').map((item) => item.text())
+    expect(metas).toHaveLength(3)
+    expect(metas[0]).toBe('1200×1600 · 2 个标签 · 4 星')
+    expect(metas[1]).toBe('-- · -- · --')
+    expect(metas[2]).toBe('-- · -- · --')
+  })
+
+  it('当前组变化时预加载下一组前两张缩略图', async () => {
+    const created: MockImage[] = []
+    class MockImage {
+      src = ''
+      decoding = ''
+      constructor() {
+        created.push(this)
+      }
+    }
+    vi.stubGlobal('Image', MockImage)
+
+    const wrapper = await mountScanned([group(['aaa', 'bbb']), group(['ccc', 'ddd', 'eee'])])
+    await flushPromises()
+
+    expect(created).toHaveLength(2)
+    expect(created[0].src).toContain('/images/ccc.jpg')
+    expect(created[1].src).toContain('/images/ddd.jpg')
+
+    wrapper.unmount()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('AdminNearDuplicates 轮询失败提示', () => {
+  it('连续失败 3 次只提示一次，不每个 tick 弹 toast', async () => {
+    vi.clearAllMocks()
+    nearDup.startPhashBackfill.mockResolvedValue({ task_id: 5, message: '已创建补齐任务' })
+    apiClientMock.get.mockRejectedValue(new Error('network'))
+    const warn = vi.spyOn(Message, 'warning').mockImplementation((() => {}) as never)
+
+    const wrapper = await mountScanned([group(['aaa', 'bbb'])])
+    const vm = wrapper.vm as unknown as { startBackfill: () => Promise<void> }
+    await vm.startBackfill()
+    await flushPromises()
+    expect(polling.start).toHaveBeenCalled()
+
+    for (let i = 0; i < 3; i += 1) await polling.callback?.()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('连续获取失败')
+
+    // 第 4 次失败不重复提示
+    await polling.callback?.()
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
   })
 })

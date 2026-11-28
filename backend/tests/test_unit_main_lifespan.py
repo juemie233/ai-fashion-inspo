@@ -291,6 +291,80 @@ class TestLifespan:
         assert any("安全警告" in line for line in logs.warnings)
 
 
+    async def test_startup_runs_crop_temp_cleanup(self, monkeypatch):
+        """lifespan 启动时调用裁剪临时文件兜底清理。"""
+        logs = _FakeLogger()
+        calls: list[str] = []
+        _patch_lifespan_deps(monkeypatch, logs, calls)
+        crop_calls: list[str] = []
+
+        async def _crop_cleanup():
+            crop_calls.append("crop_cleanup")
+
+        monkeypatch.setattr(main_module, "_cleanup_crop_temps_on_startup", _crop_cleanup)
+
+        async with main_module.lifespan(None):
+            pass
+
+        assert crop_calls == ["crop_cleanup"]
+
+    async def test_crop_temp_cleanup_failure_does_not_block_startup(self, monkeypatch):
+        """裁剪临时文件清理异常只 warning，不阻断启动。"""
+        logs = _FakeLogger()
+        calls: list[str] = []
+        _patch_lifespan_deps(monkeypatch, logs, calls)
+
+        async def _boom():
+            raise RuntimeError("crop cleanup 失败")
+
+        monkeypatch.setattr(main_module, "_cleanup_crop_temps_on_startup", _boom)
+
+        async with main_module.lifespan(None):
+            pass  # 不抛即启动成功
+
+        assert any("裁剪临时文件清理异常" in line for line in logs.warnings)
+
+
+class TestCropTempStartupHelper:
+    async def test_helper_logs_removed_count(self, monkeypatch):
+        logs = _FakeLogger()
+        monkeypatch.setattr(main_module, "logger", logs)
+        import app.services.image_cropping as crop
+
+        monkeypatch.setattr(
+            crop,
+            "cleanup_stale_crop_temps_for_roots",
+            lambda *a, **k: {
+                "removed": 2,
+                "scanned_dirs": 3,
+                "timed_out": False,
+                "errors": 0,
+            },
+        )
+
+        await main_module._cleanup_crop_temps_on_startup()
+
+        assert any("已清理 2 个裁剪临时文件" in line for line in logs.infos)
+
+    async def test_helper_timeout_and_error_only_warn(self, monkeypatch):
+        logs = _FakeLogger()
+        monkeypatch.setattr(main_module, "logger", logs)
+
+        async def _timeout_coro(*_args, **_kwargs):
+            raise TimeoutError("模拟超时")
+
+        monkeypatch.setattr(main_module.asyncio, "to_thread", lambda *a, **k: _timeout_coro())
+        await main_module._cleanup_crop_temps_on_startup()
+        assert any("超时" in line for line in logs.warnings)
+
+        async def _error_coro(*_args, **_kwargs):
+            raise RuntimeError("模拟清理失败")
+
+        monkeypatch.setattr(main_module.asyncio, "to_thread", lambda *a, **k: _error_coro())
+        await main_module._cleanup_crop_temps_on_startup()
+        assert any("裁剪临时文件清理失败" in line for line in logs.warnings)
+
+
 class TestRequestContextMiddleware:
     async def test_generates_and_reuses_request_id(self):
         async def _ok(_request):

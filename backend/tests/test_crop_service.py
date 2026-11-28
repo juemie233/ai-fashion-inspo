@@ -861,3 +861,52 @@ def test_public_functions_accept_string_paths(tmp_path):
     out = crop_region_to_temp(str(p), 0.1, 0.9)
     assert out.exists()
     out.unlink()
+
+
+def test_cleanup_stale_crop_temps_for_roots_startup(tmp_path):
+    """启动兜底：遍历月份子目录，只删旧 *_crop_*，新文件/普通文件/空目录不报错。"""
+    import os
+    import time
+
+    from app.services.image_cropping import cleanup_stale_crop_temps_for_roots
+
+    images = tmp_path / "images"
+    thumbnails = tmp_path / "thumbnails"
+    videos = tmp_path / "videos"
+    image_month = images / "2026-11"
+    thumb_month = thumbnails / "2026-10"
+    for folder in (image_month, thumb_month, videos):
+        folder.mkdir(parents=True, exist_ok=True)
+
+    old_image = image_month / "a_crop_old.jpg"
+    new_image = image_month / "b_crop_fresh.jpg"
+    normal_image = image_month / "normal.jpg"
+    old_thumb = thumb_month / "c_crop_old.jpg"
+    for p in (old_image, new_image, normal_image, old_thumb):
+        p.write_bytes(b"x")
+    past = time.time() - 2 * 3600
+    os.utime(old_image, (past, past))
+    os.utime(old_thumb, (past, past))
+
+    stats = cleanup_stale_crop_temps_for_roots(
+        (images, thumbnails, videos), older_than_seconds=3600, max_dirs=10
+    )
+
+    assert stats["removed"] == 2
+    assert stats["timed_out"] is False
+    assert stats["errors"] == 0
+    assert not old_image.exists()
+    assert not old_thumb.exists()
+    assert new_image.exists()
+    assert normal_image.exists()
+
+    # 空目录 / 不存在的根目录：不报错、不删除任何东西
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    stats_empty = cleanup_stale_crop_temps_for_roots((empty, tmp_path / "missing"))
+    assert stats_empty == {
+        "removed": 0,
+        "scanned_dirs": 0,
+        "timed_out": False,
+        "errors": 0,
+    }

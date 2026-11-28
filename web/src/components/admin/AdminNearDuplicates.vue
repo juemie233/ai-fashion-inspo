@@ -7,7 +7,7 @@
  * 若两张都不满意，可点「删除两张」立即提交删除当前两张并自动切到下一对候选。
  */
 
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import {
   useNearDuplicatesApi,
@@ -221,6 +221,8 @@ const backfillMessage = ref('')
 const forceRehash = ref(false)
 
 /** 任务轮询：3 秒一次，终态即停并提示（进度写进 backfillProgress） */
+/** 轮询连续失败次数：连续 3 次只提示一次，避免每 3 秒刷 toast */
+let backfillPollFailures = 0
 const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
   intervalMs: 3000,
   immediate: true,
@@ -229,6 +231,7 @@ const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
     if (id === null) return
     try {
       const data = await nearApi.fetchBackfillTask(id)
+      backfillPollFailures = 0
       backfillProgress.value = data.progress ?? 0
       backfillStatus.value = data.status
       if (!['pending', 'running'].includes(data.status)) {
@@ -249,7 +252,11 @@ const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
         Message.success(backfillMessage.value)
       }
     } catch {
-      // 轮询失败静默：任务详情在任务中心仍可查看
+      // 连续失败才提示一次（不静默到底，也不每个 tick 弹）；任务详情在任务中心仍可查看
+      backfillPollFailures += 1
+      if (backfillPollFailures === 3) {
+        Message.warning('补齐任务进度连续获取失败，请稍后在任务中心查看')
+      }
     }
   },
 })
@@ -298,6 +305,7 @@ function closeDupModal() {
   dupGroups.value = []
   dupDecisions.value = new Map()
   dupKeepers.value = new Map()
+  clearPreloadedThumbnails()
 }
 
 /**
@@ -308,6 +316,25 @@ function closeDupModal() {
  */
 const DECISION_GUARD_MS = 300
 const decisionLocked = ref(false)
+/** 连点保护定时器：卸载/翻页时清理，避免卸载后改状态 */
+let decisionTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearDecisionTimer() {
+  if (decisionTimer !== null) {
+    clearTimeout(decisionTimer)
+    decisionTimer = null
+  }
+}
+
+/** 决策后短暂锁定按钮，防手快连点把下一组也删掉 */
+function lockDecisionBriefly() {
+  clearDecisionTimer()
+  decisionLocked.value = true
+  decisionTimer = setTimeout(() => {
+    decisionTimer = null
+    decisionLocked.value = false
+  }, DECISION_GUARD_MS)
+}
 
 /**
  * 记录当前组的保留决策并切到下一组（已是最后一组则进入提交确认视图）。
@@ -325,10 +352,7 @@ function decide(decision: DupDecision) {
   const nextKeepers = new Map(dupKeepers.value)
   nextKeepers.delete(key)
   dupKeepers.value = nextKeepers
-  decisionLocked.value = true
-  setTimeout(() => {
-    decisionLocked.value = false
-  }, DECISION_GUARD_MS)
+  lockDecisionBriefly()
   if (dupIndex.value < dupGroups.value.length - 1) {
     dupIndex.value += 1
   } else {
@@ -341,12 +365,14 @@ function goPrev() {
   if (!canPrev.value) return
   dupIndex.value -= 1
   // 翻页是明确的动作：解除连点保护，否则翻回来立刻改主意会被 300ms 挡掉
+  clearDecisionTimer()
   decisionLocked.value = false
 }
 
 function goNext() {
   if (!canNext.value) return
   dupIndex.value += 1
+  clearDecisionTimer()
   decisionLocked.value = false
 }
 
@@ -368,10 +394,7 @@ function decideKeeper(keeperId: string) {
   const nextDecisions = new Map(dupDecisions.value)
   nextDecisions.delete(key)
   dupDecisions.value = nextDecisions
-  decisionLocked.value = true
-  setTimeout(() => {
-    decisionLocked.value = false
-  }, DECISION_GUARD_MS)
+  lockDecisionBriefly()
   if (dupIndex.value < dupGroups.value.length - 1) dupIndex.value += 1
   else allDone.value = true
 }
@@ -580,6 +603,108 @@ function fileUrl(f: NearDuplicateFile): string {
   return getFileUrl(f.thumbnail_path || f.file_path)
 }
 
+/** 接口可能补带的展示字段（宽高/标签/评分）；旧后端没有时按 -- 展示 */
+type FileDisplayExtra = {
+  width?: unknown
+  height?: unknown
+  tags?: unknown
+  tag_count?: unknown
+  rating?: unknown
+}
+
+/** 缩略图条带每张的辅助信息：宽×高 · 标签数 · 评分（缺失显示 --） */
+function displayFileMeta(file: NearDuplicateFile): string {
+  const extra = file as NearDuplicateFile & FileDisplayExtra
+  const width = typeof extra.width === 'number' ? extra.width : null
+  const height = typeof extra.height === 'number' ? extra.height : null
+  const dimensions = width !== null && height !== null ? `${width}×${height}` : '--'
+  const tagCount = Array.isArray(extra.tags)
+    ? extra.tags.length
+    : typeof extra.tag_count === 'number'
+      ? extra.tag_count
+      : null
+  const tags = tagCount !== null ? `${tagCount} 个标签` : '--'
+  const rating = typeof extra.rating === 'number' ? `${extra.rating} 星` : '--'
+  return `${dimensions} · ${tags} · ${rating}`
+}
+
+// ── 下一组缩略图预加载（当前组变化时只预取前两张，卸载清理引用）──
+
+let preloadedImages: HTMLImageElement[] = []
+const preloadedSrcs = new Set<string>()
+
+function preloadNextGroupThumbnails() {
+  const next = dupGroups.value[dupIndex.value + 1]
+  if (!next) return
+  for (const file of next.files.slice(0, 2)) {
+    const src = getFileUrl(file.thumbnail_path || file.file_path)
+    if (!src || preloadedSrcs.has(src) || typeof Image === 'undefined') continue
+    preloadedSrcs.add(src)
+    const image = new Image()
+    image.decoding = 'async'
+    image.src = src
+    preloadedImages.push(image)
+  }
+}
+
+function clearPreloadedThumbnails() {
+  preloadedImages = []
+  preloadedSrcs.clear()
+}
+
+watch([showDupModal, dupIndex, () => dupGroups.value.length], () => {
+  if (showDupModal.value) preloadNextGroupThumbnails()
+})
+
+// ── 键盘快捷键：弹窗打开且焦点不在输入控件时生效 ──
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
+}
+
+function handleGlobalKeydown(event: KeyboardEvent): void {
+  if (!showDupModal.value) return
+  // 收藏确认/退出确认弹窗有各自的按钮；不在此处抢 Esc/方向键
+  if (exitConfirmVisible.value || favoriteConfirmVisible.value) return
+  if (event.ctrlKey || event.metaKey || event.altKey) return
+  if (isEditableTarget(event.target)) return
+
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    requestExit()
+    return
+  }
+  // 提交确认视图只允许 Esc 退出，不让方向键把界面拉回对比
+  if (allDone.value || !currentGroup.value) return
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault()
+    goPrev()
+    return
+  }
+  if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    goNext()
+    return
+  }
+  if (event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    skipGroup()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
+  preloadNextGroupThumbnails()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+  clearDecisionTimer()
+  clearPreloadedThumbnails()
+})
+
 /** 上传时间展示：MM-DD HH:mm（无时间返回 '-'） */
 function fmtTime(iso: string | null): string {
   if (!iso) return '-'
@@ -596,7 +721,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
 </script>
 
 <template>
-  <a-card title="近似重复检测" size="small" style="margin-bottom: 24px">
+  <a-card title="近似重复检测" size="small" class="near-dup-card">
     <template #extra>
       <a-space align="center">
         <a-select
@@ -711,13 +836,11 @@ function favoriteLabel(f: NearDuplicateFile): string {
       <div class="dup-step">
         第 {{ dupIndex + 1 }} / {{ dupGroups.length }} 组 · 本组共
         {{ currentGroup?.files.length ?? 0 }} 张近似重复
-        <a-tag color="arcoblue" size="small" style="margin-left: 8px"
-          >建议保留：{{ keeperHint }}</a-tag
-        >
-        <a-tag v-if="currentDecision" color="green" size="small" style="margin-left: 8px">
+        <a-tag color="arcoblue" size="small" class="dup-tag-gap">建议保留：{{ keeperHint }}</a-tag>
+        <a-tag v-if="currentDecision" color="green" size="small" class="dup-tag-gap">
           本组已选：{{ decisionLabel(currentDecision) }}（可改）
         </a-tag>
-        <a-tag v-else-if="currentKeeperId" color="green" size="small" style="margin-left: 8px">
+        <a-tag v-else-if="currentKeeperId" color="green" size="small" class="dup-tag-gap">
           本组已选：{{ currentKeeperLabel }}（删除其余）
         </a-tag>
         <a-space style="margin-left: 12px">
@@ -780,6 +903,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
             <span v-if="currentGroup.keeper_id === file.id" class="dup-all-suggest">建议</span>
             <span v-if="currentKeeperId === file.id" class="dup-all-keeper">保留</span>
             <span v-if="favoriteLabel(file)" class="dup-all-fav">★</span>
+            <span class="dup-all-meta">{{ displayFileMeta(file) }}</span>
           </button>
         </div>
       </div>
@@ -838,13 +962,13 @@ function favoriteLabel(f: NearDuplicateFile): string {
 
     <!-- 全部处理完：提交确认视图 -->
     <template v-else-if="allDone">
-      <a-result status="info" title="对比完成" style="margin: 8px 0">
+      <a-result status="info" title="对比完成" class="dup-result">
         <template #subtitle>
           共处理 {{ dupGroups.length }} 组近似重复，决定删除
           <b>{{ deleteCount }}</b> 个冗余素材（物理删除，不可恢复）
         </template>
         <template #extra>
-          <a-space style="display: flex; justify-content: center; width: 100%">
+          <a-space class="dup-center-actions">
             <a-button type="text" @click="allDone = false">← 返回修改</a-button>
             <a-popconfirm
               :content="`将物理删除 ${deleteCount} 个素材（文件与记录不可恢复），确定继续？`"
@@ -861,13 +985,13 @@ function favoriteLabel(f: NearDuplicateFile): string {
     </template>
 
     <!-- 候选队列已清空（可能部分素材已通过「删除两张」提交删除） -->
-    <template v-else-if="!allDone && dupGroups.length === 0">
-      <a-result status="success" title="暂无更多近似重复素材" style="margin: 8px 0">
+    <template v-else-if="dupGroups.length === 0">
+      <a-result status="success" title="暂无更多近似重复素材" class="dup-result">
         <template #subtitle>
           当前候选列表中的近似重复素材已全部处理完毕，可关闭弹窗或重新扫描发现其他素材
         </template>
         <template #extra>
-          <a-space style="display: flex; justify-content: center; width: 100%">
+          <a-space class="dup-center-actions">
             <a-button @click="requestExit">完成</a-button>
           </a-space>
         </template>
@@ -925,6 +1049,22 @@ function favoriteLabel(f: NearDuplicateFile): string {
 </template>
 
 <style scoped>
+/* 页内重复使用的布局属性收进类，避免模板散落 inline style */
+.near-dup-card {
+  margin-bottom: 24px;
+}
+.dup-tag-gap {
+  margin-left: 8px;
+}
+.dup-result {
+  margin: 8px 0;
+}
+.dup-center-actions {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
 /* 逐组步骤提示 */
 .dup-step {
   margin-bottom: 12px;
@@ -1029,9 +1169,11 @@ function favoriteLabel(f: NearDuplicateFile): string {
 }
 .dup-all-item {
   position: relative;
-  flex: 0 0 88px;
-  width: 88px;
-  height: 88px;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 112px;
+  width: 112px;
+  height: 112px;
   padding: 0;
   border: 2px solid transparent;
   border-radius: var(--radius-sm);
@@ -1041,9 +1183,24 @@ function favoriteLabel(f: NearDuplicateFile): string {
 }
 .dup-all-item img {
   width: 100%;
-  height: 100%;
+  height: 86px;
+  flex: 0 0 86px;
   object-fit: cover;
   display: block;
+}
+/* 宽×高 / 标签数 / 评分：帮用户判断保留哪张 */
+.dup-all-meta {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2px;
+  font-size: 10px;
+  color: var(--ink-2);
+  background: var(--sheet);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dup-all-item.is-keeper {
   border-color: var(--danger-6);
@@ -1066,7 +1223,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: 22px;
   background: var(--danger-6);
   color: #fff;
   font-size: 11px;

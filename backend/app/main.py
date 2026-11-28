@@ -178,6 +178,51 @@ async def _backfill_task_result_summaries(batch_size: int = 50) -> int:
                 return filled
 
 
+async def _cleanup_crop_temps_on_startup() -> None:
+    """启动兜底清理裁剪临时文件（最多 5s，失败只 warning，不阻塞启动）。
+
+    裁剪临时文件与源图同目录（``storage/images|thumbnails|videos/<YYYY-MM>/``），
+    正常路径会立即替换/清理，只有崩溃/异常中断才会残留。这里遍历三个 media 根目录
+    的月份子目录，清理 1 小时前的 ``*_crop_*``；扫描放线程池 + 总超时 5s。
+
+    该函数自带异常/超时兜底，调用方无需再判断；只影响启动日志，不影响服务可用性。
+    """
+    from app.services.image_cropping import cleanup_stale_crop_temps_for_roots
+
+    roots = (settings.images_dir, settings.thumbnails_dir, settings.videos_dir)
+    try:
+        stats = await asyncio.wait_for(
+            asyncio.to_thread(
+                cleanup_stale_crop_temps_for_roots,
+                roots,
+                older_than_seconds=3600.0,
+                max_dirs=200,
+                # 内部预算略小于外层 5s，给线程调度/日志留余量
+                time_budget_seconds=4.5,
+            ),
+            timeout=5.0,
+        )
+    except TimeoutError:
+        logger.warning("[启动清理] 裁剪临时文件清理超时（>5s），已跳过剩余目录")
+        return
+    except Exception as e:  # noqa: BLE001 —— 兜底清理失败不能阻断启动
+        logger.warning("[启动清理] 裁剪临时文件清理失败: %s", e)
+        return
+    if stats.get("removed"):
+        logger.info(
+            "[启动清理] 已清理 %s 个裁剪临时文件（扫描 %s 个目录）",
+            stats["removed"],
+            stats["scanned_dirs"],
+        )
+    if stats.get("timed_out") or stats.get("errors"):
+        logger.warning(
+            "[启动清理] 裁剪临时文件清理未完成：超时=%s，错误目录=%s（已扫 %s 个）",
+            stats.get("timed_out"),
+            stats.get("errors"),
+            stats.get("scanned_dirs"),
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用启动与关闭事件处理。"""
@@ -202,6 +247,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 启动：确保存储目录存在
     for dir_path in settings.storage_dirs.values():
         os.makedirs(dir_path, exist_ok=True)
+
+    # 启动兜底清理裁剪临时残留（进程崩溃/异常中断才会留下；失败只 warning）
+    try:
+        await _cleanup_crop_temps_on_startup()
+    except Exception as e:  # noqa: BLE001 —— 双保险：清理失败绝不阻断启动
+        logger.warning("[启动清理] 裁剪临时文件清理异常: %s", e)
 
     # 启动时清理过期的 reset/restore 前快照（保留 7 天，reset/restore 为低频
     # 操作，启动清理一次即可，无需周期轮询；失败不影响启动）
