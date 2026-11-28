@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 素材卡片：瀑布流中的单个卡片，显示缩略图、标签和操作按钮。 */
 
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   IconCheck,
   IconDelete,
@@ -17,6 +17,7 @@ import StatusTag from '@/components/common/StatusTag.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { formatDateTime } from '@/utils/format'
 import { openInspiration } from '@/utils/openInspiration'
+import { openInNewTab } from '@/utils/openInNewTab'
 
 /** 悬停放大预览的触发阈值（毫秒）：鼠标停留在素材上超过该时长才弹出放大图 */
 const HOVER_ZOOM_DELAY = 2000
@@ -120,14 +121,79 @@ function goToDetail() {
   openInspiration(router, props.item.id, route?.query ?? {})
 }
 
-/** 卡片点击：批量模式下切换勾选，否则跳转详情 */
-function handleCardClick() {
-  if (props.selectable) {
-    emit('toggleSelect')
-  } else {
-    goToDetail()
+/** 修饰键/中键强制新标签：不受全局「素材打开模式」偏好影响 */
+function forceNewTab() {
+  const href = detailHref.value
+  if (href && href !== '#' && openInNewTab(href)) return
+  // 弹窗被拦截时退化为当前页，避免点了没反应
+  if (router && typeof router.push === 'function') {
+    void router.push({ name: 'detail', params: { id: props.item.id }, query: route?.query ?? {} })
   }
 }
+
+/**
+ * 卡片主操作：批量选择模式只切换勾选，不打开页面；
+ * Ctrl/⌘ 点击强制新标签（普通点击仍尊重全局打开偏好）。
+ */
+function handleCardClick(event?: MouseEvent | KeyboardEvent) {
+  if (props.selectable) {
+    emit('toggleSelect')
+    return
+  }
+  if (event && (event.ctrlKey || event.metaKey)) {
+    forceNewTab()
+    return
+  }
+  goToDetail()
+}
+
+/** 鼠标中键（auxclick button===1）：非选择模式强制新标签；选择模式只勾选 */
+function handleCardAuxClick(event: MouseEvent) {
+  if (event.button !== 1) return
+  event.preventDefault()
+  if (props.selectable) {
+    emit('toggleSelect')
+    return
+  }
+  forceNewTab()
+}
+
+// ── 视频无缩略图：进入视口后再设 src，避免瀑布流一次性拉取全部视频元数据 ──
+
+/** 是否需要懒加载视频（视频且没有首帧缩略图；有缩略图时展示缩略图） */
+const needsLazyVideo = computed(
+  () => props.item.media_type === 'video' && !props.item.thumbnail_path,
+)
+const videoRef = ref<HTMLVideoElement | null>(null)
+const videoInView = ref(false)
+let videoObserver: IntersectionObserver | null = null
+
+function disconnectVideoObserver() {
+  videoObserver?.disconnect()
+  videoObserver = null
+}
+
+function observeVideo() {
+  if (!needsLazyVideo.value || !videoRef.value) return
+  // 测试/极简环境没有 IntersectionObserver：退化为立即加载（不影响功能）
+  if (typeof IntersectionObserver === 'undefined') {
+    videoInView.value = true
+    return
+  }
+  videoObserver = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      videoInView.value = true
+      disconnectVideoObserver()
+    },
+    // 提前 200px 开始加载，滚动到卡片时首帧通常已就绪
+    { rootMargin: '200px' },
+  )
+  videoObserver.observe(videoRef.value)
+}
+
+onMounted(observeVideo)
+onUnmounted(disconnectVideoObserver)
 
 /** 读屏标签：区分「打开素材」与「勾选素材」两种语义 */
 const cardAriaLabel = computed(() => {
@@ -151,6 +217,7 @@ function openDetail() {
       'is-rejected': item.quality_status === 'rejected',
     }"
     @click="handleCardClick"
+    @auxclick="handleCardAuxClick"
   >
     <!-- 主操作铺满整卡：真实 <a> 支持 Ctrl/⌘/中键新标签页；操作按钮是它的同级兄弟 -->
     <a
@@ -159,8 +226,8 @@ function openDetail() {
       :role="selectable ? 'checkbox' : undefined"
       :aria-checked="selectable ? selected : undefined"
       :aria-label="cardAriaLabel"
-      @click.prevent="handleCardClick"
-      @keydown.enter.prevent="handleCardClick"
+      @click.prevent.stop="handleCardClick"
+      @keydown.enter.prevent.stop="handleCardClick"
       @keydown.space.prevent="selectable && handleCardClick()"
     />
 
@@ -175,12 +242,14 @@ function openDetail() {
         <img :src="getFileUrl(gridSrc)" alt="" loading="lazy" decoding="async" />
       </HoverImagePreview>
       <template v-else>
+        <!-- 视频无缩略图：进入视口前不设 src/preload，避免一次性加载全部视频元数据 -->
         <video
-          v-if="item.media_type === 'video' && !item.thumbnail_path"
-          :src="getFileUrl(item.file_path)"
+          v-if="needsLazyVideo"
+          ref="videoRef"
+          :src="videoInView ? getFileUrl(item.file_path) : undefined"
           muted
           playsinline
-          preload="metadata"
+          :preload="videoInView ? 'metadata' : 'none'"
         />
         <img
           v-else-if="gridSrc"
