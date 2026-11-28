@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -322,14 +323,40 @@ async def retry_run(
     return await generation_service.retry_run(db, run_id, seed=seed)
 
 
+# 多姿态分组 id 格式：与前端 _newGroupId 一致（32 位小写十六进制）
+_GROUP_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+
+
 @router.post("/runs/{run_id}/regenerate")
 async def regenerate_candidate(
     run_id: int,
     filename: str = Query(..., description="要重出的候选图文件名（如 02_seed-123456.png）"),
     seed: int = Query(0, description="新 seed；0=随机（沿用原 seed 会出同一张）"),
     db: AsyncSession = Depends(get_db),
+    group_id: str | None = Query(
+        None,
+        description=(
+            "可选：归入原多姿态组的 group id（32 位小写十六进制，与前端 _newGroupId 一致）；"
+            "不传则新批次单独成行（旧行为）"
+        ),
+    ),
 ) -> dict:
-    """单张换 seed 重出（新建只含 1 张的批次，不动原批次）。"""
+    """单张换 seed 重出（新建只含 1 张的批次，不动原批次）。
+
+    ``group_id`` 非空时透传到新批次，历史列表按原多姿态组归组；不传/传空串时
+    保持旧行为（新批次 group_id=NULL，单独一行）。
+    """
+    normalized_group_id = (group_id or "").strip()
+    if normalized_group_id and not _GROUP_ID_PATTERN.fullmatch(normalized_group_id):
+        raise HTTPException(
+            status_code=422,
+            detail="group_id 必须是 32 位小写十六进制字符串（与前端 _newGroupId 格式一致）",
+        )
+    # 不传 group_id 时保持与旧代码完全相同的调用形状（兼容既有 mock/测试）
+    if normalized_group_id:
+        return await generation_service.regenerate_candidate(
+            db, run_id, filename, seed, group_id=normalized_group_id
+        )
     return await generation_service.regenerate_candidate(db, run_id, filename, seed)
 
 

@@ -320,7 +320,8 @@ describe('useImageGen', () => {
     const newId = await gen.regenerate(RUN_DETAIL.items[0])
 
     expect(newId).toBe(9)
-    expect(mocks.regenerateCandidate).toHaveBeenCalledWith(7, '01_seed-11.png')
+    // 单批次不传 group_id（第四个参数为 undefined）
+    expect(mocks.regenerateCandidate).toHaveBeenCalledWith(7, '01_seed-11.png', 0, undefined)
     expect(gen.runId.value).toBe(9)
     // 单批次场景保持替换：不残留多姿态分组
     expect(gen.groupRunIds.value).toEqual([])
@@ -376,7 +377,7 @@ describe('useImageGen', () => {
     const target = gen.candidates.value[0]
     const newId = await gen.regenerate(target)
 
-    expect(mocks.regenerateCandidate).toHaveBeenCalledWith(101, '01_seed-0.png')
+    expect(mocks.regenerateCandidate).toHaveBeenCalledWith(101, '01_seed-0.png', 0, 'group')
     expect(newId).toBe(9)
     // 新批次追加进当前组，候选区 3 张仍合并展示（而不是只剩新批次 1 张）
     expect(gen.groupRunIds.value).toEqual([101, 102, 9])
@@ -384,6 +385,55 @@ describe('useImageGen', () => {
     expect(gen.candidates.value).toHaveLength(3)
     expect(gen.candidates.value.map((item) => item.run_id)).toEqual([101, 102, 9])
     expect(gen.runId.value).toBe(9)
+    success.mockRestore()
+  })
+
+  it('旧数据多姿态组没有 group_id：regenerate 不伪造分组参数', async () => {
+    let seq = 0
+    mocks.createRun.mockImplementation(async () => {
+      seq += 1
+      return { run_id: 100 + seq, task_id: 200 + seq, seed: null, batch_dir: 'x', total: 1 }
+    })
+    // 旧批次没有 group_id（后端历史数据/旧提交）
+    mocks.fetchRun.mockImplementation(async (id: number) => ({
+      run: {
+        ...RUN_DETAIL.run,
+        id,
+        status: 'done',
+        total: 1,
+        done: 1,
+      },
+      items: [
+        {
+          filename: '01_seed-0.png',
+          index: 1,
+          seed: 0,
+          size_bytes: 1,
+          imported: false,
+          url: `/u/${id}`,
+        },
+      ],
+      task: null,
+    }))
+    mocks.regenerateCandidate.mockResolvedValue({
+      run_id: 9,
+      task_id: 99,
+      seed: null,
+      original_seed: 0,
+    })
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+
+    const gen = useImageGen()
+    await gen.submitBatch([
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p1' },
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p2' },
+    ])
+    const newId = await gen.regenerate(gen.candidates.value[0])
+
+    expect(newId).toBe(9)
+    expect(mocks.regenerateCandidate).toHaveBeenCalledWith(101, '01_seed-0.png', 0, undefined)
+    // 分组合并语义不变：旧数据也继续并入当前组
+    expect(gen.groupRunIds.value).toEqual([101, 102, 9])
     success.mockRestore()
   })
 

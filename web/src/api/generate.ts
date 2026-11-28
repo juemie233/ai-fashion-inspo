@@ -379,6 +379,8 @@ export async function regenerateCandidate(
   runId: number,
   filename: string,
   seed = 0,
+  /** 多姿态合并视图重出时传当前组 group_id：新批次继续归入同一历史组（旧单批次不传） */
+  groupId?: string,
 ): Promise<{
   run_id: number
   task_id: number
@@ -386,7 +388,8 @@ export async function regenerateCandidate(
   original_seed: number
 }> {
   const { data } = await apiClient.post(`/generate/runs/${runId}/regenerate`, null, {
-    params: { filename, seed },
+    // group_id 为空时不带该 query（旧数据/单批次保持旧行为，不伪造分组）
+    params: { filename, seed, ...(groupId ? { group_id: groupId } : {}) },
   })
   return data
 }

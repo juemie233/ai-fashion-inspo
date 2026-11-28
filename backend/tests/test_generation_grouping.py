@@ -206,3 +206,45 @@ def test_detail_candidates_carry_run_id(client):
         assert all(item["run_id"] == run_id for item in detail["items"])
     finally:
         _delete_runs(run_id)
+
+
+async def test_regenerate_with_group_id_joins_existing_group(client):
+    """多姿态重出一张：新批次继承 group_id，历史仍合并为原组一行。
+
+    覆盖 task-48：regenerate 传 group_id 时透传到 create_run；不带时保持
+    group_id=NULL、单独成行（旧行为）。
+    """
+    from app.services import generation_service
+
+    async with async_session() as db:
+        original = await generation_service.create_run(
+            db,
+            {"prompt": "多姿态重出一张", "model_key": "z_image_int8", "group_id": GROUP_ID},
+        )
+        regen = await generation_service.regenerate_candidate(
+            db,
+            original["run_id"],
+            "01_seed-0.png",
+            seed=7,
+            group_id=GROUP_ID,
+        )
+        plain = await generation_service.regenerate_candidate(
+            db, original["run_id"], "01_seed-0.png", seed=8
+        )
+
+    async with async_session() as db:
+        regen_run = await db.get(GenerationRun, regen["run_id"])
+        plain_run = await db.get(GenerationRun, plain["run_id"])
+        assert regen_run is not None and regen_run.group_id == GROUP_ID
+        assert plain_run is not None and plain_run.group_id is None
+
+    body = client.get("/api/generate/runs", params={"limit": 100}).json()
+    group_rows = [item for item in body["items"] if item["group_id"] == GROUP_ID]
+    assert len(group_rows) == 1
+    assert set(group_rows[0]["run_ids"]) == {original["run_id"], regen["run_id"]}
+
+    plain_rows = [item for item in body["items"] if item["run_ids"] == [plain["run_id"]]]
+    assert len(plain_rows) == 1
+    assert plain_rows[0]["group_id"] is None
+    # 组 1 行 + 无 group 的单批次 1 行
+    assert body["total"] == 2

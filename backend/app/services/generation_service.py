@@ -1615,7 +1615,11 @@ async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:
 
 
 async def regenerate_candidate(
-    db: AsyncSession, run_id: int, filename: str, seed: int = 0
+    db: AsyncSession,
+    run_id: int,
+    filename: str,
+    seed: int = 0,
+    group_id: str | None = None,
 ) -> dict:
     """对**单张**候选图换 seed 重出（新建一个只含 1 张的批次）。
 
@@ -1627,6 +1631,8 @@ async def regenerate_candidate(
         run_id: 原批次 id。
         filename: 候选图文件名（形如 ``02_seed-123456.png``）；用于取出原 seed。
         seed: 新 seed；0 = 随机（不能沿用原 seed，否则出同一张）。
+        group_id: 可选多姿态组 id；非空时写入新批次，历史按原组归并展示。
+            不传时保持旧行为（新批次 group_id=NULL、单独一行）。
 
     Returns:
         与 :func:`create_run` 同结构（新批次）。
@@ -1659,6 +1665,8 @@ async def regenerate_candidate(
         "size": params.get("size"),
         "watermark": params.get("watermark"),
         "seed": seed,
+        # 多姿态重出一张：带上原组 id，历史才能并回同一行（不传则 NULL=单行）
+        "group_id": group_id,
     }
     out = await create_run(db, payload)
     out["original_seed"] = original_seed

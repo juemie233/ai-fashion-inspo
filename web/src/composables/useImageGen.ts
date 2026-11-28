@@ -692,7 +692,20 @@ export function useImageGen() {
     if (submitting.value) return null
     submitting.value = true
     try {
-      const out = await regenerateCandidate(sourceRunId, item.filename)
+      // 多姿态合并视图：把当前组的 group_id 传给后端，新批次继续归入同一历史组。
+      // 单批次不传；旧数据没有 group_id 时也不伪造（退回后端原行为）。
+      const currentGroupId =
+        groupRunIds.value.length > 1
+          ? (run.value?.group_id ??
+            groupDetails.value.find((detail) => detail.run.group_id)?.run.group_id ??
+            undefined)
+          : undefined
+      const out = await regenerateCandidate(
+        sourceRunId,
+        item.filename,
+        0,
+        currentGroupId || undefined,
+      )
       // 多姿态合并视图：regenerate 只是给组里补一张新批次，不能把用户切到「只含 1 张」
       // 的新批次（否则刚对比的整组消失）。单批次场景仍是原来的「替换为新批次」。
       const appendToGroup = groupRunIds.value.length > 1

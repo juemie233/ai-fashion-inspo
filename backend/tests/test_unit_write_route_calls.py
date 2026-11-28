@@ -53,14 +53,62 @@ async def test_generate_retry_route_passes_seed(client, monkeypatch):
 async def test_generate_regenerate_route_passes_filename_and_seed(client, monkeypatch):
     seen: dict = {}
 
-    async def fake_regen(db, run_id, filename, seed=0):
-        seen.update(run_id=run_id, filename=filename, seed=seed)
+    async def fake_regen(db, run_id, filename, seed=0, group_id=None):
+        seen.update(run_id=run_id, filename=filename, seed=seed, group_id=group_id)
         return {"run_id": 10}
 
     monkeypatch.setattr(generation_service, "regenerate_candidate", fake_regen)
     resp = client.post("/api/generate/runs/5/regenerate?filename=02.png&seed=88")
     assert resp.status_code == 200
-    assert seen == {"run_id": 5, "filename": "02.png", "seed": 88}
+    assert seen == {
+        "run_id": 5,
+        "filename": "02.png",
+        "seed": 88,
+        "group_id": None,
+    }
+
+
+async def test_generate_regenerate_route_passes_group_id(client, monkeypatch):
+    """regenerate 的 group_id 原样透传到 service；空串按「不传」处理。"""
+    seen: list[dict] = []
+
+    async def fake_regen(db, run_id, filename, seed=0, group_id=None):
+        seen.append(
+            {"run_id": run_id, "filename": filename, "seed": seed, "group_id": group_id}
+        )
+        return {"run_id": 11}
+
+    monkeypatch.setattr(generation_service, "regenerate_candidate", fake_regen)
+    group_id = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+    resp = client.post(
+        f"/api/generate/runs/5/regenerate?filename=02.png&seed=7&group_id={group_id}"
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen[-1]["group_id"] == group_id
+
+    resp = client.post("/api/generate/runs/5/regenerate?filename=02.png&group_id=")
+    assert resp.status_code == 200, resp.text
+    assert seen[-1]["group_id"] is None
+
+
+async def test_generate_regenerate_route_rejects_invalid_group_id(client, monkeypatch):
+    """非 32 位小写十六进制 → 422 中文；service 不应被调用。"""
+    called = False
+
+    async def fake_regen(db, run_id, filename, seed=0, group_id=None):
+        nonlocal called
+        called = True
+        return {"run_id": 11}
+
+    monkeypatch.setattr(generation_service, "regenerate_candidate", fake_regen)
+    for bad in ("not-a-group", "A1B2C3D4E5F60718293A4B5C6D7E8F90", "a" * 31, "a" * 33):
+        resp = client.post(
+            f"/api/generate/runs/5/regenerate?filename=02.png&group_id={bad}"
+        )
+        assert resp.status_code == 422, (bad, resp.text)
+        assert "32 位小写十六进制" in resp.text
+    assert called is False
 
 
 async def test_generate_cleanup_route_passes_days(client, monkeypatch):
