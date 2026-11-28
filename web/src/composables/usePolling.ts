@@ -20,8 +20,10 @@ import { getCurrentInstance, onBeforeUnmount, readonly, ref } from 'vue'
 interface UsePollingOptions {
   /** 轮询间隔（毫秒），或返回当前间隔的 getter（用于活动/空闲自适应） */
   intervalMs: number | (() => number)
-  /** 每次触发执行的回调（可为异步；不 await，不捕获其异常） */
+  /** 每次触发执行的回调（可为异步；异常会被捕获并交给 onError，不产生未处理 rejection） */
   callback: () => void | Promise<void>
+  /** 回调抛错时调用（可选；未提供则静默吞掉，避免轮询因一次失败停摆） */
+  onError?: (error: unknown) => void
   /** start 时是否立即执行一次 callback（默认 true） */
   immediate?: boolean
   /** 组件卸载时是否自动停止（默认 true） */
@@ -29,7 +31,7 @@ interface UsePollingOptions {
 }
 
 export function usePolling(options: UsePollingOptions) {
-  const { intervalMs, callback, immediate = true, autoCleanup = true } = options
+  const { intervalMs, callback, onError, immediate = true, autoCleanup = true } = options
 
   const running = ref(false)
   let timer: ReturnType<typeof setInterval> | null = null
@@ -41,6 +43,14 @@ export function usePolling(options: UsePollingOptions) {
     inFlight = true
     try {
       await callback()
+    } catch (error) {
+      // 定时器回调里的 rejection 没有调用方 await；这里必须捕获，否则会变成
+      // unhandled rejection。轮询也不因单次失败停止（调用方通过 onError 记录/提示）。
+      try {
+        onError?.(error)
+      } catch {
+        // onError 自身抛错也不能反过来中断轮询
+      }
     } finally {
       inFlight = false
     }

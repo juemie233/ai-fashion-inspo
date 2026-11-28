@@ -63,4 +63,40 @@ describe('usePolling', () => {
     stop()
     expect(running.value).toBe(false)
   })
+
+  it('回调抛错被捕获并交给 onError，后续轮询继续', async () => {
+    const error = new Error('boom')
+    const onError = vi.fn()
+    const cb = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined)
+    const { start, stop } = usePolling({
+      intervalMs: 1000,
+      callback: cb,
+      onError,
+      immediate: false,
+    })
+    start()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(onError).toHaveBeenCalledWith(error)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(cb).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
+  it('onError 自身抛错也不中断轮询', async () => {
+    const cb = vi.fn().mockRejectedValue(new Error('boom'))
+    const onError = vi.fn(() => {
+      throw new Error('onError boom')
+    })
+    const { start, stop } = usePolling({
+      intervalMs: 1000,
+      callback: cb,
+      onError,
+      immediate: false,
+    })
+    start()
+    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(cb).toHaveBeenCalledTimes(2)
+    stop()
+  })
 })
